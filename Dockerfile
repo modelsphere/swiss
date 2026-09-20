@@ -23,9 +23,10 @@ COPY web/ ./
 RUN npm run build
 
 # --- 2. the binary ---------------------------------------------------------
-FROM golang:1.27-bookworm AS build
+FROM golang:1.26 AS build
 
 ARG VERSION=0.0.0-dev
+ARG GO_MOD_MODE=auto
 
 WORKDIR /src
 COPY go.mod go.sum ./

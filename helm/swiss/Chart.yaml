@@ -8,8 +8,3 @@ description: >-
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
-
-# Swiss does not deploy Swiss. This chart is installed by helm or helmfile like
-# any other release, and swissd's own upgrades go the same way -- never through
-# its own UI. That keeps the bootstrap one-directional and stops a bad deploy
-# from taking away the tool you would use to fix it.
