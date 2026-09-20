@@ -6,15 +6,18 @@
 #   ./hack/bump.sh 0.3.1           set it explicitly
 #   ./hack/bump.sh minor --tag     and create an annotated git tag
 #
-# Chart.yaml's appVersion is the single source of truth. Everything else derives
-# from it at build time: the chart's version moves with it, image.tag is empty
-# so helm falls back to appVersion, and the binaries take it through ldflags.
-# Nothing edits `var version` in the Go source -- a second place to change is a
-# second place to forget.
+# Two files hold it -- Chart.yaml and internal/version -- and this moves both.
+# The version is a Go constant rather than an ldflags stamp so that `go build`
+# from anywhere reports the truth and a forgotten build argument cannot ship an
+# image calling itself 0.0.0-dev. A test in internal/version refuses a commit
+# where the two disagree, which is what makes two files safe.
+#
+# image.tag stays empty in the chart, so helm follows appVersion.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 chart=helm/swiss/Chart.yaml
+gofile=internal/version/version.go
 current="$(yq -r '.appVersion' "$chart")"
 
 if [ $# -eq 0 ]; then
@@ -61,8 +64,13 @@ sed -e "s/^version: .*/version: $next/" \
     "$chart" > "$tmp"
 mv "$tmp" "$chart"
 
-if [ "$(yq -r '.appVersion' "$chart")" != "$next" ]; then
-  echo "bump did not take; check $chart" >&2
+sed -e "s/^const Version = .*/const Version = \"$next\"/" "$gofile" > "$tmp"
+mv "$tmp" "$gofile"
+
+# internal/version has a test asserting these two agree; check it here too, so a
+# bump that half-applied fails now rather than in CI.
+if [ "$(yq -r '.appVersion' "$chart")" != "$next" ] || ! grep -q "\"$next\"" "$gofile"; then
+  echo "bump did not take; check $chart and $gofile" >&2
   exit 1
 fi
 
@@ -72,7 +80,7 @@ helm lint helm/swiss --set config.cluster.name=x --set 'rbac.namespaces={y}' >/d
 echo "$current -> $next"
 
 if $tag; then
-  git add "$chart"
+  git add "$chart" "$gofile"
   git commit -m "swiss: $next"
   git tag -a "swiss-v$next" -m "swiss $next"
   echo "tagged swiss-v$next"
@@ -81,7 +89,7 @@ fi
 cat <<NEXT
 
 build and deploy:
-  docker build -t harbor.4pd.io/hardcore-tech/swissd:$next --build-arg VERSION=$next .
+  docker build -t harbor.4pd.io/hardcore-tech/swissd:$next .
   docker push harbor.4pd.io/hardcore-tech/swissd:$next
   helm upgrade swiss ./helm/swiss -n swiss-system
 NEXT

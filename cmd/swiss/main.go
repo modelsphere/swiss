@@ -14,6 +14,7 @@ import (
 	"os"
 
 	"github.com/aceforeverd/swiss/internal/config"
+	"github.com/aceforeverd/swiss/internal/version"
 	"github.com/spf13/cobra"
 )
 
@@ -26,15 +27,13 @@ type exitErr struct {
 
 func (e exitErr) Error() string { return e.msg }
 
-var version = "0.0.0-dev"
-
 func main() {
 	root := &cobra.Command{
 		Use:           "swiss",
 		Short:         "Compose and deploy models from a swiss catalog",
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		Version:       version,
+		Version:       version.Version,
 	}
 	// One config document, shared with swissd. The flags stay as overrides, so
 	// a one-off run against another catalog or profile needs no file -- but the

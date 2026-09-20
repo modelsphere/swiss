@@ -25,7 +25,6 @@ RUN npm run build
 # --- 2. the binary ---------------------------------------------------------
 FROM golang:1.26 AS build
 
-ARG VERSION=0.0.0-dev
 ARG GO_MOD_MODE=auto
 
 WORKDIR /src
@@ -37,8 +36,6 @@ COPY . .
 # lands here and is what gets embedded.
 COPY --from=web /src/web/dist ./web/dist
 
-# CGO off for a static binary the distroless runtime can run. -trimpath keeps
-# build paths out of the binary, so two builds of one commit are comparable.
 RUN set -eu ; \
     mod="${GO_MOD_MODE}"; \
     if [ "${mod}" = "auto" ]; then \
@@ -48,7 +45,7 @@ RUN set -eu ; \
     if [ "${mod}" != "vendor" ]; then go mod download; fi; \
     CGO_ENABLED=0 GOOS=linux go build \
       -trimpath -mod="${mod}"\
-      -ldflags="-s -w -X main.version=${VERSION}" \
+      -ldflags="-s -w" \
       -o /out/swissd ./cmd/swissd
 
 # --- 3. helm tooling -------------------------------------------------------

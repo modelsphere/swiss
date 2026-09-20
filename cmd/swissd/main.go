@@ -22,10 +22,9 @@ import (
 	"github.com/aceforeverd/swiss/internal/config"
 	"github.com/aceforeverd/swiss/internal/server"
 	"github.com/aceforeverd/swiss/internal/store"
+	"github.com/aceforeverd/swiss/internal/version"
 	"github.com/aceforeverd/swiss/web"
 )
-
-var version = "0.0.0-dev"
 
 func main() {
 	var (
@@ -38,7 +37,7 @@ func main() {
 	flag.Parse()
 
 	if *showVer {
-		fmt.Println(version)
+		fmt.Println(version.Version)
 		return
 	}
 	if err := run(*configPath, *addr, *logLevel, *webDir); err != nil {
@@ -78,7 +77,7 @@ func run(configPath, addr, logLevel, webDir string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	srv := server.New(cfg, probe, log, version)
+	srv := server.New(cfg, probe, log, version.Version)
 
 	if cfg.Server.AllowDeploy {
 		if err := os.MkdirAll(filepath.Dir(cfg.Server.Database), 0o700); err != nil {
