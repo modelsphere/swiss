@@ -43,6 +43,13 @@ func New(cfg *config.Config, probe cluster.Probe, log *slog.Logger, version stri
 	return &Server{cfg: cfg, probe: probe, log: log, version: version}
 }
 
+// cached returns what has already been fetched, without fetching.
+func (s *Server) cached() (*catalog.Catalog, *site.Profile) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cat, s.profile
+}
+
 // SetStore installs the database. Without one swissd is read-only.
 func (s *Server) SetStore(st *store.Store) { s.store = st }
 

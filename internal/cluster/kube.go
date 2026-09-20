@@ -218,6 +218,12 @@ func scopeName(ns string) string {
 	return "namespace " + ns
 }
 
+// Ping asks the API server for its version: no RBAC, tiny response.
+func (k *Kube) Ping(ctx context.Context) error {
+	_, err := k.client.Discovery().ServerVersion()
+	return err
+}
+
 // Nodes lists nodes with the GPU facts a fit check needs.
 func (k *Kube) Nodes(ctx context.Context) ([]Node, error) {
 	list, err := k.client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})

@@ -210,10 +210,9 @@ persistence:
   storageClass: ""
   existingClaim: ""
 
-# /healthz is liveness: the process is up. /readyz is readiness and reports the
-# cluster, the profile and the catalog separately -- so a catalog that goes
-# briefly unreachable takes this pod out of the Service rather than leaving it
-# serving errors.
+# /healthz is liveness: the process is up. /readyz gates on reaching the cluster
+# and nothing else -- the catalog is fetched lazily, so an unreachable one must
+# not take this pod out of the Service.
 livenessProbe:
   httpGet:
     path: /healthz

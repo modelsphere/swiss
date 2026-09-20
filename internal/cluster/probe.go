@@ -41,6 +41,8 @@ type Node struct {
 }
 
 type Probe interface {
+	// Ping is a cheap reachability check, for readiness probes.
+	Ping(ctx context.Context) error
 	Releases(ctx context.Context) ([]Release, error)
 	Nodes(ctx context.Context) ([]Node, error)
 	// ConfigMap reads a ConfigMap given as "ns/name". Route collisions are
@@ -74,11 +76,13 @@ func SplitRef(ref string) (namespace, name string, err error) {
 
 // Fake is an in-memory Probe.
 type Fake struct {
-	Rel  []Release
-	Nod  []Node
-	Maps map[string]map[string]string
+	PingErr error
+	Rel     []Release
+	Nod     []Node
+	Maps    map[string]map[string]string
 }
 
+func (f Fake) Ping(context.Context) error                  { return f.PingErr }
 func (f Fake) Releases(context.Context) ([]Release, error) { return f.Rel, nil }
 func (f Fake) Nodes(context.Context) ([]Node, error)       { return f.Nod, nil }
 func (f Fake) ConfigMap(_ context.Context, ref string) (map[string]string, error) {

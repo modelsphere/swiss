@@ -12,30 +12,31 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": s.version})
 }
 
-// handleReadyz reports whether this swissd can actually do its job: reach the
-// cluster, read its profile, and fetch the catalog. Each is reported separately
-// -- "not ready" without saying which dependency is down is a page someone has
-// to go and investigate by hand.
+// handleReadyz reports whether swissd can reach its cluster. The catalog and the
+// profile are shown but do not gate readiness: they are fetched lazily, a
+// probe every ten seconds must not drive a refetch forever on an idle server,
+// and a catalog that goes briefly unreachable should not take swissd out of the
+// Service when everything it reads from the cluster still works.
 func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := contextWithTimeout(r, 10*time.Second)
+	ctx, cancel := contextWithTimeout(r, 5*time.Second)
 	defer cancel()
 
 	checks := map[string]string{}
 	ready := true
-	if _, err := s.probe.Releases(ctx); err != nil {
+	if err := s.probe.Ping(ctx); err != nil {
 		checks["cluster"], ready = err.Error(), false
 	} else {
 		checks["cluster"] = "ok"
 	}
-	if _, err := s.Profile(ctx); err != nil {
-		checks["profile"], ready = err.Error(), false
-	} else {
-		checks["profile"] = "ok"
+
+	cat, prof := s.cached()
+	checks["catalog"] = "not fetched"
+	if cat != nil {
+		checks["catalog"] = cat.Ref
 	}
-	if c, err := s.Catalog(ctx); err != nil {
-		checks["catalog"], ready = err.Error(), false
-	} else {
-		checks["catalog"] = c.Ref
+	checks["profile"] = "not fetched"
+	if prof != nil {
+		checks["profile"] = prof.Name
 	}
 
 	code := http.StatusOK

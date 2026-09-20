@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -151,20 +152,49 @@ func TestDeploymentsFlagsUntrackedReleases(t *testing.T) {
 	}
 }
 
-func TestReadyzNamesTheFailingDependency(t *testing.T) {
+// Readiness is about the cluster only. A catalog or profile that has not been
+// fetched, or cannot be, must not take swissd out of the Service.
+func TestReadyzGatesOnTheClusterOnly(t *testing.T) {
 	probe := fakeProbe()
-	delete(probe.Maps, "swiss/site-profile") // profile ConfigMap missing
+	delete(probe.Maps, "swiss/site-profile")
 	srv := testServer(t, probe)
+
 	code, body := get(t, srv, "/readyz")
-	if code != http.StatusServiceUnavailable {
-		t.Fatalf("want 503, got %d", code)
+	if code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %v", code, body)
 	}
 	checks := body["checks"].(map[string]any)
-	if checks["profile"] == "ok" {
-		t.Error("profile check should have failed")
-	}
 	if checks["cluster"] != "ok" {
-		t.Errorf("cluster should still be ok: %v", checks)
+		t.Errorf("cluster should be ok: %v", checks)
+	}
+	if checks["catalog"] != "not fetched" || checks["profile"] != "not fetched" {
+		t.Errorf("readiness must not fetch anything: %v", checks)
+	}
+
+	probe.PingErr = errors.New("connection refused")
+	srv2 := testServer(t, probe)
+	if code, body := get(t, srv2, "/readyz"); code != http.StatusServiceUnavailable {
+		t.Fatalf("an unreachable cluster must be not-ready: %d %v", code, body)
+	}
+}
+
+// A readiness probe runs every ten seconds; it must not drive a catalog fetch
+// on an idle server, forever.
+func TestReadyzDoesNotFetchTheCatalog(t *testing.T) {
+	srv := testServer(t, fakeProbe())
+	for range 3 {
+		get(t, srv, "/readyz")
+	}
+	_, body := get(t, srv, "/readyz")
+	if body["checks"].(map[string]any)["catalog"] != "not fetched" {
+		t.Fatal("readyz fetched the catalog")
+	}
+
+	// Once something actually uses it, readyz reports the cached ref.
+	get(t, srv, "/api/catalog")
+	_, body = get(t, srv, "/readyz")
+	if body["checks"].(map[string]any)["catalog"] == "not fetched" {
+		t.Fatal("readyz should report an already-fetched catalog")
 	}
 }
 
