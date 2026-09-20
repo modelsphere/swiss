@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/aceforeverd/swiss/internal/plan"
+	"github.com/aceforeverd/swiss/internal/values"
 	"gopkg.in/yaml.v3"
 )
 
@@ -77,14 +78,22 @@ func (r Runner) Materialize(p *plan.Plan) (Workspace, error) {
 		}
 	}
 
-	vals, err := yaml.Marshal(p.Values)
-	if err != nil {
-		ws.Close()
-		return Workspace{}, err
+	// One document per layer, in merge order, so the workspace shows the
+	// layering rather than a flattened result helm would have produced anyway.
+	layers := p.LayerValues()
+	if len(layers) == 0 {
+		layers = map[string]values.Tree{"values": p.Values}
 	}
-	if err := os.WriteFile(filepath.Join(dir, "values.yaml"), vals, 0o600); err != nil {
-		ws.Close()
-		return Workspace{}, err
+	for name, tree := range layers {
+		vals, err := yaml.Marshal(tree)
+		if err != nil {
+			ws.Close()
+			return Workspace{}, err
+		}
+		if err := os.WriteFile(filepath.Join(dir, name+".yaml"), vals, 0o600); err != nil {
+			ws.Close()
+			return Workspace{}, err
+		}
 	}
 
 	if err := os.WriteFile(ws.Helmfile, []byte(doc), 0o600); err != nil {

@@ -30,12 +30,19 @@ type Profile struct {
 	// which build (image.tag); this says where it is pulled from.
 	Registry Registry `yaml:"registry,omitempty"`
 
-	Model  ModelPaths  `yaml:"model"`
-	Cache  Cache       `yaml:"cache,omitempty"`
-	Scaler Scaler      `yaml:"scaler,omitempty"`
-	Route  Route       `yaml:"route,omitempty"`
-	Nodes  Nodes       `yaml:"nodes,omitempty"`
-	Extra  values.Tree `yaml:"extra,omitempty"`
+	Model  ModelPaths `yaml:"model"`
+	Cache  Cache      `yaml:"cache,omitempty"`
+	Scaler Scaler     `yaml:"scaler,omitempty"`
+	Route  Route      `yaml:"route,omitempty"`
+	Nodes  Nodes      `yaml:"nodes,omitempty"`
+
+	// CreateNamespace passes --create-namespace. Off by default: under helm v4
+	// that applies the Namespace object server-side, so it needs patch on
+	// namespaces even when the namespace already exists -- a cluster-scoped
+	// privilege swissd has no other reason to hold, for namespaces an admin
+	// already created for it.
+	CreateNamespace bool        `yaml:"createNamespace,omitempty"`
+	Extra           values.Tree `yaml:"extra,omitempty"`
 }
 
 type Registry struct {

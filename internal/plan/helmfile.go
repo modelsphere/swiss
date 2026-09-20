@@ -44,10 +44,10 @@ type HelmfileDoc struct {
 	Releases     []HelmfileRelease `yaml:"releases" json:"releases"`
 }
 
-func defaults() HelmDefaults {
+func defaults(createNamespace bool) HelmDefaults {
 	return HelmDefaults{
 		Wait: false, Atomic: false, CleanupOnFail: false,
-		CreateNS: true, HistoryMax: 20,
+		CreateNS: createNamespace, HistoryMax: 20,
 		DiffArgs: []string{"--three-way-merge"},
 	}
 }
@@ -60,13 +60,13 @@ func (p *Plan) HelmfileDocument(chartRoot string) (*HelmfileDoc, error) {
 		return nil, err
 	}
 	d := &HelmfileDoc{
-		HelmDefaults: defaults(),
+		HelmDefaults: defaults(p.CreateNamespace),
 		Releases: []HelmfileRelease{{
 			Name:      p.Release.Name,
 			Namespace: p.Release.Namespace,
 			Chart:     chart,
 			Version:   version,
-			Values:    []string{"values.yaml"},
+			Values:    p.ValuesFiles(),
 		}},
 	}
 	if repo != nil {

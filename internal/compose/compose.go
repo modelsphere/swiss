@@ -83,11 +83,12 @@ func Compose(in Input) (*plan.Plan, error) {
 			Repo:    in.Profile.ChartRepo,
 			Path:    in.Profile.ChartPath,
 		},
-		Engine:     in.Variant.Engine,
-		Profile:    in.Profile.Name,
-		Overrides:  in.Overrides,
-		Values:     out,
-		Provenance: prov,
+		Engine:          in.Variant.Engine,
+		Profile:         in.Profile.Name,
+		CreateNamespace: in.Profile.CreateNamespace,
+		Overrides:       in.Overrides,
+		Values:          out,
+		Provenance:      prov,
 	}
 	if err := p.ComputeHash(); err != nil {
 		return nil, err
@@ -204,21 +205,31 @@ func applyDefaults(out values.Tree, prov values.Provenance, in Input) error {
 	}
 	prov["model.localPath"] = values.LayerSite
 
-	// Features are opt-in, and their "off" is written down rather than left to
-	// the chart. scaler, sloRequirement, cart and serviceMonitor all default to
-	// ENABLED in charts/sglang, so a deploy that mentions none of them silently
-	// gets an autoscaler, an SLO object, a router and a ServiceMonitor. Worse,
-	// that set is a chart default -- it can change under a release that never
-	// asked for any of it. A plan says what it wants, including what it does
-	// not.
-	for _, feature := range []string{"modelRoute", "scaler", "sloRequirement", "cart", "serviceMonitor", "metricsMock"} {
+	// Every feature's enabled flag is written down, never left to the chart:
+	// scaler, sloRequirement, cart and serviceMonitor all default to ENABLED in
+	// charts/sglang, so a deploy that mentions none of them silently gets all
+	// four -- and that set is a chart default, free to change under a release
+	// that never asked for any of it.
+	//
+	// A section the form touched is one the deploy wants: it is switched on
+	// explicitly unless the form said otherwise, which is how filling in scaling
+	// numbers turns the scaler on and naming a route turns routing on.
+	for feature, onByDefault := range map[string]bool{
+		"cart":           true,
+		"modelRoute":     false,
+		"sloRequirement": false,
+		"scaler":         false,
+		"serviceMonitor": false,
+		"metricsMock":    false,
+	} {
+		if _, set := values.Get(in.Overrides, feature+".enabled"); set {
+			continue // the form is explicit; its merge lands after this
+		}
+		want := onByDefault
 		if touched(in.Overrides, feature) {
-			continue
+			want = true
 		}
-		if _, set := values.Get(out, feature+".enabled"); set {
-			continue
-		}
-		if err := values.Set(out, feature+".enabled", false); err != nil {
+		if err := values.Set(out, feature+".enabled", want); err != nil {
 			return err
 		}
 		prov[feature+".enabled"] = values.LayerDerived

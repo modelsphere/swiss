@@ -240,45 +240,87 @@ func TestEnabledCacheStillDerivesSlots(t *testing.T) {
 	}
 }
 
-// scaler, sloRequirement, cart and serviceMonitor all default to ENABLED in the
-// chart. A plan that mentions none of them must still say so, or a chart default
-// change silently gives a release an autoscaler it never asked for.
-func TestUnrequestedFeaturesAreExplicitlyOff(t *testing.T) {
+// Every feature's flag is written down. cart is the one that is on by default;
+// the rest stay off until a deploy asks.
+func TestFeatureDefaultsAreExplicit(t *testing.T) {
 	p, err := Compose(testInput())
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, feature := range []string{"modelRoute", "scaler", "sloRequirement", "cart", "serviceMonitor", "metricsMock"} {
+	for feature, want := range map[string]bool{
+		"cart":           true,
+		"modelRoute":     false,
+		"sloRequirement": false,
+		"scaler":         false,
+		"serviceMonitor": false,
+		"metricsMock":    false,
+	} {
 		v, ok := values.Get(p.Values, feature+".enabled")
 		if !ok {
 			t.Errorf("%s.enabled is not written down", feature)
 			continue
 		}
-		if v != false {
-			t.Errorf("%s.enabled = %v, want false", feature, v)
+		if v != want {
+			t.Errorf("%s.enabled = %v, want %v", feature, v, want)
 		}
 	}
 }
 
-func TestAFormThatAsksForAFeatureKeepsIt(t *testing.T) {
+// Filling in scaling numbers turns the scaler on; naming a route turns routing
+// on. Neither leans on a chart default.
+func TestTouchingASectionEnablesIt(t *testing.T) {
 	in := testInput()
 	in.Overrides = values.Tree{
-		"scaler":     map[string]any{"enabled": true, "maxReplicas": 8},
+		"scaler":     map[string]any{"maxReplicas": 8},
 		"modelRoute": map[string]any{"nginx": map[string]any{"route": "glm-5"}},
 	}
 	p, err := Compose(in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v, _ := values.Get(p.Values, "scaler.enabled"); v != true {
-		t.Errorf("scaler.enabled = %v, want true", v)
+	for _, feature := range []string{"scaler", "modelRoute"} {
+		if v, _ := values.Get(p.Values, feature+".enabled"); v != true {
+			t.Errorf("%s.enabled = %v, want true", feature, v)
+		}
 	}
-	// The form touched modelRoute without naming enabled, so swiss must not
-	// force it off underneath a route the deploy just configured.
-	if v, ok := values.Get(p.Values, "modelRoute.enabled"); ok && v == false {
-		t.Error("modelRoute was configured by the form; swiss must not disable it")
+	if v, _ := values.Get(p.Values, "sloRequirement.enabled"); v != false {
+		t.Errorf("an untouched feature stays off: %v", v)
+	}
+}
+
+// An explicit off wins over both the default and the touched rule.
+func TestFormCanTurnAFeatureOff(t *testing.T) {
+	in := testInput()
+	in.Overrides = values.Tree{"cart": map[string]any{"enabled": false}}
+	p, err := Compose(in)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if v, _ := values.Get(p.Values, "cart.enabled"); v != false {
-		t.Errorf("an untouched feature stays off: cart.enabled = %v", v)
+		t.Fatalf("cart.enabled = %v, want false", v)
+	}
+	if p.Provenance["cart.enabled"] != values.LayerForm {
+		t.Errorf("an explicit choice belongs to the form, got %q", p.Provenance["cart.enabled"])
+	}
+}
+
+func TestLayerValuesSplitByProvenance(t *testing.T) {
+	p, err := Compose(testInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	layers := p.LayerValues()
+	if _, ok := values.Get(layers[values.LayerCatalog], "extraArgs"); !ok {
+		t.Error("extraArgs belongs to the catalog document")
+	}
+	if _, ok := values.Get(layers[values.LayerSite], "image.repository"); !ok {
+		t.Error("image.repository belongs to the site document")
+	}
+	if _, ok := values.Get(layers[values.LayerCatalog], "image.repository"); ok {
+		t.Error("a site value leaked into the catalog document")
+	}
+	files := p.ValuesFiles()
+	if len(files) < 2 || files[0] != "catalog.yaml" {
+		t.Fatalf("values files must be in merge order: %v", files)
 	}
 }

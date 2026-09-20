@@ -7,6 +7,12 @@ namespace: swiss-deploy
 chartRepo: https://harbor.4pd.io/chartrepo/hardcore-tech/
 # chartPath: ../charts
 
+# --create-namespace applies the Namespace object server-side under helm v4, so
+# it needs patch on namespaces even when the namespace already exists. swissd
+# deploys into namespaces an admin granted it, so leave this off unless the
+# ServiceAccount really should be creating them.
+createNamespace: false
+
 registry:
   # Engine images are pulled from the mirror, keeping the catalog's tag.
   mirror: harbor.4pd.io/hardcore-tech

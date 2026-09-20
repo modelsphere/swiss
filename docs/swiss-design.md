@@ -239,10 +239,16 @@ in `charts/sglang`. A deploy that mentions none of them would silently get an
 autoscaler, an SLO object, a router and a ServiceMonitor — and that set is a
 chart default, so it can change under a release that never asked for any of it.
 
-So compose writes `enabled: false` for every feature the form did not ask about,
-and the plan says what it does not want as plainly as what it does. A form that
-touches a section keeps control of it: setting `modelRoute.nginx.route` without
-naming `enabled` does not get the route disabled underneath it.
+So compose writes every flag down, with per-feature defaults rather than one
+blanket answer — `cart` on, `modelRoute`, `sloRequirement`, `scaler`,
+`serviceMonitor` and `metricsMock` off. A section the form touched is one the
+deploy wants, so it is switched on explicitly: filling in scaling numbers turns
+the scaler on, naming a route turns routing on, and an explicit `enabled: false`
+from the form still wins over both.
+
+The web sends all of them regardless — three toggles plus the scaler, derived
+from whether any scaling input was filled. A flag left out of the request would
+hand the decision back to the chart.
 
 A derived value is also skipped when the section it belongs to is off.
 `cache.maxSlotsPerNode` is only computed when the site enabled the cache,
@@ -485,6 +491,17 @@ releases:
     - { name: glm-53, namespace: modelforge, chart: oci://…/sglang, version: "0.8.0",
         values: [values.yaml] }
 ```
+
+The release is applied through **one values document per layer**, in merge
+order, rather than one flattened file: the declaration then shows the layering
+instead of hiding it, and a reviewer can read the catalog's contribution without
+separating it from the site's by eye.
+
+`createNamespace` is **off** by default, unlike the repo's own `helmfile.yaml`.
+Under helm v4 that flag applies the Namespace object server-side, so it needs
+`patch` on namespaces even when the namespace already exists -- a cluster-scoped
+privilege swissd has no other reason to hold, for namespaces an admin created
+for it when granting the Roles. The site profile can turn it on.
 
 Those `helmDefaults` are the point, and a test asserts them against the repo's
 own `helmfile.yaml`: swissd must behave *identically* to `make apply`, not

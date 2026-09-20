@@ -339,3 +339,33 @@ func TestReleasePlanEndpoint(t *testing.T) {
 		t.Errorf("want 404 for an unmanaged release, got %d", code)
 	}
 }
+
+// The form sends every flag; nothing is decided by a chart default.
+func TestWebFeatureTogglesLandInThePlan(t *testing.T) {
+	srv, _ := deployServer(t, true)
+	code, body := post(t, srv, "/api/plans", map[string]any{
+		"model": "glm5.1", "release": "r", "serviceId": "r",
+		"overrides": map[string]any{
+			"cart":           map[string]any{"enabled": false},
+			"sloRequirement": map[string]any{"enabled": true},
+			"modelRoute":     map[string]any{"enabled": true, "nginx": map[string]any{"route": "glm-5"}},
+			"scaler":         map[string]any{"enabled": true, "maxReplicas": 6},
+		},
+	})
+	if code != 200 {
+		t.Fatalf("status %d: %v", code, body)
+	}
+	vals := body["values"].(map[string]any)
+	for feature, want := range map[string]bool{
+		"cart": false, "sloRequirement": true, "modelRoute": true, "scaler": true,
+	} {
+		got := vals[feature].(map[string]any)["enabled"]
+		if got != want {
+			t.Errorf("%s.enabled = %v, want %v", feature, got, want)
+		}
+	}
+	prov := body["provenance"].(map[string]any)
+	if prov["cart.enabled"] != "form" {
+		t.Errorf("an explicit choice belongs to the form, got %v", prov["cart.enabled"])
+	}
+}

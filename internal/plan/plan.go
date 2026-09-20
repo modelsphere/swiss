@@ -40,6 +40,9 @@ type Plan struct {
 	// appearing in a diff is the failure mode the whole design is avoiding.
 	Provenance values.Provenance `json:"provenance,omitempty"`
 
+	// CreateNamespace passes --create-namespace to helm.
+	CreateNamespace bool `json:"createNamespace,omitempty"`
+
 	// Helmfile is the release declaration these values are applied through, so
 	// a plan is a complete deploy on its own. Derived, and excluded from Hash
 	// for the same reason Provenance is: it explains the values rather than
@@ -124,4 +127,39 @@ func (p *Plan) YAML() ([]byte, error) {
 		return nil, err
 	}
 	return yaml.Marshal(doc)
+}
+
+// Layers are the values documents a release is applied through, in merge order.
+var Layers = []string{values.LayerCatalog, values.LayerSite, values.LayerDerived, values.LayerForm}
+
+// LayerValues splits the composed values by the layer that set each path, so a
+// release is applied through one document per layer rather than one merged file.
+// Layers that contributed nothing are omitted.
+func (p *Plan) LayerValues() map[string]values.Tree {
+	byLayer := map[string][]string{}
+	for path, layer := range p.Provenance {
+		byLayer[layer] = append(byLayer[layer], path)
+	}
+	out := map[string]values.Tree{}
+	for _, layer := range Layers {
+		if paths := byLayer[layer]; len(paths) > 0 {
+			out[layer] = values.Subtree(p.Values, paths)
+		}
+	}
+	return out
+}
+
+// ValuesFiles names the documents LayerValues produces, in merge order.
+func (p *Plan) ValuesFiles() []string {
+	present := p.LayerValues()
+	var out []string
+	for _, layer := range Layers {
+		if _, ok := present[layer]; ok {
+			out = append(out, layer+".yaml")
+		}
+	}
+	if len(out) == 0 {
+		return []string{"values.yaml"}
+	}
+	return out
 }

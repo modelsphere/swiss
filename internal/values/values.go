@@ -168,3 +168,18 @@ func asMap(v any) (map[string]any, bool) {
 	}
 	return nil, false
 }
+
+// Subtree rebuilds just the given leaf paths into a new tree.
+func Subtree(t Tree, paths []string) Tree {
+	out := Tree{}
+	for _, p := range paths {
+		v, ok := Get(t, p)
+		if !ok {
+			continue
+		}
+		if err := Set(out, p, v); err != nil {
+			continue
+		}
+	}
+	return out
+}

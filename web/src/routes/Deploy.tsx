@@ -7,11 +7,16 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, Input } from "@/components/ui/input";
+import { Toggle } from "@/components/ui/toggle";
 import { DiffView } from "@/components/DiffView";
 import { Provenance } from "@/components/Provenance";
 import { ErrorState, Loading } from "@/components/States";
 
 interface Form {
+  cart: boolean;
+  modelRoute: boolean;
+  slo: boolean;
+  serviceMonitor: boolean;
   release: string;
   namespace: string;
   serviceId: string;
@@ -23,6 +28,10 @@ interface Form {
 }
 
 const EMPTY: Form = {
+  cart: true,
+  modelRoute: false,
+  slo: false,
+  serviceMonitor: false,
   release: "",
   namespace: "",
   serviceId: "",
@@ -57,12 +66,19 @@ export function Deploy() {
 
   // A diff is bound to the plan it was computed from. Touching the form
   // invalidates it, so apply is never reachable from a diff nobody saw.
-  const set = (k: keyof Form) => (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (k === "release") setReleaseEdited(true);
-    setForm({ ...form, [k]: e.target.value });
+  const reset = () => {
     setPlan(null);
     setDiff(null);
     setApplied(null);
+  };
+  const set = (k: keyof Form) => (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (k === "release") setReleaseEdited(true);
+    setForm({ ...form, [k]: e.target.value });
+    reset();
+  };
+  const toggle = (k: keyof Form) => (v: boolean) => {
+    setForm({ ...form, [k]: v });
+    reset();
   };
 
   const planM = useMutation({
@@ -162,12 +178,47 @@ export function Deploy() {
           <Field label="Model path" hint="overrides the site's path template">
             <Input value={form.localPath} onChange={set("localPath")} />
           </Field>
-          <Field label="Scaler min">
+          <Field label="Scaler min" hint="filling either turns the scaler on">
             <Input value={form.minReplicas} onChange={set("minReplicas")} inputMode="numeric" />
           </Field>
           <Field label="Scaler max">
             <Input value={form.maxReplicas} onChange={set("maxReplicas")} inputMode="numeric" />
           </Field>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Features</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Written into the plan either way — nothing is left to a chart default.
+          </p>
+        </CardHeader>
+        <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <Toggle
+            label="CART"
+            hint="cache-aware router in front of the backends"
+            checked={form.cart}
+            onChange={toggle("cart")}
+          />
+          <Toggle
+            label="ModelRoute"
+            hint="publish to openresty and the monitor"
+            checked={form.modelRoute || !!form.route.trim()}
+            onChange={toggle("modelRoute")}
+          />
+          <Toggle
+            label="SLO requirement"
+            hint="LLMSLORequirement for this service"
+            checked={form.slo}
+            onChange={toggle("slo")}
+          />
+          <Toggle
+            label="ServiceMonitor"
+            hint="scrape metrics into Prometheus"
+            checked={form.serviceMonitor}
+            onChange={toggle("serviceMonitor")}
+          />
         </CardContent>
       </Card>
 
@@ -272,11 +323,22 @@ function request(model: string, version: string, variant: string, f: Form): Plan
   const num = (v: string) => (v.trim() === "" ? undefined : Number(v));
 
   if (num(f.replicaCount) !== undefined) overrides.replicaCount = num(f.replicaCount);
+
+  // Every flag is sent explicitly. Leaving one out would hand the decision to a
+  // chart default, which is the thing this is here to avoid.
+  overrides.cart = { enabled: f.cart };
+  overrides.sloRequirement = { enabled: f.slo };
+  overrides.serviceMonitor = { enabled: f.serviceMonitor };
+
+  const route = f.route.trim();
+  overrides.modelRoute = route
+    ? { enabled: true, nginx: { route } }
+    : { enabled: f.modelRoute };
+
   const scaler: Record<string, unknown> = {};
   if (num(f.minReplicas) !== undefined) scaler.minReplicas = num(f.minReplicas);
   if (num(f.maxReplicas) !== undefined) scaler.maxReplicas = num(f.maxReplicas);
-  if (Object.keys(scaler).length) overrides.scaler = scaler;
-  if (f.route.trim()) overrides.modelRoute = { enabled: true, nginx: { route: f.route.trim() } };
+  overrides.scaler = { ...scaler, enabled: Object.keys(scaler).length > 0 };
 
   return {
     model,
@@ -286,6 +348,6 @@ function request(model: string, version: string, variant: string, f: Form): Plan
     namespace: f.namespace.trim() || undefined,
     serviceId: f.serviceId.trim() || undefined,
     localPath: f.localPath.trim() || undefined,
-    overrides: Object.keys(overrides).length ? overrides : undefined,
+    overrides,
   };
 }

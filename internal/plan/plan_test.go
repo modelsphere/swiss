@@ -63,3 +63,28 @@ func TestNoChartSourceLeavesTheDeclarationUnrenderable(t *testing.T) {
 		t.Fatalf("chartRoot is the fallback: %v", err)
 	}
 }
+
+// helm v4 applies the Namespace object server-side, so --create-namespace needs
+// patch on namespaces even when the namespace exists. swissd deploys into
+// namespaces an admin already granted it, so this stays off unless asked for.
+func TestCreateNamespaceIsOptIn(t *testing.T) {
+	p := testPlan()
+	p.Chart.Repo = "oci://harbor.4pd.io/hardcore-tech"
+
+	doc, err := p.HelmfileDocument("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc.HelmDefaults.CreateNS {
+		t.Error("createNamespace must default off")
+	}
+
+	p.CreateNamespace = true
+	doc, err = p.HelmfileDocument("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !doc.HelmDefaults.CreateNS {
+		t.Error("the site profile must be able to turn it on")
+	}
+}
