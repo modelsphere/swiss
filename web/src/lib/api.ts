@@ -170,6 +170,7 @@ export interface Plan {
   profile: string;
   values: Record<string, unknown>;
   provenance?: Record<string, string>;
+  helmfile?: string;
   hash: string;
 }
 

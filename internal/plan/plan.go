@@ -40,6 +40,12 @@ type Plan struct {
 	// appearing in a diff is the failure mode the whole design is avoiding.
 	Provenance values.Provenance `json:"provenance,omitempty"`
 
+	// Helmfile is the release declaration these values are applied through, so
+	// a plan is a complete deploy on its own. Derived, and excluded from Hash
+	// for the same reason Provenance is: it explains the values rather than
+	// changing them.
+	Helmfile string `json:"helmfile,omitempty"`
+
 	// Hash covers release identity, chart, and the composed values. Two plans
 	// with one hash render the same thing.
 	Hash string `json:"hash"`

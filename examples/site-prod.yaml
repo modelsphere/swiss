@@ -22,9 +22,13 @@ model:
   overrides:
     kimi-k2.5: /mnt/disk0/models/Kimi-K2.5
 
+# The host compile cache. Off emits nothing under cache: at all -- the section
+# does not exist in every chart version (sglang 0.7.0 has none), and a values
+# file carrying a key the chart has never heard of is rejected by its schema
+# rather than ignored.
 cache:
-  enabled: true
-  hostPath: /mnt/disk0/sglang-cache
+  enabled: false
+  # hostPath: /mnt/disk0/sglang-cache
 
 scaler:
   serverAddress: http://decision-gen.llm-scaler.svc:80

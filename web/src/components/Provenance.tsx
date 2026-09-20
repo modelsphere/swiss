@@ -23,6 +23,20 @@ export function Provenance({ plan }: { plan: Plan }) {
 
   return (
     <div className="space-y-4">
+      {plan.helmfile && (
+        <section>
+          <div className="mb-1.5 flex flex-wrap items-center gap-2">
+            <Badge variant="default">helmfile.yaml</Badge>
+            <span className="text-xs text-muted-foreground">
+              the release declaration these values are applied through
+            </span>
+          </div>
+          <pre className="overflow-x-auto rounded-md border bg-muted/40 p-3 text-xs leading-relaxed">
+            {plan.helmfile}
+          </pre>
+        </section>
+      )}
+
       {LAYERS.filter((l) => byLayer.has(l)).map((layer) => {
         const paths = byLayer.get(layer)!;
         return (

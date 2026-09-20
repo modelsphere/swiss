@@ -45,7 +45,12 @@ export function Deploy() {
   });
   const cluster = useQuery({ queryKey: ["cluster"], queryFn: api.cluster });
 
-  const [form, setForm] = useState<Form>({ ...EMPTY, release: name, serviceId: name });
+  const [form, setForm] = useState<Form>({ ...EMPTY, serviceId: name });
+  // serviceId is the identity everything else is named after: the release, the
+  // openresty route, the LLMScaler and the LLMSLORequirement. The release name
+  // follows it until someone types their own.
+  const [releaseEdited, setReleaseEdited] = useState(false);
+  const release = releaseEdited ? form.release : form.serviceId;
   const [plan, setPlan] = useState<Plan | null>(null);
   const [diff, setDiff] = useState<DiffResult | null>(null);
   const [applied, setApplied] = useState<ApplyResult | null>(null);
@@ -53,6 +58,7 @@ export function Deploy() {
   // A diff is bound to the plan it was computed from. Touching the form
   // invalidates it, so apply is never reachable from a diff nobody saw.
   const set = (k: keyof Form) => (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (k === "release") setReleaseEdited(true);
     setForm({ ...form, [k]: e.target.value });
     setPlan(null);
     setDiff(null);
@@ -60,7 +66,7 @@ export function Deploy() {
   };
 
   const planM = useMutation({
-    mutationFn: () => deployApi.plan(request(name, version, variantId, form)),
+    mutationFn: () => deployApi.plan(request(name, version, variantId, { ...form, release })),
     onSuccess: (p) => {
       setPlan(p);
       setDiff(null);
@@ -132,17 +138,23 @@ export function Deploy() {
           </p>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2">
-          <Field label="Release" hint="helm release name">
-            <Input value={form.release} onChange={set("release")} placeholder={name} />
+          <Field
+            label="Service ID"
+            hint="the identity everything is named after: release, route, scaler, SLO"
+          >
+            <Input value={form.serviceId} onChange={set("serviceId")} placeholder={name} />
+          </Field>
+          <Field
+            label="Release"
+            hint={releaseEdited ? "helm release name" : "follows the service ID"}
+          >
+            <Input value={release} onChange={set("release")} placeholder={form.serviceId} />
           </Field>
           <Field label="Namespace" hint={`defaults to ${cluster.data.namespace ?? "the profile's"}`}>
             <Input value={form.namespace} onChange={set("namespace")} />
           </Field>
-          <Field label="Service ID" hint="modelRoute, sloRequirement and the scaler key off this">
-            <Input value={form.serviceId} onChange={set("serviceId")} />
-          </Field>
-          <Field label="Route" hint="openresty route name; empty leaves modelRoute alone">
-            <Input value={form.route} onChange={set("route")} />
+          <Field label="Route" hint="openresty path; empty uses the service ID">
+            <Input value={form.route} onChange={set("route")} placeholder={form.serviceId} />
           </Field>
           <Field label="Replicas" hint="fixed count; leave empty when the scaler owns it">
             <Input value={form.replicaCount} onChange={set("replicaCount")} inputMode="numeric" />
@@ -162,7 +174,7 @@ export function Deploy() {
       {error && <ErrorState what="the request" error={error} />}
 
       <div className="flex flex-wrap items-center gap-2">
-        <Button onClick={() => planM.mutate()} disabled={!form.release || planM.isPending}>
+        <Button onClick={() => planM.mutate()} disabled={!form.serviceId || planM.isPending}>
           {planM.isPending ? "Composing…" : "Compose plan"}
         </Button>
         <Button variant="outline" onClick={() => diffM.mutate()} disabled={!plan || diffM.isPending}>
@@ -208,7 +220,7 @@ export function Deploy() {
       {plan && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Composed values</CardTitle>
+            <CardTitle className="text-base">Composed plan</CardTitle>
             <p className="font-mono text-xs text-muted-foreground">{plan.hash}</p>
           </CardHeader>
           <CardContent>

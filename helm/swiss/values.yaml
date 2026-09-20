@@ -73,9 +73,12 @@ profile:
       # than a per-model table: a site that has to add a row for every model in
       # a public catalog will not keep up with it.
       pathTemplate: /mnt/disk0/models/{{name}}
+    # Off emits nothing under cache: -- the section does not exist in every
+    # chart version, and a values file carrying a key the chart has never heard
+    # of is rejected by its schema rather than ignored.
     cache:
-      enabled: true
-      hostPath: /mnt/disk0/sglang-cache
+      enabled: false
+      # hostPath: /mnt/disk0/sglang-cache
     scaler:
       serverAddress: http://decision-gen.llm-scaler.svc:80
     route:

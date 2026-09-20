@@ -44,7 +44,7 @@ func TestMaterializeWritesAValuesFileAndAOneReleaseHelmfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var hf document
+	var hf plan.HelmfileDoc
 	if err := yaml.Unmarshal(doc, &hf); err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestHelmDefaultsMatchTheRepo(t *testing.T) {
 	defer ws.Close()
 
 	doc, _ := os.ReadFile(ws.Helmfile)
-	var hf document
+	var hf plan.HelmfileDoc
 	if err := yaml.Unmarshal(doc, &hf); err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestClassicChartRepoBecomesARepositoriesEntry(t *testing.T) {
 	defer ws.Close()
 
 	doc, _ := os.ReadFile(ws.Helmfile)
-	var hf document
+	var hf plan.HelmfileDoc
 	if err := yaml.Unmarshal(doc, &hf); err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestClassicChartRepoBecomesARepositoriesEntry(t *testing.T) {
 	if hf.Repositories[0].URL != "https://harbor.4pd.io/chartrepo/hardcore-tech" {
 		t.Errorf("trailing slash should be trimmed: %q", hf.Repositories[0].URL)
 	}
-	if hf.Releases[0].Chart != repoAlias+"/sglang" || hf.Releases[0].Version != "0.8.0" {
+	if hf.Releases[0].Chart != "charts/sglang" || hf.Releases[0].Version != "0.8.0" {
 		t.Errorf("release must refer to the alias: %+v", hf.Releases[0])
 	}
 }
@@ -145,7 +145,7 @@ func TestOCIRegistryIsAddressedDirectly(t *testing.T) {
 	defer ws.Close()
 
 	doc, _ := os.ReadFile(ws.Helmfile)
-	var hf document
+	var hf plan.HelmfileDoc
 	if err := yaml.Unmarshal(doc, &hf); err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestLocalChartPathIsAbsolute(t *testing.T) {
 	}
 	defer ws.Close()
 	doc, _ := os.ReadFile(ws.Helmfile)
-	var hf document
+	var hf plan.HelmfileDoc
 	_ = yaml.Unmarshal(doc, &hf)
 	// helmfile runs with cwd inside the temp dir, so a relative chart path would
 	// resolve against the wrong place.

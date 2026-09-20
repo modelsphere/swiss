@@ -210,3 +210,75 @@ func TestLocalPathDefaultsFromTheSiteTemplate(t *testing.T) {
 		t.Errorf("the template default must be attributed to the site, got %q", p.Provenance["model.localPath"])
 	}
 }
+
+// The cache section does not exist in every chart version, so a site that turns
+// it off must produce no cache key at all -- not even a derived one.
+func TestDisabledCacheEmitsNothing(t *testing.T) {
+	in := testInput()
+	in.Profile.Cache = site.Cache{}
+	p, err := Compose(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range values.LeafPaths(p.Values) {
+		if strings.HasPrefix(path, "cache") {
+			t.Errorf("a disabled cache leaked %s", path)
+		}
+	}
+	if _, ok := p.Values["cache"]; ok {
+		t.Error("the cache key itself must be absent")
+	}
+}
+
+func TestEnabledCacheStillDerivesSlots(t *testing.T) {
+	p, err := Compose(testInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := values.Get(p.Values, "cache.maxSlotsPerNode"); v != 1 {
+		t.Fatalf("maxSlotsPerNode = %v, want 1", v)
+	}
+}
+
+// scaler, sloRequirement, cart and serviceMonitor all default to ENABLED in the
+// chart. A plan that mentions none of them must still say so, or a chart default
+// change silently gives a release an autoscaler it never asked for.
+func TestUnrequestedFeaturesAreExplicitlyOff(t *testing.T) {
+	p, err := Compose(testInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, feature := range []string{"modelRoute", "scaler", "sloRequirement", "cart", "serviceMonitor", "metricsMock"} {
+		v, ok := values.Get(p.Values, feature+".enabled")
+		if !ok {
+			t.Errorf("%s.enabled is not written down", feature)
+			continue
+		}
+		if v != false {
+			t.Errorf("%s.enabled = %v, want false", feature, v)
+		}
+	}
+}
+
+func TestAFormThatAsksForAFeatureKeepsIt(t *testing.T) {
+	in := testInput()
+	in.Overrides = values.Tree{
+		"scaler":     map[string]any{"enabled": true, "maxReplicas": 8},
+		"modelRoute": map[string]any{"nginx": map[string]any{"route": "glm-5"}},
+	}
+	p, err := Compose(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := values.Get(p.Values, "scaler.enabled"); v != true {
+		t.Errorf("scaler.enabled = %v, want true", v)
+	}
+	// The form touched modelRoute without naming enabled, so swiss must not
+	// force it off underneath a route the deploy just configured.
+	if v, ok := values.Get(p.Values, "modelRoute.enabled"); ok && v == false {
+		t.Error("modelRoute was configured by the form; swiss must not disable it")
+	}
+	if v, _ := values.Get(p.Values, "cart.enabled"); v != false {
+		t.Errorf("an untouched feature stays off: cart.enabled = %v", v)
+	}
+}

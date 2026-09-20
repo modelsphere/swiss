@@ -9,6 +9,7 @@ package compose
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/aceforeverd/swiss/internal/catalog"
 	"github.com/aceforeverd/swiss/internal/plan"
@@ -90,6 +91,11 @@ func Compose(in Input) (*plan.Plan, error) {
 	}
 	if err := p.ComputeHash(); err != nil {
 		return nil, err
+	}
+	// Best effort: a profile that names neither a chart repo nor a path leaves
+	// this empty, and the runner resolves it against --chart-root instead.
+	if doc, err := p.RenderHelmfile(""); err == nil {
+		p.Helmfile = doc
 	}
 	return p, nil
 }
@@ -198,10 +204,35 @@ func applyDefaults(out values.Tree, prov values.Provenance, in Input) error {
 	}
 	prov["model.localPath"] = values.LayerSite
 
+	// Features are opt-in, and their "off" is written down rather than left to
+	// the chart. scaler, sloRequirement, cart and serviceMonitor all default to
+	// ENABLED in charts/sglang, so a deploy that mentions none of them silently
+	// gets an autoscaler, an SLO object, a router and a ServiceMonitor. Worse,
+	// that set is a chart default -- it can change under a release that never
+	// asked for any of it. A plan says what it wants, including what it does
+	// not.
+	for _, feature := range []string{"modelRoute", "scaler", "sloRequirement", "cart", "serviceMonitor", "metricsMock"} {
+		if touched(in.Overrides, feature) {
+			continue
+		}
+		if _, set := values.Get(out, feature+".enabled"); set {
+			continue
+		}
+		if err := values.Set(out, feature+".enabled", false); err != nil {
+			return err
+		}
+		prov[feature+".enabled"] = values.LayerDerived
+	}
+
 	// cache.maxSlotsPerNode: how many pods of this model can share a node's
 	// cache directory. The chart's own comment gives the rule -- 1 for an 8-GPU
 	// model, 4 for a 2-GPU one -- which is just floor(node GPUs / model GPUs).
-	if in.Profile.Nodes.GPUsPerNode > 0 && in.Variant.Requires.GPUs > 0 {
+	//
+	// Only when the site turned the cache on. A disabled cache must leave NOTHING
+	// under cache: -- the key does not exist in every chart version, and a values
+	// file carrying a section the chart has never heard of is rejected by its
+	// schema rather than ignored.
+	if in.Profile.Cache.Enabled && in.Profile.Nodes.GPUsPerNode > 0 && in.Variant.Requires.GPUs > 0 {
 		if _, set := values.Get(out, "cache.maxSlotsPerNode"); !set {
 			slots := max(in.Profile.Nodes.GPUsPerNode/in.Variant.Requires.GPUs, 1)
 			if err := values.Set(out, "cache.maxSlotsPerNode", slots); err != nil {
@@ -211,6 +242,17 @@ func applyDefaults(out values.Tree, prov values.Provenance, in Input) error {
 		}
 	}
 	return nil
+}
+
+// touched reports whether the form said anything under a feature, in which case
+// its enabled flag is the form's to set rather than something to default off.
+func touched(overrides values.Tree, feature string) bool {
+	for _, path := range values.LeafPaths(overrides) {
+		if path == feature || strings.HasPrefix(path, feature+".") {
+			return true
+		}
+	}
+	return false
 }
 
 func toAnySlice(s []string) []any {

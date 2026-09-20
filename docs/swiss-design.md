@@ -207,7 +207,11 @@ becomes a question about precedence, and there is no good answer to any of them.
 
 Two of those are central enough to be named fields rather than `--set` keys.
 `serviceId` is the identity `modelRoute`, `sloRequirement` and the scaler all key
-off, and it is per release rather than per model or per cluster.
+off, and it is per release rather than per model or per cluster. It is the
+**primary** field: the release name and the openresty route both follow it until
+someone types their own. Three fields holding the same string, each free to drift,
+is how a release ends up with a scaler watching one id and a route publishing
+another.
 `model.localPath` has a site-wide default built from the path template, but
 weights move and a deploy has to be able to say where they are -- a template with
 no override just means the first irregular model cannot be deployed at all.
@@ -226,7 +230,25 @@ error names every offending path at once.
 
 A short, enumerated set is filled in before the form is merged, so an explicit
 override simply wins and is attributed to the form. `model.localPath` comes from
-the site's path template this way. `cache.maxSlotsPerNode` is the clear case: the chart's own comment gives the
+the site's path template this way.
+
+### Features are opt-in, and their "off" is written down
+
+`scaler`, `sloRequirement`, `cart` and `serviceMonitor` all default to **enabled**
+in `charts/sglang`. A deploy that mentions none of them would silently get an
+autoscaler, an SLO object, a router and a ServiceMonitor — and that set is a
+chart default, so it can change under a release that never asked for any of it.
+
+So compose writes `enabled: false` for every feature the form did not ask about,
+and the plan says what it does not want as plainly as what it does. A form that
+touches a section keeps control of it: setting `modelRoute.nginx.route` without
+naming `enabled` does not get the route disabled underneath it.
+
+A derived value is also skipped when the section it belongs to is off.
+`cache.maxSlotsPerNode` is only computed when the site enabled the cache,
+because `cache` does not exist in every chart version and a values file carrying
+a key the chart has never heard of is **rejected by its schema rather than
+ignored** — which is the whole point of the schema being closed. `cache.maxSlotsPerNode` is the clear case: the chart's own comment gives the
 rule as 1 for an 8-GPU model, 4 for a 2-GPU one, which is ⌊node GPUs ÷
 `model.gpus`⌋ and needs no human.
 
