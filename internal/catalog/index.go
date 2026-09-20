@@ -26,8 +26,18 @@ type IndexModel struct {
 	Tags        []string       `json:"tags,omitempty"`
 	Deprecated  any            `json:"deprecated,omitempty"`
 	Source      IndexSource    `json:"source"`
-	Variants    []IndexVariant `json:"variants"`
-	Path        string         `json:"path"`
+	Latest      string         `json:"latest"`
+	Versions    []IndexVersion `json:"versions"`
+}
+
+// IndexVersion is one published version of a model. Digest is a sha256 of the
+// entry file: a deploy records it, and a later fetch that does not match is
+// refused rather than used.
+type IndexVersion struct {
+	Version  string         `json:"version"`
+	Path     string         `json:"path"`
+	Digest   string         `json:"digest"`
+	Variants []IndexVariant `json:"variants"`
 }
 
 type IndexSource struct {
@@ -59,15 +69,33 @@ func parseIndex(b []byte) (*Index, error) {
 		switch {
 		case m.Name == "":
 			return nil, fmt.Errorf("index.json: models[%d] has no name", i)
-		case m.Path == "":
-			return nil, fmt.Errorf("index.json: model %q has no path", m.Name)
+		case len(m.Versions) == 0:
+			return nil, fmt.Errorf("index.json: model %q has no versions", m.Name)
 		case seen[m.Name]:
 			return nil, fmt.Errorf("index.json: model %q listed twice", m.Name)
 		}
-		if err := safeRel(m.Path); err != nil {
-			return nil, fmt.Errorf("index.json: model %q: %w", m.Name, err)
-		}
 		seen[m.Name] = true
+
+		versions := map[string]bool{}
+		for _, v := range m.Versions {
+			switch {
+			case v.Version == "":
+				return nil, fmt.Errorf("index.json: model %q has an unnamed version", m.Name)
+			case v.Path == "":
+				return nil, fmt.Errorf("index.json: %s %s has no path", m.Name, v.Version)
+			case v.Digest == "":
+				return nil, fmt.Errorf("index.json: %s %s has no digest -- a pin cannot be verified without one", m.Name, v.Version)
+			case versions[v.Version]:
+				return nil, fmt.Errorf("index.json: %s %s listed twice", m.Name, v.Version)
+			}
+			if err := safeRel(v.Path); err != nil {
+				return nil, fmt.Errorf("index.json: %s %s: %w", m.Name, v.Version, err)
+			}
+			versions[v.Version] = true
+		}
+		if m.Latest == "" || !versions[m.Latest] {
+			return nil, fmt.Errorf("index.json: model %q names latest %q, which is not published", m.Name, m.Latest)
+		}
 	}
 	// count is generated alongside the list; a mismatch means the index was
 	// hand-edited or half-written, which is worth refusing rather than guessing.
@@ -85,4 +113,21 @@ func (i *Index) Model(name string) (IndexModel, bool) {
 		}
 	}
 	return IndexModel{}, false
+}
+
+// Version resolves a version, or the latest when asked for "".
+func (m IndexModel) Version(want string) (IndexVersion, error) {
+	if want == "" {
+		want = m.Latest
+	}
+	for _, v := range m.Versions {
+		if v.Version == want {
+			return v, nil
+		}
+	}
+	have := make([]string, 0, len(m.Versions))
+	for _, v := range m.Versions {
+		have = append(have, v.Version)
+	}
+	return IndexVersion{}, fmt.Errorf("model %q has no version %q (have: %v)", m.Name, want, have)
 }

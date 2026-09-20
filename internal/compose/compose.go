@@ -72,6 +72,8 @@ func Compose(in Input) (*plan.Plan, error) {
 			Catalog: in.Catalog,
 			Ref:     in.Ref,
 			Model:   in.Entry.Name,
+			Version: in.Entry.Version,
+			Digest:  in.Entry.Digest,
 			Variant: in.Variant.ID,
 		},
 		Chart: plan.ChartRef{

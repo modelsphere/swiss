@@ -13,7 +13,7 @@ func profile() Profile {
 }
 
 func TestLocalPathUsesTheTemplate(t *testing.T) {
-	got, err := profile().LocalPath("modelforge/Qwen3.6-35B-A3B-793303", "qwen3.6-35b-a3b")
+	got, err := profile().LocalPath("modelforge/Qwen3.6-35B-A3B-793303", "modelforge")
 	if err != nil {
 		t.Fatal(err)
 	}

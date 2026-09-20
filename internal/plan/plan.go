@@ -57,6 +57,11 @@ type SourceRef struct {
 	Catalog string `json:"catalog,omitempty"`
 	Ref     string `json:"ref,omitempty"`
 	Model   string `json:"model"`
+	// Version is the model version this was composed from, and Digest the
+	// sha256 of that entry: together they are the lock. A recompose that cannot
+	// reproduce the digest is refused.
+	Version string `json:"version,omitempty"`
+	Digest  string `json:"digest,omitempty"`
 	Variant string `json:"variant"`
 }
 

@@ -1,14 +1,21 @@
-import { Link, useParams } from "react-router";
+import { Link, useParams, useSearchParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft } from "lucide-react";
 import { api, type Node, type Variant } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ErrorState, Loading } from "@/components/States";
 
 export function Model() {
   const { name = "" } = useParams();
-  const model = useQuery({ queryKey: ["model", name], queryFn: () => api.model(name) });
+  const [params, setParams] = useSearchParams();
+  const version = params.get("version") ?? "";
+  const model = useQuery({
+    queryKey: ["model", name, version],
+    queryFn: () => api.model(name, version || undefined),
+  });
+  const catalog = useQuery({ queryKey: ["catalog"], queryFn: api.catalog });
   // Node facts are a separate, non-blocking query: a variant list is still
   // worth showing when the fit check cannot be computed.
   const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
@@ -32,14 +39,30 @@ export function Model() {
         <Field label="Weights" value={`${e.source.hf}${e.source.sizeGiB ? ` · ${e.source.sizeGiB} GiB` : ""}`} />
         <Field label="Served as" value={e.servedName ?? e.name} />
         {e.license && <Field label="License" value={e.license} />}
-        <Field label="Catalog ref" value={model.data.ref.slice(0, 19)} />
+        <Field label="Version" value={e.version} />
+        {e.digest && <Field label="Digest" value={e.digest.slice(0, 19)} />}
       </dl>
+
+      <VersionPicker
+        name={name}
+        current={e.version}
+        versions={
+          catalog.data?.index.models.find((m) => m.name === name)?.versions.map((v) => v.version) ?? []
+        }
+        onPick={(v) => setParams(v ? { version: v } : {})}
+      />
 
       <div>
         <h2 className="mb-2 text-sm font-medium">Variants</h2>
         <div className="grid gap-3 md:grid-cols-2">
           {e.variants.map((v) => (
-            <VariantCard key={v.id} v={v} nodes={nodes.data?.nodes} />
+            <VariantCard
+              key={v.id}
+              v={v}
+              nodes={nodes.data?.nodes}
+              model={e.name}
+              version={version}
+            />
           ))}
         </div>
       </div>
@@ -51,7 +74,51 @@ export function Model() {
 // this cluster can actually run it. Surfacing the fit check at selection time
 // beats discovering it at apply time, and far beats discovering it as an OOM
 // forty minutes into a load.
-function VariantCard({ v, nodes }: { v: Variant; nodes?: Node[] }) {
+function VersionPicker({
+  name,
+  current,
+  versions,
+  onPick,
+}: {
+  name: string;
+  current: string;
+  versions: string[];
+  onPick: (v: string) => void;
+}) {
+  if (versions.length < 2) return null;
+  return (
+    <div className="flex items-center gap-2 text-sm">
+      <span className="text-muted-foreground">Version</span>
+      <select
+        className="rounded-md border bg-background px-2 py-1 text-sm"
+        value={current}
+        onChange={(e) => onPick(e.target.value)}
+        aria-label={`version of ${name}`}
+      >
+        {versions.map((v) => (
+          <option key={v} value={v}>
+            {v}
+          </option>
+        ))}
+      </select>
+      <span className="text-xs text-muted-foreground">
+        a deploy records the version and its digest
+      </span>
+    </div>
+  );
+}
+
+function VariantCard({
+  v,
+  nodes,
+  model,
+  version,
+}: {
+  v: Variant;
+  nodes?: Node[];
+  model: string;
+  version: string;
+}) {
   const fit = fitness(v, nodes);
   return (
     <Card>
@@ -81,7 +148,18 @@ function VariantCard({ v, nodes }: { v: Variant; nodes?: Node[] }) {
             ))}
           </div>
         )}
-        {fit && <Badge variant={fit.ok ? "success" : "warning"}>{fit.text}</Badge>}
+        <div className="flex flex-wrap items-center gap-2 pt-1">
+          {fit && <Badge variant={fit.ok ? "success" : "warning"}>{fit.text}</Badge>}
+          <Link
+            to={
+              `/deploy/${encodeURIComponent(model)}?variant=${encodeURIComponent(v.id)}` +
+              (version ? `&version=${encodeURIComponent(version)}` : "")
+            }
+            className="ml-auto"
+          >
+            <Button size="sm">Deploy</Button>
+          </Link>
+        </div>
       </CardContent>
     </Card>
   );

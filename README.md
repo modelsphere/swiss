@@ -29,9 +29,9 @@ go build -o swiss ./cmd/swiss
 swiss catalog list
 swiss catalog show kimi-k2.5
 
-swiss plan --model qwen3.6-35b-a3b --release fallback-modelforge-01 \
+swiss plan --model modelforge --release fallback-modelforge-01 \
            --service-id fallback-modelforge-01 --explain
-swiss plan   --model qwen3.6-35b-a3b --release fallback-modelforge-01 -o plan.json
+swiss plan   --model modelforge --release fallback-modelforge-01 -o plan.json
 
 swiss render  --plan plan.json     # helm template; values.schema.json runs here
 swiss diff    --plan plan.json     # exit 2 when something would change
@@ -54,6 +54,10 @@ GET  /api/cluster /api/peers /api/catalog /api/catalog/{model}
 GET  /api/releases /api/nodes /api/deployments /api/runs
 POST /api/plans /api/diff /api/apply /api/install     (allowDeploy only)
 ```
+
+The SPA browses the catalog and deploys: compose a plan, diff it, apply or
+install. Apply is reachable only from a diff, and it carries the live revision
+the diff saw, so a concurrent apply is refused rather than silently winning.
 
 `go build` works without node installed: `web/dist` is committed empty, and a
 binary with no UI serves an explanatory 404 while the API keeps working.

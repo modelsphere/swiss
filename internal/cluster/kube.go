@@ -40,7 +40,10 @@ type Kube struct {
 // PlanConfigMapPrefix names the ConfigMap holding a release's plan.
 const PlanConfigMapPrefix = "swiss-plan-"
 
-const planKey = "plan.yaml"
+const (
+	planKey   = "plan.yaml"
+	statusKey = "status.yaml"
+)
 
 // NewKube builds a probe. An empty kubeconfig path means in-cluster first,
 // falling back to the usual loading rules (KUBECONFIG, ~/.kube/config).
@@ -131,8 +134,8 @@ func (k *Kube) Releases(ctx context.Context) ([]Release, error) {
 
 	out := make([]Release, 0, len(latest))
 	for _, r := range latest {
-		if plan, err := k.planFor(ctx, r.Namespace, r.Name); err == nil {
-			r.SwissPlan = plan
+		if doc, status, err := k.planFor(ctx, r.Namespace, r.Name); err == nil {
+			r.SwissPlan, r.SwissStatus = doc, status
 		}
 		out = append(out, r)
 	}
@@ -192,15 +195,16 @@ func decodeRelease(s *corev1.Secret) (*Release, error) {
 	return r, nil
 }
 
-func (k *Kube) planFor(ctx context.Context, namespace, release string) ([]byte, error) {
+func (k *Kube) planFor(ctx context.Context, namespace, release string) (plan, status []byte, err error) {
 	cm, err := k.client.CoreV1().ConfigMaps(namespace).Get(ctx, k.SwissPlanPrefix+release, metav1.GetOptions{})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if v, ok := cm.Data[planKey]; ok {
-		return []byte(v), nil
+	v, ok := cm.Data[planKey]
+	if !ok {
+		return nil, nil, fmt.Errorf("configmap %s/%s%s has no %s", namespace, k.SwissPlanPrefix, release, planKey)
 	}
-	return nil, fmt.Errorf("configmap %s/%s%s has no %s", namespace, k.SwissPlanPrefix, release, planKey)
+	return []byte(v), []byte(cm.Data[statusKey]), nil
 }
 
 // scopes is the namespaces to list, or one cluster-wide scope.

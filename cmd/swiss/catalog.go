@@ -29,15 +29,19 @@ func catalogCmd() *cobra.Command {
 			// The index alone, deliberately: listing must not cost one fetch
 			// per model.
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "MODEL\tVARIANT\tENGINE\tGPUS\tTOPOLOGY\tCHART")
+			fmt.Fprintln(w, "MODEL\tVERSION\tVARIANT\tENGINE\tGPUS\tTOPOLOGY\tCHART")
 			for _, e := range cat.Index.Models {
-				for _, v := range e.Variants {
+				latest, err := e.Version("")
+				if err != nil {
+					return err
+				}
+				for _, v := range latest.Variants {
 					gpus := fmt.Sprintf("%d", v.Requires.GPUs)
 					if n := v.Requires.NodesOrDefault(); n > 1 {
 						gpus = fmt.Sprintf("%dx%d", n, v.Requires.GPUs)
 					}
-					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s-%s\n",
-						e.Name, v.ID, v.Engine, gpus, v.Requires.TopologyOrDefault(), v.Chart.Name, v.Chart.Version)
+					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s-%s\n",
+						e.Name, latest.Version, v.ID, v.Engine, gpus, v.Requires.TopologyOrDefault(), v.Chart.Name, v.Chart.Version)
 				}
 			}
 			if err := w.Flush(); err != nil {
@@ -61,7 +65,7 @@ func catalogCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			e, err := cat.Entry(cmd.Context(), args[0])
+			e, err := cat.Entry(cmd.Context(), args[0], "")
 			if err != nil {
 				return err
 			}
@@ -85,6 +89,10 @@ func describe(e catalog.Entry) string {
 	fmt.Fprintf(&b, "\nweights   %s", e.Source.HF)
 	if e.Source.SizeGiB > 0 {
 		fmt.Fprintf(&b, "  (%.0f GiB)", e.Source.SizeGiB)
+	}
+	fmt.Fprintf(&b, "\nversion   %s", e.Version)
+	if e.Digest != "" {
+		fmt.Fprintf(&b, "  %s", e.Digest[:19])
 	}
 	fmt.Fprintf(&b, "\nserved as %s\n\nvariants:\n", e.ServedModelName())
 	for _, v := range e.Variants {

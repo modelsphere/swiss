@@ -4,9 +4,10 @@ React 19 + TypeScript 7 + Vite 8, shadcn-style components (Radix idiom,
 Tailwind v4), TanStack Query, react-router 8. Embedded into `swissd` via
 `embed.FS`.
 
-**Read-only.** It shows exactly what the API serves today: deployments, the
-catalog, and a model's variants. There is no deploy form, no diff view and no
-plan screen, because those endpoints do not exist yet.
+Shows deployments, the catalog and a model's variants, and deploys: a variant
+card leads to `/deploy/:name?variant=`, which composes a plan, diffs it and
+applies or installs. Apply is only reachable from a diff, and editing the form
+discards the diff. When `server.allowDeploy` is off the page says so instead.
 
 ```sh
 npm install
@@ -27,11 +28,13 @@ swissd --config swissd.yaml -web-dir web/dist
 | `/` | deployments, untracked first |
 | `/catalog` | the catalog index |
 | `/catalog/:name` | one model's entry, with a per-variant fit check |
+| `/deploy/:name` | form -> plan -> diff -> apply/install |
+| `/upgrade/:ns/:release` | pick a model version -> what moves -> diff -> approve |
 
 ## Notes
 
 **Bundle size is binary size.** The SPA ships inside `swissd`, to every cluster,
-pulled on every rollout. Current build is ~336 KB JS (~105 KB gzipped). The
+pulled on every rollout. Current build is ~357 KB JS (~110 KB gzipped). The
 Vite chunk warning is set to 400 KB so growth is noticed rather than discovered.
 This is also why the YAML escape hatch, when it lands, should use CodeMirror
 (~300 KB) and not Monaco (~2 MB).

@@ -14,16 +14,32 @@ import (
 // version does not recognise is not a reason to report the release as unknown.
 type planSummary struct {
 	Model   string
+	Version string
+	Digest  string
 	Variant string
 	Ref     string
 	Profile string
 	Hash    string
 }
 
+type statusSummary struct {
+	Phase    string `yaml:"phase"`
+	Revision int    `yaml:"revision"`
+	Error    string `yaml:"error"`
+}
+
+func parseStatus(raw []byte) statusSummary {
+	var st statusSummary
+	_ = yaml.Unmarshal(raw, &st)
+	return st
+}
+
 func parsePlanSummary(raw []byte) (planSummary, error) {
 	var doc struct {
 		Source struct {
 			Model   string `yaml:"model" json:"model"`
+			Version string `yaml:"version" json:"version"`
+			Digest  string `yaml:"digest" json:"digest"`
 			Variant string `yaml:"variant" json:"variant"`
 			Ref     string `yaml:"ref" json:"ref"`
 		} `yaml:"source" json:"source"`
@@ -36,8 +52,9 @@ func parsePlanSummary(raw []byte) (planSummary, error) {
 		return planSummary{}, err
 	}
 	return planSummary{
-		Model: doc.Source.Model, Variant: doc.Source.Variant,
-		Ref: doc.Source.Ref, Profile: doc.Profile, Hash: doc.Hash,
+		Model: doc.Source.Model, Version: doc.Source.Version, Digest: doc.Source.Digest,
+		Variant: doc.Source.Variant, Ref: doc.Source.Ref,
+		Profile: doc.Profile, Hash: doc.Hash,
 	}, nil
 }
 

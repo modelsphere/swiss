@@ -55,6 +55,7 @@ type clusterInfo struct {
 	Catalog     string        `json:"catalog"`
 	CatalogRef  string        `json:"catalogRef,omitempty"`
 	Version     string        `json:"version"`
+	AllowDeploy bool          `json:"allowDeploy"`
 	Peers       []config.Peer `json:"peers,omitempty"`
 	Warnings    []string      `json:"warnings,omitempty"`
 }
@@ -68,11 +69,12 @@ func (s *Server) handleCluster(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	info := clusterInfo{
-		Name:    s.cfg.Cluster.Name,
-		Profile: s.cfg.Cluster.Profile.Ref(),
-		Catalog: s.cfg.Catalog,
-		Version: s.version,
-		Peers:   s.cfg.Server.Peers,
+		Name:        s.cfg.Cluster.Name,
+		Profile:     s.cfg.Cluster.Profile.Ref(),
+		Catalog:     s.cfg.Catalog,
+		Version:     s.version,
+		AllowDeploy: s.cfg.Server.AllowDeploy,
+		Peers:       s.cfg.Server.Peers,
 	}
 	if p, err := s.Profile(ctx); err == nil {
 		info.ProfileName, info.Namespace, info.ChartRepo = p.Name, p.Namespace, p.ChartRepo
@@ -114,7 +116,7 @@ func (s *Server) handleCatalogModel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	e, err := c.Entry(ctx, r.PathValue("model"))
+	e, err := c.Entry(ctx, r.PathValue("model"), r.URL.Query().Get("version"))
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
@@ -155,6 +157,8 @@ type deployment struct {
 	Model      string `json:"model,omitempty"`
 	Variant    string `json:"variant,omitempty"`
 	CatalogRef string `json:"catalogRef,omitempty"`
+	Version    string `json:"version,omitempty"`
+	Phase      string `json:"phase,omitempty"`
 	Drift      string `json:"drift,omitempty"`
 }
 
@@ -193,11 +197,22 @@ func (s *Server) handleDeployments(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		d.Managed = true
+		if st := parseStatus(rel.SwissStatus); st.Phase != "" {
+			d.Phase = st.Phase
+			switch st.Phase {
+			case phaseFailed:
+				d.Drift = "last apply failed: " + st.Error
+			case phaseApplying:
+				d.Drift = "an apply was started and never completed"
+			}
+		}
 		if p, err := parsePlanSummary(rel.SwissPlan); err == nil {
-			d.Model, d.Variant, d.CatalogRef = p.Model, p.Variant, p.Ref
+			d.Model, d.Variant, d.CatalogRef, d.Version = p.Model, p.Variant, p.Ref, p.Version
 			if catErr == nil && p.Ref != "" && p.Ref != cat.Ref {
 				behind++
-				d.Drift = "catalog moved since this was deployed"
+				if d.Drift == "" {
+					d.Drift = "catalog moved since this was deployed"
+				}
 			}
 		} else {
 			d.Drift = "plan unreadable: " + err.Error()

@@ -6,6 +6,8 @@ import { Layout } from "@/components/Layout";
 import { Deployments } from "@/routes/Deployments";
 import { Catalog } from "@/routes/Catalog";
 import { Model } from "@/routes/Model";
+import { Deploy } from "@/routes/Deploy";
+import { Upgrade } from "@/routes/Upgrade";
 import "./index.css";
 
 const queryClient = new QueryClient({
@@ -29,6 +31,8 @@ createRoot(document.getElementById("root")!).render(
             <Route index element={<Deployments />} />
             <Route path="catalog" element={<Catalog />} />
             <Route path="catalog/:name" element={<Model />} />
+            <Route path="deploy/:name" element={<Deploy />} />
+            <Route path="upgrade/:namespace/:release" element={<Upgrade />} />
             <Route path="*" element={<div className="text-sm text-muted-foreground">Not found.</div>} />
           </Route>
         </Routes>

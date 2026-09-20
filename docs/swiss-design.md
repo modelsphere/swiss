@@ -81,6 +81,29 @@ model is opened. A listing must not cost one request per model, which is why
 nothing can compose from a summary and render a model with half its flags
 missing.
 
+### Models are versioned, and a pin is locked
+
+A model publishes versions like a package: `models/<name>-<version>.yaml`, named
+the way helm names a chart archive, each with its own variants, image and flags. A deploy pins one — `--model-version 1.0.0`,
+or the latest when it does not say — and the plan records **the version and a
+sha256 of the entry file**:
+
+```yaml
+source:
+  model: modelforge
+  version: "1.0.0"
+  digest: sha256:2ddfe906daeb...
+  variant: sglang-tp2
+```
+
+`index.json` carries that digest per version, and a fetch whose bytes do not
+match is refused as a rewritten release rather than used. That is the lock: it
+makes "pinned to 1.0.0" mean something in a repo anyone can push to, and it is
+what lets a recompose prove it started from the same model config as last time.
+
+A published version is therefore immutable — a fix is a new version, never an
+edit — and the catalog's own CI refuses a commit that changes a published file.
+
 **The catalog reference is a digest of the index bytes**, not a git SHA. Over
 plain HTTP no SHA is available, and an ETag is the server's opinion rather than
 the content's; hashing what was actually read gives every source the same kind of
@@ -111,7 +134,7 @@ several ways, and the fields that distinguish them — `extraArgs`, `requires.gp
 
 ```yaml
 apiVersion: catalog.swiss/v1
-name: qwen3.6-35b-a3b
+name: modelforge
 servedName: kimi
 source:
   hf: modelforge/Qwen3.6-35B-A3B-793303    # identity, not a path
@@ -136,8 +159,8 @@ The production catalog proves the point. Two entries are the same Qwen family on
 the same hardware, and their flags are not interchangeable:
 
 ```
-qwen3.6-35b-a3b-glm-5   v0.5.10.post1    --tp=2       --mamba-scheduler-strategy=…
-qwen3.6-35b-a3b         v0.5.15-cu129    --tp-size=2  --mamba-radix-cache-strategy=…
+glm5.1   v0.5.10.post1    --tp=2       --mamba-scheduler-strategy=…
+modelforge         v0.5.15-cu129    --tp-size=2  --mamba-radix-cache-strategy=…
 ```
 
 The flag was renamed between those images and argparse **exits** on an unknown
@@ -289,7 +312,7 @@ What makes two frontends worth more than one — rather than the same thing buil
 twice — is that both produce and consume the same serializable `Plan`:
 
 ```
-swiss plan --model qwen3.6-35b-a3b --release fallback-modelforge-01 \
+swiss plan --model modelforge --release fallback-modelforge-01 \
            --service-id fallback-modelforge-01 -o plan.json
 swiss diff   --plan plan.json     # exit 2 when something would change
 swiss apply  --plan plan.json     # release must exist
@@ -333,7 +356,17 @@ swiss upgrade --release glm-53 --catalog-ref <new-ref>
 ```
 
 which recomposes the new catalog layer against the same form layer, produces a
-new plan, and diffs it. Choosing a different *variant* is still allowed from the
+new plan, and diffs it. `apply` is the execution half — it is `helm upgrade`
+underneath — and the recompose is `POST /api/plans {"fromRelease": "..."}`: the
+release's stored plan supplies the model, the variant and every deploy input, so
+only the catalog layer moves.
+
+The web puts that behind one screen. It names what changes before anything else
+— model version, chart version, entry digest, variant — then shows the site
+values and the deploy settings being carried forward unchanged, then the diff,
+and only then the approve button. Nothing is editable there: an upgrade that also
+lets you retype the form is two changes landing as one, and the diff can no
+longer tell you which of them did something. Choosing a different *variant* is still allowed from the
 form — that is selecting among options the catalog published, not editing them.
 The rule is **select, don't edit**, and it is already enforced: `CheckOwnership`
 refuses a form write to `extraArgs` today.
@@ -397,7 +430,7 @@ release self-describing:
 | | answers |
 | --- | --- |
 | helm release Secret | what values is this release running, and what did it run before |
-| `swiss-plan-<release>` | which catalog ref, model, variant, profile and form inputs produced them |
+| `swiss-plan-<release>` | which catalog ref, model, variant, profile and form inputs produced them, and how the last apply ended |
 
 It is YAML because it is read next to helm values and chart templates, which are
 all YAML. The plan's `hash` stays computed over canonical JSON, whose key order
@@ -537,9 +570,26 @@ no write RBAC at all. The chart refuses the half-configured case — `allowDeplo
 on with `rbac.allowDeploy` off would accept applies it has no permission to
 perform, failing at the API server a long way from the cause.
 
-A failed plan-ConfigMap write does **not** fail the apply. The release is already
-live by then; erroring out would be lying about what happened. It is reported in
-the response and logged.
+**The plan is written before the apply, not after.** A permissions or quota
+failure then costs nothing: the request is refused with "plan not recorded,
+nothing applied" and the cluster is untouched. Writing it afterwards left a live
+release with no plan beside it, which the reconciliation view reports as
+`untracked` -- the row that is supposed to mean someone installed by hand.
+
+The ConfigMap carries a second key, `status.yaml`, updated after the apply:
+
+```yaml
+phase: applied        # applying | applied | failed
+action: install
+revision: 4
+startedAt: 2026-09-20T10:00:00Z
+error: ""
+```
+
+So a release whose apply failed, or whose apply never returned, says so beside
+itself rather than looking like a healthy deploy. The post-apply status write is
+best effort -- the plan is already recorded by then and only the phase can go
+stale.
 
 | store | holds |
 | --- | --- |
@@ -713,14 +763,6 @@ tree these values were tested against.
   `helm.sh/chart`, so a live object cannot report which chart version produced it.
   Swiss's sidecar records this at emit time, which is not the same as reading it
   off the cluster.
-- **Per-model catalog versioning.** The catalog is pinned as a whole, by one
-  commit. That means any change to any model moves every consumer's pin, so
-  "upgrade this model's config" and "pick up an unrelated model's fix" cannot be
-  separated. The intended direction is versioning at the model level the way
-  Linux package management does it — `models/<name>/<version>.yaml` rather than
-  one `entry.yaml` — which would also make `swiss upgrade` a per-model bump.
-  Deferred, and it changes the entry layout, `index.json` and the plan's
-  `source.ref`.
 - **Chart digests.** `chart.version` is a tag, and a tag in harbor can be
   re-pushed. Recording the resolved digest at apply time is what would make
   "what is actually running" unambiguous — the same worry `docs/deploy.md` has

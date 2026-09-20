@@ -87,19 +87,24 @@ func TestCatalogEndpointServesIndexOnly(t *testing.T) {
 	if len(models) == 0 {
 		t.Fatal("no models")
 	}
+	first := models[0].(map[string]any)
+	if first["latest"] == "" || len(first["versions"].([]any)) == 0 {
+		t.Fatalf("a model must publish at least one version: %v", first)
+	}
 	// A listing must not carry variant values -- that is what keeps it one
 	// request rather than one per model.
-	first := models[0].(map[string]any)
-	for _, v := range first["variants"].([]any) {
-		if _, ok := v.(map[string]any)["values"]; ok {
-			t.Error("index leaked entry values into the listing")
+	for _, v := range first["versions"].([]any) {
+		for _, va := range v.(map[string]any)["variants"].([]any) {
+			if _, ok := va.(map[string]any)["values"]; ok {
+				t.Error("index leaked entry values into the listing")
+			}
 		}
 	}
 }
 
 func TestCatalogModelEndpointFetchesTheEntry(t *testing.T) {
 	srv := testServer(t, fakeProbe())
-	code, body := get(t, srv, "/api/catalog/qwen3.6-35b-a3b")
+	code, body := get(t, srv, "/api/catalog/modelforge")
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, body)
 	}
@@ -121,7 +126,7 @@ func TestDeploymentsFlagsUntrackedReleases(t *testing.T) {
 	probe.Rel = []cluster.Release{
 		{Name: "by-hand", Namespace: "modelforge", Chart: "sglang-0.8.0", Status: "deployed", Revision: 1},
 		{Name: "glm-53", Namespace: "modelforge", Chart: "sglang-0.8.0", Status: "deployed", Revision: 4,
-			SwissPlan: []byte("source:\n  model: qwen3.6-35b-a3b\n  variant: sglang-tp2\n  ref: sha256:stale\nprofile: prod\n")},
+			SwissPlan: []byte("source:\n  model: modelforge\n  variant: sglang-tp2\n  ref: sha256:stale\nprofile: prod\n")},
 	}
 	srv := testServer(t, probe)
 	code, body := get(t, srv, "/api/deployments")
@@ -145,7 +150,7 @@ func TestDeploymentsFlagsUntrackedReleases(t *testing.T) {
 				t.Errorf("hand-installed release must be reported untracked: %v", row)
 			}
 		case "glm-53":
-			if !row["managed"].(bool) || row["model"] != "qwen3.6-35b-a3b" {
+			if !row["managed"].(bool) || row["model"] != "modelforge" {
 				t.Errorf("plan not read off the release: %v", row)
 			}
 		}

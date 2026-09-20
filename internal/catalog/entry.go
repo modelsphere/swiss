@@ -17,18 +17,21 @@ import (
 const APIVersion = "catalog.swiss/v1"
 
 type Entry struct {
-	APIVersion  string    `yaml:"apiVersion" json:"apiVersion"`
-	Name        string    `yaml:"name" json:"name"`
-	ServedName  string    `yaml:"servedName,omitempty" json:"servedName,omitempty"`
-	DisplayName string    `yaml:"displayName,omitempty" json:"displayName,omitempty"`
-	Description string    `yaml:"description,omitempty" json:"description,omitempty"`
-	Family      string    `yaml:"family,omitempty" json:"family,omitempty"`
-	License     string    `yaml:"license,omitempty" json:"license,omitempty"`
-	Homepage    string    `yaml:"homepage,omitempty" json:"homepage,omitempty"`
-	Tags        []string  `yaml:"tags,omitempty" json:"tags,omitempty"`
-	Deprecated  any       `yaml:"deprecated,omitempty" json:"deprecated,omitempty"`
-	Source      Source    `yaml:"source" json:"source"`
-	Variants    []Variant `yaml:"variants" json:"variants"`
+	APIVersion  string   `yaml:"apiVersion" json:"apiVersion"`
+	Name        string   `yaml:"name" json:"name"`
+	Version     string   `yaml:"version" json:"version"`
+	ServedName  string   `yaml:"servedName,omitempty" json:"servedName,omitempty"`
+	DisplayName string   `yaml:"displayName,omitempty" json:"displayName,omitempty"`
+	Description string   `yaml:"description,omitempty" json:"description,omitempty"`
+	Family      string   `yaml:"family,omitempty" json:"family,omitempty"`
+	License     string   `yaml:"license,omitempty" json:"license,omitempty"`
+	Homepage    string   `yaml:"homepage,omitempty" json:"homepage,omitempty"`
+	Tags        []string `yaml:"tags,omitempty" json:"tags,omitempty"`
+	Deprecated  any      `yaml:"deprecated,omitempty" json:"deprecated,omitempty"`
+	Source      Source   `yaml:"source" json:"source"`
+	// Digest is set on fetch from the index, not read from the document.
+	Digest   string    `yaml:"-" json:"digest,omitempty"`
+	Variants []Variant `yaml:"variants" json:"variants"`
 }
 
 // Source is model identity, never a location. The charts mount weights from

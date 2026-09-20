@@ -35,7 +35,7 @@ func fetch(t *testing.T, srv *httptest.Server, path string) (*http.Response, str
 // A hard refresh on a client route must return the app, not a 404.
 func TestClientRoutesFallBackToIndex(t *testing.T) {
 	srv := webServer(t)
-	for _, p := range []string{"/", "/catalog", "/catalog/glm-5.3"} {
+	for _, p := range []string{"/", "/catalog", "/catalog/glm5.1"} {
 		resp, body := fetch(t, srv, p)
 		if resp.StatusCode != 200 || body == "" {
 			t.Errorf("%s: status %d body %q", p, resp.StatusCode, body)

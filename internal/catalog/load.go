@@ -45,41 +45,52 @@ func OpenFetcher(ctx context.Context, f Fetcher) (*Catalog, error) {
 	return &Catalog{Fetcher: f, Index: idx, Ref: contentRef(raw), entries: map[string]Entry{}}, nil
 }
 
-// Entry fetches and validates one model's entry, memoised.
+// Entry fetches and validates one model at one version, memoised. An empty
+// version resolves to the latest published one.
 //
 // Validation happens here, on every fetch, and cannot be skipped. A catalog is
 // fetched over a network from a repo this cluster does not control, so it is
 // untrusted input at the point of use; trusting it because some CI somewhere was
 // supposed to have run is hoping, not validating.
-func (c *Catalog) Entry(ctx context.Context, name string) (Entry, error) {
+func (c *Catalog) Entry(ctx context.Context, name, wantVersion string) (Entry, error) {
+	m, ok := c.Index.Model(name)
+	if !ok {
+		return Entry{}, fmt.Errorf("no model %q in catalog %s", name, c.Fetcher)
+	}
+	iv, err := m.Version(wantVersion)
+	if err != nil {
+		return Entry{}, err
+	}
+
+	key := name + "@" + iv.Version
 	c.mu.Lock()
-	if e, ok := c.entries[name]; ok {
+	if e, ok := c.entries[key]; ok {
 		c.mu.Unlock()
 		return e, nil
 	}
 	c.mu.Unlock()
 
-	m, ok := c.Index.Model(name)
-	if !ok {
-		return Entry{}, fmt.Errorf("no model %q in catalog %s", name, c.Fetcher)
-	}
-	raw, err := c.Fetcher.Fetch(ctx, m.Path)
+	raw, err := c.Fetcher.Fetch(ctx, iv.Path)
 	if err != nil {
-		return Entry{}, fmt.Errorf("model %q (%s): %w", name, m.Path, err)
+		return Entry{}, fmt.Errorf("%s %s (%s): %w", name, iv.Version, iv.Path, err)
 	}
-	e, err := ParseEntry(raw)
-	if err != nil {
-		return Entry{}, fmt.Errorf("model %q (%s): %w", name, m.Path, err)
-	}
-	// The index is a summary of the entry. If they disagree, one of them is
-	// stale, and composing from the wrong one is how a deploy ends up with a
-	// model nobody chose.
-	if e.Name != name {
-		return Entry{}, fmt.Errorf("model %q (%s): entry says name %q -- index is stale", name, m.Path, e.Name)
+	// The digest is the lock. A published version is immutable; bytes that no
+	// longer match the index are a rewritten release, not a new one.
+	if got := contentRef(raw); got != iv.Digest {
+		return Entry{}, fmt.Errorf("%s %s: digest %s does not match the index (%s) -- the published version was rewritten", name, iv.Version, got, iv.Digest)
 	}
 
+	e, err := ParseEntry(raw)
+	if err != nil {
+		return Entry{}, fmt.Errorf("%s %s (%s): %w", name, iv.Version, iv.Path, err)
+	}
+	if e.Name != name || e.Version != iv.Version {
+		return Entry{}, fmt.Errorf("%s %s (%s): entry says %s %s -- index is stale", name, iv.Version, iv.Path, e.Name, e.Version)
+	}
+	e.Digest = iv.Digest
+
 	c.mu.Lock()
-	c.entries[name] = *e
+	c.entries[key] = *e
 	c.mu.Unlock()
 	return *e, nil
 }
@@ -89,7 +100,7 @@ func (c *Catalog) Entry(ctx context.Context, name string) (Entry, error) {
 func (c *Catalog) All(ctx context.Context) ([]Entry, error) {
 	out := make([]Entry, 0, len(c.Index.Models))
 	for _, m := range c.Index.Models {
-		e, err := c.Entry(ctx, m.Name)
+		e, err := c.Entry(ctx, m.Name, "")
 		if err != nil {
 			return nil, err
 		}
@@ -122,6 +133,9 @@ func (e Entry) Validate() error {
 	}
 	if e.Name == "" {
 		return fmt.Errorf("name is required")
+	}
+	if e.Version == "" {
+		return fmt.Errorf("version is required -- a deploy pins one")
 	}
 	if e.Source.HF == "" {
 		return fmt.Errorf("source.hf is required -- it is the identity the site profile derives a path from")

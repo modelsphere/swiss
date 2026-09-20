@@ -19,7 +19,7 @@ import (
 func planCmd() *cobra.Command {
 	var (
 		model, variant, release, namespace, out string
-		serviceID, localPath                    string
+		modelVersion, serviceID, localPath      string
 		sets                                    []string
 		explain                                 bool
 	)
@@ -28,7 +28,7 @@ func planCmd() *cobra.Command {
 		Short: "Compose a model, a site profile and overrides into a plan",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			p, err := buildPlan(cmd.Context(), model, variant, release, namespace,
+			p, err := buildPlan(cmd.Context(), model, modelVersion, variant, release, namespace,
 				append(sets, kv("serviceId", serviceID), kv("model.localPath", localPath)))
 			if err != nil {
 				return err
@@ -50,6 +50,7 @@ func planCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&model, "model", "", "catalog model name (required)")
+	c.Flags().StringVar(&modelVersion, "model-version", "", "catalog model version; defaults to the latest published")
 	c.Flags().StringVar(&variant, "variant", "", "variant id; defaults to the entry's default variant")
 	c.Flags().StringVar(&release, "release", "", "helm release name; defaults to the model name")
 	c.Flags().StringVar(&namespace, "namespace", "", "namespace; defaults to the site profile's")
@@ -65,6 +66,7 @@ func planCmd() *cobra.Command {
 func renderCmd() *cobra.Command {
 	var (
 		model, variant, release, namespace, chartRoot, planFile string
+		modelVersion                                            string
 		sets                                                    []string
 	)
 	c := &cobra.Command{
@@ -77,7 +79,7 @@ func renderCmd() *cobra.Command {
 			if planFile != "" {
 				p, err = readPlan(planFile)
 			} else {
-				p, err = buildPlan(cmd.Context(), model, variant, release, namespace, sets)
+				p, err = buildPlan(cmd.Context(), model, modelVersion, variant, release, namespace, sets)
 			}
 			if err != nil {
 				return err
@@ -91,6 +93,7 @@ func renderCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&model, "model", "", "catalog model name")
+	c.Flags().StringVar(&modelVersion, "model-version", "", "catalog model version")
 	c.Flags().StringVar(&variant, "variant", "", "variant id")
 	c.Flags().StringVar(&release, "release", "", "helm release name")
 	c.Flags().StringVar(&namespace, "namespace", "", "namespace")
@@ -100,7 +103,7 @@ func renderCmd() *cobra.Command {
 	return c
 }
 
-func buildPlan(ctx context.Context, model, variant, release, namespace string, sets []string) (*plan.Plan, error) {
+func buildPlan(ctx context.Context, model, modelVersion, variant, release, namespace string, sets []string) (*plan.Plan, error) {
 	catalogLoc, profileFile, err := resolve()
 	if err != nil {
 		return nil, err
@@ -116,7 +119,7 @@ func buildPlan(ctx context.Context, model, variant, release, namespace string, s
 	if err != nil {
 		return nil, err
 	}
-	entry, err := cat.Entry(ctx, model)
+	entry, err := cat.Entry(ctx, model, modelVersion)
 	if err != nil {
 		return nil, err
 	}

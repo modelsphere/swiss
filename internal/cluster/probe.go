@@ -27,7 +27,8 @@ type Release struct {
 	// SwissPlan is the plan recorded alongside the release, when one is present.
 	// Absent means the release was not deployed by Swiss -- the "live but
 	// untracked" row that matters most in a reconciliation view.
-	SwissPlan []byte
+	SwissPlan   []byte
+	SwissStatus []byte
 }
 
 // Node is what a fit check needs.

@@ -33,14 +33,18 @@ export function Catalog() {
 }
 
 function ModelCard({ m }: { m: IndexModel }) {
+  const latest = m.versions.find((v) => v.version === m.latest) ?? m.versions[0];
   return (
     <Link to={`/catalog/${encodeURIComponent(m.name)}`} className="block">
       <Card className="h-full transition-colors hover:border-foreground/20">
         <CardHeader>
           <CardTitle className="flex flex-wrap items-center gap-2">
             {m.displayName ?? m.name}
-            {m.variants.length > 1 && (
-              <Badge variant="muted">{m.variants.length} variants</Badge>
+            <Badge variant="muted">v{m.latest}</Badge>
+            {m.versions.length > 1 && (
+              <span className="text-xs font-normal text-muted-foreground">
+                {m.versions.length} versions
+              </span>
             )}
           </CardTitle>
           <CardDescription className="line-clamp-2">{m.description}</CardDescription>
@@ -51,7 +55,7 @@ function ModelCard({ m }: { m: IndexModel }) {
             {m.source.sizeGiB ? ` · ${m.source.sizeGiB} GiB` : ""}
           </div>
           <div className="flex flex-wrap gap-1">
-            {m.variants.map((v) => (
+            {latest.variants.map((v) => (
               <Badge key={v.id} variant="outline">
                 {v.engine} · {v.requires.nodes && v.requires.nodes > 1
                   ? `${v.requires.nodes}×${v.requires.gpus}`

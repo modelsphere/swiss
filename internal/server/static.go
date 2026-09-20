@@ -31,8 +31,8 @@ func WebFromDir(dir string) (fs.FS, error) {
 //
 // What counts as "an asset" is decided by location, not by file extension.
 // Extensions look like the obvious test and are wrong here -- model names carry
-// dots (glm-5.3, kimi-k2.5, qwen3.6-35b-a3b), so path.Ext("/catalog/glm-5.3")
-// is ".3" and every such route would 404 instead of loading the app. Vite emits
+// dots (glm5.1, kimi-k2.5, qwen3.6-35b), so path.Ext("/catalog/glm5.1")
+// is ".1" and every such route would 404 instead of loading the app. Vite emits
 // hashed files under assets/, so that prefix is the honest signal, and a miss
 // there is a stale reference rather than a client route.
 func (s *Server) spa(w http.ResponseWriter, r *http.Request) {

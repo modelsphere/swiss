@@ -10,6 +10,7 @@ export interface ClusterInfo {
   catalog: string;
   catalogRef?: string;
   version: string;
+  allowDeploy: boolean;
   peers?: Peer[];
   warnings?: string[];
 }
@@ -30,6 +31,8 @@ export interface Deployment {
   model?: string;
   variant?: string;
   catalogRef?: string;
+  version?: string;
+  phase?: string;
   drift?: string;
 }
 
@@ -62,6 +65,13 @@ export interface IndexVariant {
   requires: Requires;
 }
 
+export interface IndexVersion {
+  version: string;
+  path: string;
+  digest: string;
+  variants: IndexVariant[];
+}
+
 export interface IndexModel {
   name: string;
   displayName?: string;
@@ -69,8 +79,8 @@ export interface IndexModel {
   family?: string;
   tags?: string[];
   source: { hf: string; sizeGiB?: number };
-  variants: IndexVariant[];
-  path: string;
+  latest: string;
+  versions: IndexVersion[];
 }
 
 export interface CatalogResponse {
@@ -87,6 +97,8 @@ export interface Variant extends IndexVariant {
 export interface Entry {
   apiVersion: string;
   name: string;
+  version: string;
+  digest?: string;
   servedName?: string;
   displayName?: string;
   description?: string;
@@ -131,7 +143,87 @@ export const api = {
   cluster: () => get<ClusterInfo>("/api/cluster"),
   deployments: () => get<DeploymentsResponse>("/api/deployments"),
   catalog: () => get<CatalogResponse>("/api/catalog"),
-  model: (name: string) =>
-    get<{ ref: string; entry: Entry }>(`/api/catalog/${encodeURIComponent(name)}`),
+  model: (name: string, version?: string) =>
+    get<{ ref: string; entry: Entry }>(
+      `/api/catalog/${encodeURIComponent(name)}` + (version ? `?version=${encodeURIComponent(version)}` : ""),
+    ),
   nodes: () => get<{ cluster: string; nodes: Node[] }>("/api/nodes"),
+  releasePlan: (namespace: string, release: string) =>
+    get<Plan>(
+      `/api/releases/${encodeURIComponent(namespace)}/${encodeURIComponent(release)}/plan`,
+    ),
+};
+
+export interface Plan {
+  apiVersion: string;
+  release: { name: string; namespace: string };
+  source: {
+    catalog?: string;
+    ref?: string;
+    model: string;
+    version?: string;
+    digest?: string;
+    variant: string;
+  };
+  chart: { name: string; version: string; repo?: string; path?: string };
+  engine: string;
+  profile: string;
+  values: Record<string, unknown>;
+  provenance?: Record<string, string>;
+  hash: string;
+}
+
+export interface DiffResult {
+  planHash: string;
+  changed: boolean;
+  output: string;
+  revision: number;
+  exists: boolean;
+}
+
+export interface ApplyResult {
+  planHash: string;
+  release: string;
+  revision: number;
+  output: string;
+  status: string;
+  statusError?: string;
+}
+
+export interface PlanRequest {
+  model?: string;
+  fromRelease?: string;
+  version?: string;
+  variant?: string;
+  release?: string;
+  namespace?: string;
+  serviceId?: string;
+  localPath?: string;
+  overrides?: Record<string, unknown>;
+}
+
+async function post<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let msg = res.statusText;
+    try {
+      msg = (await res.json()).error ?? msg;
+    } catch {
+      // Not the JSON error envelope.
+    }
+    throw new ApiError(msg, res.status);
+  }
+  return res.json() as Promise<T>;
+}
+
+export const deployApi = {
+  plan: (req: PlanRequest) => post<Plan>("/api/plans", req),
+  diff: (req: PlanRequest | { planHash: string }) => post<DiffResult>("/api/diff", req),
+  apply: (planHash: string, expectRevision: number) =>
+    post<ApplyResult>("/api/apply", { planHash, expectRevision }),
+  install: (planHash: string) => post<ApplyResult>("/api/install", { planHash }),
 };

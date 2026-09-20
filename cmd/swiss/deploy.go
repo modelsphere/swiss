@@ -17,7 +17,7 @@ const (
 
 type deployFlags struct {
 	model, variant, release, namespace, planFile, chartRoot string
-	serviceID, localPath                                    string
+	modelVersion, serviceID, localPath                      string
 	sets                                                    []string
 	keepWorkspace                                           bool
 	yes                                                     bool
@@ -27,6 +27,7 @@ type deployFlags struct {
 func (d *deployFlags) bind(c *cobra.Command) {
 	f := c.Flags()
 	f.StringVar(&d.model, "model", "", "catalog model name")
+	f.StringVar(&d.modelVersion, "model-version", "", "catalog model version; defaults to the latest")
 	f.StringVar(&d.variant, "variant", "", "variant id")
 	f.StringVar(&d.release, "release", "", "helm release name")
 	f.StringVar(&d.namespace, "namespace", "", "namespace")
@@ -45,7 +46,7 @@ func (d *deployFlags) plan(cmd *cobra.Command) (*plan.Plan, error) {
 	if d.model == "" {
 		return nil, fmt.Errorf("pass --model, or --plan with an existing plan")
 	}
-	return buildPlan(cmd.Context(), d.model, d.variant, d.release, d.namespace,
+	return buildPlan(cmd.Context(), d.model, d.modelVersion, d.variant, d.release, d.namespace,
 		append(d.sets, kv("serviceId", d.serviceID), kv("model.localPath", d.localPath)))
 }
 

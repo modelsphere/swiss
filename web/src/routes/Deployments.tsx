@@ -1,6 +1,8 @@
+import { Link } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { api, type Deployment } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Empty, ErrorState, Loading } from "@/components/States";
@@ -43,6 +45,7 @@ export function Deployments() {
                 <TableHead>Chart</TableHead>
                 <TableHead>Rev</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -69,6 +72,7 @@ function Row({ d }: { d: Deployment }) {
         {d.managed ? (
           <span>
             {d.model}
+            {d.version && <span className="text-muted-foreground"> v{d.version}</span>}
             {d.variant && <span className="text-muted-foreground"> · {d.variant}</span>}
           </span>
         ) : (
@@ -79,6 +83,15 @@ function Row({ d }: { d: Deployment }) {
       <TableCell className="tabular-nums">{d.revision}</TableCell>
       <TableCell>
         <StatusBadge status={d.status} />
+      </TableCell>
+      <TableCell className="text-right">
+        {d.managed && (
+          <Link to={`/upgrade/${encodeURIComponent(d.namespace)}/${encodeURIComponent(d.release)}`}>
+            <Button size="sm" variant="outline">
+              Upgrade
+            </Button>
+          </Link>
+        )}
       </TableCell>
     </TableRow>
   );

@@ -14,13 +14,18 @@ import (
 	"github.com/aceforeverd/swiss/internal/plan"
 	"github.com/aceforeverd/swiss/internal/store"
 	"github.com/aceforeverd/swiss/internal/values"
+	"gopkg.in/yaml.v3"
 )
 
 type planRequest struct {
-	Model     string `json:"model"`
-	Variant   string `json:"variant,omitempty"`
-	Release   string `json:"release,omitempty"`
-	Namespace string `json:"namespace,omitempty"`
+	// FromRelease recomposes a deployed release: its stored plan supplies the
+	// form layer, the model and the variant, and only the catalog layer moves.
+	FromRelease string `json:"fromRelease,omitempty"`
+	Model       string `json:"model"`
+	Version     string `json:"version,omitempty"`
+	Variant     string `json:"variant,omitempty"`
+	Release     string `json:"release,omitempty"`
+	Namespace   string `json:"namespace,omitempty"`
 	// ServiceID is the identity modelRoute, sloRequirement and the scaler all
 	// key off, and LocalPath overrides the site's path template. Both are form
 	// values; they are named here rather than left to Overrides because a
@@ -62,6 +67,12 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, error) {
+	if req.FromRelease != "" {
+		var err error
+		if req, err = s.carryForward(ctx, req); err != nil {
+			return nil, err
+		}
+	}
 	if req.Model == "" {
 		return nil, fmt.Errorf("model is required")
 	}
@@ -69,7 +80,7 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 	if err != nil {
 		return nil, err
 	}
-	entry, err := cat.Entry(ctx, req.Model)
+	entry, err := cat.Entry(ctx, req.Model, req.Version)
 	if err != nil {
 		return nil, err
 	}
@@ -113,6 +124,58 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 		Namespace: req.Namespace,
 		Overrides: overrides,
 	})
+}
+
+// carryForward fills a request from a release's last plan, so an upgrade keeps
+// the deploy inputs and moves only the model version.
+func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest, error) {
+	if s.store == nil {
+		return req, fmt.Errorf("no database: cannot recompose a release")
+	}
+	prev, err := s.currentPlan(ctx, req.Namespace, req.FromRelease)
+	if err != nil {
+		return req, err
+	}
+	out := planRequest{
+		Model:     prev.Source.Model,
+		Version:   req.Version,
+		Variant:   prev.Source.Variant,
+		Release:   prev.Release.Name,
+		Namespace: prev.Release.Namespace,
+		Overrides: prev.Overrides,
+	}
+	if req.Variant != "" {
+		out.Variant = req.Variant
+	}
+	return out, nil
+}
+
+// currentPlan is the plan a release was last deployed from.
+func (s *Server) currentPlan(ctx context.Context, namespace, release string) (*plan.Plan, error) {
+	if s.store == nil {
+		return nil, fmt.Errorf("no database")
+	}
+	deployments, err := s.store.Deployments(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range deployments {
+		if d.Release == release && (namespace == "" || d.Namespace == namespace) {
+			return s.store.Plan(ctx, d.PlanHash)
+		}
+	}
+	return nil, fmt.Errorf("no plan recorded for release %q -- swiss did not deploy it", release)
+}
+
+func (s *Server) handleReleasePlan(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := contextWithTimeout(r, 15*time.Second)
+	defer cancel()
+	p, err := s.currentPlan(ctx, r.PathValue("namespace"), r.PathValue("release"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
 }
 
 func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
@@ -181,23 +244,41 @@ func (s *Server) handleApply(mode exec.Mode) http.HandlerFunc {
 			return
 		}
 
+		// Write-ahead: the plan is recorded before the cluster changes, so a
+		// permissions or quota failure costs nothing. A live release with no
+		// plan beside it reads as hand-installed, which is the one thing the
+		// reconciliation view must never say about swissd's own work.
 		started := time.Now()
-		res, err := s.runner().Apply(ctx, p)
-		s.record(ctx, actionName(mode), p, res, err, started)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+		if err := s.writePlan(ctx, p, planStatus{
+			Phase: phaseApplying, Action: actionName(mode), StartedAt: stamp(started),
+		}); err != nil {
+			writeError(w, http.StatusInternalServerError, "plan not recorded, nothing applied: "+err.Error())
 			return
 		}
 
-		// The plan goes beside the release, so the cluster describes itself and
-		// the database can be rebuilt from it.
-		var planErr string
-		if err := s.writePlan(ctx, p); err != nil {
-			planErr = err.Error()
-			s.log.ErrorContext(ctx, "plan configmap not written", "release", p.Release.Name, "err", err)
-		}
+		res, applyErr := s.runner().Apply(ctx, p)
+		s.record(ctx, actionName(mode), p, res, applyErr, started)
 
 		after, _ := exec.Lookup(ctx, s.probe, p.Release.Namespace, p.Release.Name)
+
+		status := planStatus{
+			Phase: phaseApplied, Action: actionName(mode),
+			StartedAt: stamp(started), UpdatedAt: stamp(time.Now()),
+			Revision: after.Revision,
+		}
+		if applyErr != nil {
+			status.Phase, status.Error = phaseFailed, applyErr.Error()
+		}
+		// Best effort: the plan is already recorded, only the phase goes stale.
+		var statusErr string
+		if err := s.writePlan(ctx, p, status); err != nil {
+			statusErr = err.Error()
+			s.log.ErrorContext(ctx, "plan status not updated", "release", p.Release.Name, "err", err)
+		}
+		if applyErr != nil {
+			writeError(w, http.StatusInternalServerError, applyErr.Error())
+			return
+		}
 		if err := s.store.RecordApply(ctx, store.Deployment{
 			Namespace: p.Release.Namespace, Release: p.Release.Name,
 			PlanHash: p.Hash, Revision: after.Revision,
@@ -207,18 +288,34 @@ func (s *Server) handleApply(mode exec.Mode) http.HandlerFunc {
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
-			"planHash":           p.Hash,
-			"release":            p.Release.Name,
-			"revision":           after.Revision,
-			"output":             res.Output,
-			"planConfigMapError": planErr,
-			// Deliberately not waiting: a cold load is 20-40 minutes.
-			"status": "submitted",
+			"planHash":    p.Hash,
+			"release":     p.Release.Name,
+			"revision":    after.Revision,
+			"output":      res.Output,
+			"status":      phaseApplied,
+			"statusError": statusErr,
 		})
 	}
 }
 
-func (s *Server) writePlan(ctx context.Context, p *plan.Plan) error {
+const (
+	phaseApplying = "applying"
+	phaseApplied  = "applied"
+	phaseFailed   = "failed"
+)
+
+type planStatus struct {
+	Phase     string `yaml:"phase" json:"phase"`
+	Action    string `yaml:"action,omitempty" json:"action,omitempty"`
+	Revision  int    `yaml:"revision,omitempty" json:"revision,omitempty"`
+	StartedAt string `yaml:"startedAt,omitempty" json:"startedAt,omitempty"`
+	UpdatedAt string `yaml:"updatedAt,omitempty" json:"updatedAt,omitempty"`
+	Error     string `yaml:"error,omitempty" json:"error,omitempty"`
+}
+
+func stamp(t time.Time) string { return t.UTC().Format(time.RFC3339) }
+
+func (s *Server) writePlan(ctx context.Context, p *plan.Plan, st planStatus) error {
 	if s.writer == nil {
 		return fmt.Errorf("no cluster writer")
 	}
@@ -226,8 +323,15 @@ func (s *Server) writePlan(ctx context.Context, p *plan.Plan) error {
 	if err != nil {
 		return err
 	}
+	status, err := yaml.Marshal(st)
+	if err != nil {
+		return err
+	}
 	ref := p.Release.Namespace + "/" + cluster.PlanConfigMapPrefix + p.Release.Name
-	return s.writer.PutConfigMap(ctx, ref, map[string]string{"plan.yaml": string(doc)})
+	return s.writer.PutConfigMap(ctx, ref, map[string]string{
+		"plan.yaml":   string(doc),
+		"status.yaml": string(status),
+	})
 }
 
 func (s *Server) planFromRequest(ctx context.Context, r *http.Request) (*plan.Plan, error) {
