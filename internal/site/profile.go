@@ -86,21 +86,32 @@ func Load(path string) (*Profile, error) {
 	if err != nil {
 		return nil, err
 	}
+	return Parse(raw, path)
+}
+
+// Parse decodes a profile from bytes. The CLI reads a file and the server reads
+// a ConfigMap out of the cluster the profile describes; both land here, so the
+// two cannot validate differently.
+//
+// This package deliberately does not know about Kubernetes. The server fetches
+// the ConfigMap through its cluster probe and hands the bytes over, which keeps
+// profile parsing testable without a cluster or a fake for one.
+func Parse(raw []byte, origin string) (*Profile, error) {
 	var p Profile
 	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
 	dec.KnownFields(true)
 	if err := dec.Decode(&p); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+		return nil, fmt.Errorf("%s: %w", origin, err)
 	}
 	if p.Name == "" {
-		return nil, fmt.Errorf("%s: name is required", path)
+		return nil, fmt.Errorf("%s: name is required", origin)
 	}
 	if p.Model.PathTemplate == "" {
-		return nil, fmt.Errorf("%s: model.pathTemplate is required -- the catalog gives an identity, not a path", path)
+		return nil, fmt.Errorf("%s: model.pathTemplate is required -- the catalog gives an identity, not a path", origin)
 	}
 	if p.Extra != nil {
 		if err := values.CheckOwnership(p.Extra, values.LayerSite); err != nil {
-			return nil, fmt.Errorf("%s: extra: %w", path, err)
+			return nil, fmt.Errorf("%s: extra: %w", origin, err)
 		}
 	}
 	return &p, nil

@@ -1,0 +1,52 @@
+# One config document, read by both `swiss` and `swissd`.
+#
+# They are one tool: the CLI and the server compose the same plans against the
+# same catalog and the same cluster wiring. Two files would eventually disagree.
+# What differs is which sections each one needs -- `server:` is ignored by the
+# CLI, and a file-based profile is normal on a laptop and unusual in a pod.
+#
+# Found in this order: --config, $SWISS_CONFIG, ./swiss.yaml,
+# ~/.config/swiss/swiss.yaml. The CLI works without one; swissd requires it.
+
+# An https base or a local path. index.json is appended when the location does
+# not already name a .json file. No git: a catalog is a published index plus the
+# documents it points at.
+catalog: https://models.example.com/swiss-catalog/
+
+cluster:
+  # Labels every plan composed here, and names this cluster in the switcher.
+  # Required by swissd.
+  name: prod-b300
+
+  # Where the site profile is read from. Exactly one source, named explicitly
+  # rather than sniffed: "swiss/site-profile" is a plausible relative path as
+  # well as a plausible ConfigMap reference, and guessing wrong means composing
+  # against another cluster's wiring.
+  profile:
+    # In-cluster: swissd reads it through its ServiceAccount.
+    configMap: swiss/site-profile
+    key: profile.yaml
+    # On a laptop, or a swissd with the profile mounted as a volume:
+    # file: ./deploys/production/profile.yaml
+
+  # Empty means in-cluster ServiceAccount first, then the usual kubeconfig
+  # rules. Set a path to drive a cluster from outside it.
+  kubeconfig: ""
+  context: ""
+
+# swissd only. The CLI parses this section and ignores it, so one file can be
+# mounted into a pod and checked into a repo unchanged.
+server:
+  addr: ":8080"
+
+  # How long a fetched catalog or profile is reused before refetching.
+  cacheTTL: 60s
+
+  # The other clusters' swissd instances, for the nav switcher. Config, not
+  # discovery: a list you deploy. Every instance serves the same switcher, so
+  # any one of them is a valid entry point.
+  peers:
+    - name: prod-h100
+      url: https://swiss.h100.internal
+    - name: dev
+      url: https://swiss.dev.internal

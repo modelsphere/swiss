@@ -1,68 +1,113 @@
 package catalog
 
 import (
+	"bytes"
+	"context"
 	"fmt"
-	"os"
-	"path/filepath"
-	"sort"
-	"strings"
+	"sync"
 
 	"github.com/aceforeverd/swiss/internal/values"
 	"gopkg.in/yaml.v3"
 )
 
-// Catalog is a loaded set of entries, indexed by model name.
+// Catalog is an opened catalog: its index, and entries fetched on demand.
+//
+// Opening reads index.json only. An entry is fetched when a model is actually
+// opened, which is what keeps a marketplace listing one request rather than one
+// per model.
 type Catalog struct {
-	Root    string
-	Ref     string // commit sha the tree was read at; empty when unknown
-	Entries []Entry
+	Fetcher Fetcher
+	Index   *Index
+	// Ref identifies the catalog state a plan was composed against: a digest of
+	// the index bytes. Recorded in every plan, so a deploy can be traced back.
+	Ref string
+
+	mu      sync.Mutex
+	entries map[string]Entry
 }
 
-// Load reads models/*/entry.yaml under root and validates every entry.
-//
-// Validation is not optional and there is no flag to skip it. A catalog is a
-// public repo fetched over the network; the moment a consumer will render an
-// unchecked entry, "the CI would have caught it" becomes the only thing standing
-// between a bad push and a cluster.
-func Load(root string) (*Catalog, error) {
-	paths, err := filepath.Glob(filepath.Join(root, "models", "*", "entry.yaml"))
+// Open fetches and validates the index.
+func Open(ctx context.Context, loc string) (*Catalog, error) {
+	f, err := NewFetcher(loc)
 	if err != nil {
 		return nil, err
 	}
-	if len(paths) == 0 {
-		return nil, fmt.Errorf("no models/*/entry.yaml under %s -- is this a swiss catalog?", root)
-	}
-	sort.Strings(paths)
+	return OpenFetcher(ctx, f)
+}
 
-	c := &Catalog{Root: root, Ref: gitRef(root)}
-	seen := map[string]string{}
-	for _, p := range paths {
-		e, err := loadEntry(p)
+// OpenFetcher is Open against an already-built Fetcher, for tests and for
+// callers holding a configured HTTP client.
+func OpenFetcher(ctx context.Context, f Fetcher) (*Catalog, error) {
+	idx, raw, err := f.Index(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &Catalog{Fetcher: f, Index: idx, Ref: contentRef(raw), entries: map[string]Entry{}}, nil
+}
+
+// Entry fetches and validates one model's entry, memoised.
+//
+// Validation happens here, on every fetch, and cannot be skipped. A catalog is
+// fetched over a network from a repo this cluster does not control, so it is
+// untrusted input at the point of use; trusting it because some CI somewhere was
+// supposed to have run is hoping, not validating.
+func (c *Catalog) Entry(ctx context.Context, name string) (Entry, error) {
+	c.mu.Lock()
+	if e, ok := c.entries[name]; ok {
+		c.mu.Unlock()
+		return e, nil
+	}
+	c.mu.Unlock()
+
+	m, ok := c.Index.Model(name)
+	if !ok {
+		return Entry{}, fmt.Errorf("no model %q in catalog %s", name, c.Fetcher)
+	}
+	raw, err := c.Fetcher.Fetch(ctx, m.Path)
+	if err != nil {
+		return Entry{}, fmt.Errorf("model %q (%s): %w", name, m.Path, err)
+	}
+	e, err := ParseEntry(raw)
+	if err != nil {
+		return Entry{}, fmt.Errorf("model %q (%s): %w", name, m.Path, err)
+	}
+	// The index is a summary of the entry. If they disagree, one of them is
+	// stale, and composing from the wrong one is how a deploy ends up with a
+	// model nobody chose.
+	if e.Name != name {
+		return Entry{}, fmt.Errorf("model %q (%s): entry says name %q -- index is stale", name, m.Path, e.Name)
+	}
+
+	c.mu.Lock()
+	c.entries[name] = *e
+	c.mu.Unlock()
+	return *e, nil
+}
+
+// All fetches every entry. Used by validation and by anything that genuinely
+// needs the full set; ordinary listing should use the index.
+func (c *Catalog) All(ctx context.Context) ([]Entry, error) {
+	out := make([]Entry, 0, len(c.Index.Models))
+	for _, m := range c.Index.Models {
+		e, err := c.Entry(ctx, m.Name)
 		if err != nil {
 			return nil, err
 		}
-		if prev, dup := seen[e.Name]; dup {
-			return nil, fmt.Errorf("%s: model %q already defined in %s", p, e.Name, prev)
-		}
-		seen[e.Name] = p
-		c.Entries = append(c.Entries, *e)
+		out = append(out, e)
 	}
-	return c, nil
+	return out, nil
 }
 
-func loadEntry(path string) (*Entry, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
+// ParseEntry decodes and validates one entry document.
+func ParseEntry(raw []byte) (*Entry, error) {
 	var e Entry
-	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true) // an unknown key is a typo, not a setting that does nothing
 	if err := dec.Decode(&e); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+		return nil, err
 	}
 	if err := e.Validate(); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+		return nil, err
 	}
 	return &e, nil
 }
@@ -139,33 +184,4 @@ func (e Entry) Validate() error {
 		return fmt.Errorf("%d variants marked default, at most one allowed", defaults)
 	}
 	return nil
-}
-
-// Entry looks up a model by name.
-func (c *Catalog) Entry(name string) (Entry, error) {
-	for _, e := range c.Entries {
-		if e.Name == name {
-			return e, nil
-		}
-	}
-	return Entry{}, fmt.Errorf("no model %q in catalog %s", name, c.Root)
-}
-
-// gitRef reports the commit the catalog tree is at, best effort. A plan records
-// it so a deploy can be traced back to an exact catalog state; an empty value
-// means the tree is not a git checkout, which a caller may want to refuse.
-func gitRef(root string) string {
-	head, err := os.ReadFile(filepath.Join(root, ".git", "HEAD"))
-	if err != nil {
-		return ""
-	}
-	s := strings.TrimSpace(string(head))
-	if ref, ok := strings.CutPrefix(s, "ref: "); ok {
-		b, err := os.ReadFile(filepath.Join(root, ".git", ref))
-		if err != nil {
-			return ""
-		}
-		return strings.TrimSpace(string(b))
-	}
-	return s
 }

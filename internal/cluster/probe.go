@@ -7,14 +7,27 @@
 // rather than written.
 package cluster
 
-import "context"
+import (
+	"context"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+)
 
-// Release is a live helm release, enough to answer "would this collide".
+// Release is a live helm release, enough to answer "would this collide" and
+// "has it moved since I diffed it".
 type Release struct {
 	Name      string
 	Namespace string
-	Chart     string
-	Status    string
+	Chart     string // "sglang-0.8.0"
+	Status    string // deployed, pending-upgrade, failed, ...
+	Revision  int
+	Updated   time.Time
+	// SwissPlan is the plan recorded alongside the release, when one is present.
+	// Absent means the release was not deployed by Swiss -- the "live but
+	// untracked" row that matters most in a reconciliation view.
+	SwissPlan []byte
 }
 
 // Node is what a fit check needs.
@@ -30,21 +43,44 @@ type Node struct {
 type Probe interface {
 	Releases(ctx context.Context) ([]Release, error)
 	Nodes(ctx context.Context) ([]Node, error)
-	// ConfigMapKeys lists the keys of a ConfigMap given as "ns/name", so a route
-	// collision can be detected before it is written rather than after two models
-	// are fighting over one openresty key.
-	ConfigMapKeys(ctx context.Context, ref string) ([]string, error)
+	// ConfigMap reads a ConfigMap given as "ns/name". Route collisions are
+	// detected from its key set before a write, rather than after two models are
+	// fighting over one openresty key; site profiles are read from one whole.
+	ConfigMap(ctx context.Context, ref string) (map[string]string, error)
+}
+
+// ConfigMapKeys is the key set of a ConfigMap, sorted.
+func ConfigMapKeys(ctx context.Context, p Probe, ref string) ([]string, error) {
+	m, err := p.ConfigMap(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys, nil
+}
+
+// SplitRef splits a "namespace/name" reference.
+func SplitRef(ref string) (namespace, name string, err error) {
+	ns, n, ok := strings.Cut(ref, "/")
+	if !ok || ns == "" || n == "" {
+		return "", "", fmt.Errorf("reference %q is not namespace/name", ref)
+	}
+	return ns, n, nil
 }
 
 // Fake is an in-memory Probe.
 type Fake struct {
 	Rel  []Release
 	Nod  []Node
-	Keys map[string][]string
+	Maps map[string]map[string]string
 }
 
 func (f Fake) Releases(context.Context) ([]Release, error) { return f.Rel, nil }
 func (f Fake) Nodes(context.Context) ([]Node, error)       { return f.Nod, nil }
-func (f Fake) ConfigMapKeys(_ context.Context, ref string) ([]string, error) {
-	return f.Keys[ref], nil
+func (f Fake) ConfigMap(_ context.Context, ref string) (map[string]string, error) {
+	return f.Maps[ref], nil
 }

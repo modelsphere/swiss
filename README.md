@@ -1,31 +1,60 @@
 # swiss
 
 Go backend for the deploy control plane described in
-[`../docs/swiss-design.md`](../docs/swiss-design.md). **P0: compose and render.**
+[`docs/swiss-design.md`](docs/swiss-design.md). **P0: compose and render.**
 It writes nothing to a cluster and nothing to the charts repo.
 
 ```
 cmd/swiss/            the CLI
+cmd/swissd/           the server (read path)
+web/                  the SPA, embedded into swissd
 internal/values/      values trees, helm merge semantics, the ownership table
 internal/catalog/     swiss-catalog entries; validates what it loads
+internal/config/      the one config document, shared by both binaries
 internal/site/        site profile: paths, mirror, route ConfigMaps
 internal/compose/     the four-layer merge -- the heart
 internal/plan/        the Plan, shared with the server that does not exist yet
 internal/render/      Renderer interface + a helm exec implementation
-internal/cluster/     Probe interface + a fake, for preflight
-examples/             an example site profile
+internal/cluster/     Probe interface, a fake, and a client-go implementation
+internal/server/      swissd: config, read API, SPA serving
+examples/             an example site profile and swissd config
 ```
 
-`swissd` is not here yet. Every package above is written so that adding it is a
-new `cmd/`, not a refactor: **no compose, validate, render or apply logic lives
-outside `internal/`.** If the server ever needs something the CLI cannot reach,
-that thing is in the wrong package.
+`swissd` serves the **read path** only: it browses the catalog, lists live
+releases, and reports which of them Swiss knows the provenance of. It writes
+nothing, to a cluster or anywhere else, and holds no database.
+
+The rule that keeps the two frontends honest: **no compose, validate, render or
+apply logic lives outside `internal/`.** If the server needs something the CLI
+cannot reach, that thing is in the wrong package.
 
 ## Try it
 
+One config document, read by **both** binaries — they compose the same plans
+against the same catalog and cluster wiring, and two formats would eventually
+disagree. `server:` is ignored by the CLI.
+
+```yaml
+# swiss.yaml
+catalog: https://models.example.com/swiss-catalog/
+cluster:
+  name: prod-b300
+  profile:
+    file: ./deploys/production/profile.yaml   # or configMap: swiss/site-profile
+server:
+  addr: ":8080"
+  peers:
+    - { name: dev, url: https://swiss.dev.internal }
+```
+
+Found in order: `--config`, `$SWISS_CONFIG`, `./swiss.yaml`,
+`~/.config/swiss/swiss.yaml`. Relative paths inside it resolve against the
+**config file**, not the working directory — it may be discovered from
+`~/.config` while your shell is anywhere. The CLI works without a config at all
+(`--catalog` / `--profile`); swissd requires one.
+
 ```sh
 go build -o swiss ./cmd/swiss
-export SWISS_CATALOG=../swiss-catalog SWISS_PROFILE=examples/site-prod.yaml
 
 ./swiss catalog list
 ./swiss catalog show kimi-k2.5
@@ -39,6 +68,9 @@ export SWISS_CATALOG=../swiss-catalog SWISS_PROFILE=examples/site-prod.yaml
 ./swiss plan --model glm-5.3 --release glm-53 -o plan.json
 ./swiss render --plan plan.json
 ```
+
+A `configMap:` profile is refused by the CLI with a message saying why: only
+swissd has a cluster probe to read it with.
 
 ## What the design turns into, in code
 
@@ -70,6 +102,49 @@ over a network; trusting it because some CI was supposed to have run is hoping,
 not validating. `Entry.Validate` also carries the cross-variant rules a per-file
 JSON schema cannot see — notably `lws.size` vs `requires.nodes`, which does not
 fail loudly when it disagrees, it hangs the group at rendezvous.
+
+## Deploying
+
+```sh
+docker build -t harbor.4pd.io/hardcore-tech/swissd:0.1.0 --build-arg VERSION=0.1.0 .
+
+helm install swiss ../charts/swiss -n swiss --create-namespace \
+  --set config.cluster.name=prod-b300 \
+  --set 'rbac.namespaces={modelforge,kimi}'
+```
+
+The image is three stages: the SPA is built with node, embedded into the Go
+binary, and the result runs on distroless/static as non-root with a read-only
+root filesystem. No shell, no package manager, no libc.
+
+`charts/swiss` deliberately does **not** go in `helmfile.yaml` -- that file is
+the model-release inventory ("every sglang release running in production, and
+nothing else"), and swissd is not a model. It also keeps swissd out of its own
+inventory view.
+
+**RBAC is the decision to read before installing.** helm stores releases in
+Secrets and Kubernetes cannot filter a secret read by label, so "read helm
+releases" and "read every credential in these namespaces" are one grant. The
+chart defaults to `rbac.scope: namespaced` with an explicit namespace list, and
+refuses to render with an empty one rather than installing something that can
+see nothing. `rbac.scope: cluster` buys a complete untracked-release view at the
+cost of cluster-wide secret reads; the chart says so where you set it.
+
+## Running swissd locally
+
+```sh
+cd web && npm install && npm run build && cd ..
+go build -o swissd ./cmd/swissd
+./swissd --config examples/swiss.yaml
+```
+
+One instance per cluster, running inside the cluster it manages: in-cluster
+ServiceAccount, its own site profile, its own view. The "one web across
+clusters" is a switcher over `peers` in the config -- every instance serves it,
+so any one of them is a valid entry point.
+
+`go build` works without node installed: `web/dist` is committed empty, and a
+binary with no UI in it serves an explanatory 404 while the API keeps working.
 
 ## Not built
 

@@ -1,0 +1,14 @@
+# The build needs source only. node_modules is reinstalled from the lockfile in
+# the web stage, and dist is produced there -- copying either in would make the
+# image depend on whatever happened to be on the builder's disk.
+web/node_modules
+web/dist
+.git
+.gitignore
+*.md
+docs/
+examples/
+Dockerfile
+.dockerignore
+swiss
+swissd
