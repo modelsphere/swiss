@@ -369,3 +369,26 @@ func TestWebFeatureTogglesLandInThePlan(t *testing.T) {
 		t.Errorf("an explicit choice belongs to the form, got %v", prov["cart.enabled"])
 	}
 }
+
+// The web sends a flag for every feature it shows, so each one must be
+// form-settable. serviceMonitor was wholly site-owned and rejected the request.
+func TestEveryToggledFeatureIsFormSettable(t *testing.T) {
+	srv, _ := deployServer(t, true)
+	code, body := post(t, srv, "/api/plans", map[string]any{
+		"model": "glm5.1", "release": "r", "serviceId": "r",
+		"overrides": map[string]any{
+			"cart":           map[string]any{"enabled": true},
+			"modelRoute":     map[string]any{"enabled": false},
+			"sloRequirement": map[string]any{"enabled": true},
+			"serviceMonitor": map[string]any{"enabled": true},
+			"scaler":         map[string]any{"enabled": false},
+		},
+	})
+	if code != 200 {
+		t.Fatalf("status %d: %v", code, body)
+	}
+	vals := body["values"].(map[string]any)
+	if vals["serviceMonitor"].(map[string]any)["enabled"] != true {
+		t.Errorf("serviceMonitor.enabled did not take: %v", vals["serviceMonitor"])
+	}
+}

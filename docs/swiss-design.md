@@ -202,7 +202,7 @@ becomes a question about precedence, and there is no good answer to any of them.
 | --- | --- | --- |
 | chart defaults | everything not claimed below | `charts/*/values.yaml` |
 | **catalog variant** | model identity, and how it parallelizes | `model.{name,mountPath,hostPathType,gpus}`, `extraArgs`, `lws.{enabled,size}`, `env`, `volumes`, `modelCheck.requiredGlobs`, `image` |
-| **site profile** | what makes it work here | `cache.hostPath`, the registry rewrite for `image.repository`, `scaler.serverAddress`, `modelRoute.nginx.outputConfigMap`, `modelRoute.monitor.outputConfigMap`, namespace, and the path template `model.localPath` defaults from |
+| **site profile** | what makes it work here | `cache.hostPath`, the registry rewrite for `image.repository`, `scaler.serverAddress`, `modelRoute.nginx.outputConfigMap`, `modelRoute.monitor.outputConfigMap`, `serviceMonitor.labels`, namespace, and the path template `model.localPath` defaults from |
 | **user form** | how much, where, how routed | **`serviceId`**, **`model.localPath`**, `replicaCount`, `scaler.{minReplicas,maxReplicas,scaleDown}`, `nodeSelector`, `affinity`, `tolerations`, `priorityClassName`, `schedulerName`, `podDisruptionBudget`, `modelRoute.*`, `cart.*`, `sloRequirement.extraSpec` |
 
 Two of those are central enough to be named fields rather than `--set` keys.
@@ -212,6 +212,11 @@ off, and it is per release rather than per model or per cluster. It is the
 someone types their own. Three fields holding the same string, each free to drift,
 is how a release ends up with a scaler watching one id and a route publishing
 another.
+`serviceMonitor` splits the same way `image` does: whether to scrape this release
+is the deploy's call, which Prometheus picks it up is the site's, so
+`serviceMonitor.enabled` is the form's and `serviceMonitor.labels` stays with the
+site.
+
 `model.localPath` has a site-wide default built from the path template, but
 weights move and a deploy has to be able to say where they are -- a template with
 no override just means the first irregular model cannot be deployed at all.

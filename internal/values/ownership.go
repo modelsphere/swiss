@@ -68,6 +68,9 @@ var owners = []struct {
 	// say where they are.
 	{"serviceId", LayerForm},
 	{"model.localPath", LayerForm},
+	// Whether to scrape this release is a deploy decision; which Prometheus
+	// picks it up is not. serviceMonitor.labels below stays with the site.
+	{"serviceMonitor.enabled", LayerForm},
 
 	// Site: what makes it work in this cluster. image.repository is split from
 	// image.tag deliberately -- the catalog pins which build, the site says
