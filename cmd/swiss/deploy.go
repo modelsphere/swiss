@@ -59,10 +59,12 @@ func probe() (cluster.Probe, error) {
 		return nil, err
 	}
 	kubeconfig, context := "", ""
+	var namespaces []string
 	if r.cfg != nil {
 		kubeconfig, context = r.cfg.Cluster.Kubeconfig, r.cfg.Cluster.Context
+		namespaces = r.cfg.Cluster.Namespaces
 	}
-	return cluster.NewKube(kubeconfig, context)
+	return cluster.NewKube(kubeconfig, context, namespaces...)
 }
 
 func diffCmd() *cobra.Command {

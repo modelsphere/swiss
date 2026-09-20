@@ -579,7 +579,11 @@ in those namespaces" are the same grant. There is no third option.
 
 The chart defaults to `rbac.scope: namespaced` with an explicit namespace list,
 and refuses to render with an empty one rather than installing something that can
-see nothing. The cost of that default is real and stated where it is set: a
+see nothing. That list is rendered into `cluster.namespaces` in swissd's config
+as well as into the Roles, from one value: a Role cannot authorise a cluster-wide
+list, so a probe that reads `NamespaceAll` under namespaced RBAC is refused
+outright rather than returning less. Empty means cluster-wide and needs the
+ClusterRole. The cost of that default is real and stated where it is set: a
 release in an unlisted namespace is *invisible*, not reported as untracked, which
 partly defeats the reconciliation view. `rbac.scope: cluster` buys completeness
 for cluster-wide secret reads.
@@ -697,11 +701,11 @@ tree these values were tested against.
   `autoscaling.4pd.io/v1alpha1`), so the ambiguity is likelier here than
   elsewhere. `schemaVersion: 1` would be unmistakable; renaming touches the
   schema, the entries, `index.json` and two Go constants.
-- **Namespaces are unconnected to RBAC.** A plan composed for a namespace outside
-  `rbac.namespaces` passes compose and preconditions, then fails at the API
-  server — and in namespaced mode swissd cannot even see releases there, so the
-  precondition check reports "no release" and lets `install` proceed. Wants a
-  preflight rule, or a SelfSubjectAccessReview.
+- **A plan can still target a namespace swissd cannot reach.** `cluster.namespaces`
+  now bounds what it reads, but compose does not check the target namespace
+  against it: a plan for an ungranted namespace passes preconditions — which see
+  no release there — and `install` proceeds until the API server refuses it.
+  Wants a preflight rule.
 - **Catalog trust.** Pinning by content digest and requiring a chart digest covers
   accidents. It does not cover a compromised catalog, and signing is not
   specified here.

@@ -42,6 +42,11 @@ type Cluster struct {
 	Name    string  `yaml:"name,omitempty"`
 	Profile Profile `yaml:"profile"`
 
+	// Namespaces bounds what swissd reads and deploys. Empty means cluster-wide,
+	// which needs a ClusterRole; a list must match the namespaces its Roles were
+	// granted in, or every read is simply forbidden.
+	Namespaces []string `yaml:"namespaces,omitempty"`
+
 	// Kubeconfig empty means in-cluster first, then the usual loading rules.
 	Kubeconfig string `yaml:"kubeconfig,omitempty"`
 	Context    string `yaml:"context,omitempty"`

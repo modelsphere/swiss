@@ -67,7 +67,7 @@ func run(configPath, addr, logLevel, webDir string) error {
 
 	// Empty kubeconfig means in-cluster, which is the normal deployment. The
 	// home cluster is not special-cased anywhere: same probe, same code path.
-	probe, err := cluster.NewKube(cfg.Cluster.Kubeconfig, cfg.Cluster.Context)
+	probe, err := cluster.NewKube(cfg.Cluster.Kubeconfig, cfg.Cluster.Context, cfg.Cluster.Namespaces...)
 	if err != nil {
 		return fmt.Errorf("cluster access: %w", err)
 	}

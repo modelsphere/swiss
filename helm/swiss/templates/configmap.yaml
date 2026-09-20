@@ -16,6 +16,13 @@ data:
       profile:
         configMap: {{ include "swiss.effectiveProfileRef" . | quote }}
         key: {{ .Values.config.cluster.profileKey | quote }}
+      {{- if eq .Values.rbac.scope "namespaced" }}
+      {{- /* Must match the namespaces the Roles were granted in: under
+             namespaced RBAC a cluster-wide list is forbidden outright, so this
+             is rendered from rbac.namespaces rather than repeated. */}}
+      namespaces:
+        {{- toYaml .Values.rbac.namespaces | nindent 8 }}
+      {{- end }}
     server:
       addr: ":8080"
       cacheTTL: {{ .Values.config.cacheTTL }}

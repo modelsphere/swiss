@@ -69,13 +69,25 @@ binary with no UI serves an explanatory 404 while the API keeps working.
 
 ## Deploy
 
+`helm/swiss/Chart.yaml`'s `appVersion` is the only version. `hack/bump.sh` moves
+it and the chart version together, and prints the build commands; `image.tag` is
+empty so helm follows `appVersion`, and the binaries take it through ldflags.
+
 ```sh
-docker build -t harbor.4pd.io/hardcore-tech/swissd:0.1.0 --build-arg VERSION=0.1.0 .
+./hack/bump.sh              # show
+./hack/bump.sh patch        # or minor | major | 0.3.1, plus --tag
+
+docker build -t harbor.4pd.io/hardcore-tech/swissd:$(./hack/bump.sh) \
+  --build-arg VERSION=$(./hack/bump.sh) .
 
 helm install swiss ./helm/swiss -n swiss --create-namespace \
   --set config.cluster.name=prod-b300 \
   --set 'rbac.namespaces={modelforge,kimi}'
 ```
+
+`rbac.namespaces` is rendered into both the Roles and `cluster.namespaces`, so
+swissd lists only namespaces it was granted — a Role cannot authorise a
+cluster-wide list. `rbac.scope: cluster` drops the list and reads everything.
 
 One instance per cluster, inside the cluster it manages. Read the RBAC section of
 the design doc before installing: `rbac.scope` decides whether swissd can read

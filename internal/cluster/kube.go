@@ -30,6 +30,11 @@ type Kube struct {
 	// alongside the release so a reconciliation view can tell a Swiss-managed
 	// release from one installed by hand.
 	SwissPlanPrefix string
+	// Namespaces bounds every list. Empty means cluster-wide, which needs a
+	// ClusterRole; a non-empty list lists each namespace in turn, which is what
+	// namespace-scoped Roles can actually authorise. Getting this wrong is not a
+	// degraded view -- a cluster-wide list is simply forbidden.
+	Namespaces []string
 }
 
 // PlanConfigMapPrefix names the ConfigMap holding a release's plan.
@@ -39,7 +44,8 @@ const planKey = "plan.yaml"
 
 // NewKube builds a probe. An empty kubeconfig path means in-cluster first,
 // falling back to the usual loading rules (KUBECONFIG, ~/.kube/config).
-func NewKube(kubeconfig, context_ string) (*Kube, error) {
+// namespaces bounds what it reads; empty is cluster-wide.
+func NewKube(kubeconfig, context_ string, namespaces ...string) (*Kube, error) {
 	cfg, err := restConfig(kubeconfig, context_)
 	if err != nil {
 		return nil, err
@@ -48,7 +54,7 @@ func NewKube(kubeconfig, context_ string) (*Kube, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Kube{client: cs, SwissPlanPrefix: PlanConfigMapPrefix}, nil
+	return &Kube{client: cs, SwissPlanPrefix: PlanConfigMapPrefix, Namespaces: namespaces}, nil
 }
 
 // NewKubeWithClient is for tests, which supply a fake clientset.
@@ -99,27 +105,28 @@ type helmRelease struct {
 // reads, so the two cannot disagree, and it needs no helm binary in the server
 // image.
 func (k *Kube) Releases(ctx context.Context) ([]Release, error) {
-	secrets, err := k.client.CoreV1().Secrets(metav1.NamespaceAll).List(ctx, metav1.ListOptions{
-		LabelSelector: "owner=helm",
-	})
-	if err != nil {
-		return nil, fmt.Errorf("list helm release secrets: %w", err)
-	}
-
 	// Several revisions of one release are stored side by side; keep the highest.
 	latest := map[string]Release{}
-	for i := range secrets.Items {
-		s := &secrets.Items[i]
-		rel, err := decodeRelease(s)
+	for _, ns := range k.scopes() {
+		secrets, err := k.client.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{
+			LabelSelector: "owner=helm",
+		})
 		if err != nil {
-			// One unreadable release must not hide every other one.
-			continue
+			return nil, fmt.Errorf("list helm release secrets in %s: %w", scopeName(ns), err)
 		}
-		key := rel.Namespace + "/" + rel.Name
-		if prev, ok := latest[key]; ok && prev.Revision >= rel.Revision {
-			continue
+		for i := range secrets.Items {
+			s := &secrets.Items[i]
+			rel, err := decodeRelease(s)
+			if err != nil {
+				// One unreadable release must not hide every other one.
+				continue
+			}
+			key := rel.Namespace + "/" + rel.Name
+			if prev, ok := latest[key]; ok && prev.Revision >= rel.Revision {
+				continue
+			}
+			latest[key] = *rel
 		}
-		latest[key] = *rel
 	}
 
 	out := make([]Release, 0, len(latest))
@@ -194,6 +201,21 @@ func (k *Kube) planFor(ctx context.Context, namespace, release string) ([]byte, 
 		return []byte(v), nil
 	}
 	return nil, fmt.Errorf("configmap %s/%s%s has no %s", namespace, k.SwissPlanPrefix, release, planKey)
+}
+
+// scopes is the namespaces to list, or one cluster-wide scope.
+func (k *Kube) scopes() []string {
+	if len(k.Namespaces) == 0 {
+		return []string{metav1.NamespaceAll}
+	}
+	return k.Namespaces
+}
+
+func scopeName(ns string) string {
+	if ns == metav1.NamespaceAll {
+		return "the cluster scope"
+	}
+	return "namespace " + ns
 }
 
 // Nodes lists nodes with the GPU facts a fit check needs.

@@ -4,6 +4,7 @@ config:
     name: "testenv"
     profile: ""
     profileKey: profile.yaml
+  allowDeploy: true
 
 profile:
   create: true
@@ -16,3 +17,4 @@ profile:
 rbac:
   namespaces:
     - swiss-deploy
+  allowDeploy: true

@@ -143,3 +143,39 @@ func TestConfigMapKeysForRouteCollision(t *testing.T) {
 		t.Error("a reference without a namespace must be refused")
 	}
 }
+
+// rbac.scope: namespaced grants Roles, which cannot authorise a cluster-wide
+// list. Listing each namespace in turn is the only thing those Roles permit --
+// getting this wrong is a 403, not a narrower view.
+func TestScopedProbeListsPerNamespace(t *testing.T) {
+	cs := fake.NewSimpleClientset(
+		helmSecret("modelforge", "glm-53", 1, "deployed", "sglang", "0.8.0"),
+		helmSecret("kimi", "kimi-k25", 1, "deployed", "sglang", "0.8.0"),
+		helmSecret("other", "not-ours", 1, "deployed", "sglang", "0.8.0"),
+	)
+	k := NewKubeWithClient(cs)
+	k.Namespaces = []string{"modelforge", "kimi"}
+
+	got, err := k.Releases(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want only the listed namespaces, got %d: %+v", len(got), got)
+	}
+	for _, r := range got {
+		if r.Namespace == "other" {
+			t.Errorf("read outside the granted namespaces: %+v", r)
+		}
+	}
+
+	// Empty means cluster-wide, which is what a ClusterRole authorises.
+	k.Namespaces = nil
+	got, err = k.Releases(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("cluster-wide should see all three, got %d", len(got))
+	}
+}
