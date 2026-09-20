@@ -19,6 +19,8 @@ data:
     server:
       addr: ":8080"
       cacheTTL: {{ .Values.config.cacheTTL }}
+      allowDeploy: {{ .Values.config.allowDeploy }}
+      database: {{ .Values.config.database | quote }}
       {{- with .Values.config.peers }}
       peers:
         {{- toYaml . | nindent 8 }}

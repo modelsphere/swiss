@@ -13,6 +13,7 @@ import (
 	"sort"
 
 	"github.com/aceforeverd/swiss/internal/values"
+	"gopkg.in/yaml.v3"
 )
 
 const APIVersion = "plan.swiss/v1"
@@ -97,4 +98,19 @@ func (p *Plan) ByLayer() map[string][]string {
 		sort.Strings(paths)
 	}
 	return out
+}
+
+// YAML renders the plan for the ConfigMap stored beside a release. It goes
+// through JSON so the field names match the wire form; the hash stays computed
+// over canonical JSON, since YAML formatting is the emitter's choice.
+func (p *Plan) YAML() ([]byte, error) {
+	b, err := json.Marshal(p)
+	if err != nil {
+		return nil, err
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(b, &doc); err != nil {
+		return nil, err
+	}
+	return yaml.Marshal(doc)
 }

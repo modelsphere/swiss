@@ -13,6 +13,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -31,10 +32,10 @@ type Kube struct {
 	SwissPlanPrefix string
 }
 
-const (
-	defaultPlanPrefix = "swiss-plan-"
-	planKey           = "plan.yaml"
-)
+// PlanConfigMapPrefix names the ConfigMap holding a release's plan.
+const PlanConfigMapPrefix = "swiss-plan-"
+
+const planKey = "plan.yaml"
 
 // NewKube builds a probe. An empty kubeconfig path means in-cluster first,
 // falling back to the usual loading rules (KUBECONFIG, ~/.kube/config).
@@ -47,12 +48,12 @@ func NewKube(kubeconfig, context_ string) (*Kube, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Kube{client: cs, SwissPlanPrefix: defaultPlanPrefix}, nil
+	return &Kube{client: cs, SwissPlanPrefix: PlanConfigMapPrefix}, nil
 }
 
 // NewKubeWithClient is for tests, which supply a fake clientset.
 func NewKubeWithClient(c kubernetes.Interface) *Kube {
-	return &Kube{client: c, SwissPlanPrefix: defaultPlanPrefix}
+	return &Kube{client: c, SwissPlanPrefix: PlanConfigMapPrefix}
 }
 
 func restConfig(kubeconfig, ctxName string) (*rest.Config, error) {
@@ -252,4 +253,33 @@ func less(a, b Release) bool {
 	return a.Name < b.Name
 }
 
-var _ Probe = (*Kube)(nil)
+var (
+	_ Probe  = (*Kube)(nil)
+	_ Writer = (*Kube)(nil)
+)
+
+// PutConfigMap creates or replaces a ConfigMap given as "namespace/name".
+func (k *Kube) PutConfigMap(ctx context.Context, ref string, data map[string]string) error {
+	ns, name, err := SplitRef(ref)
+	if err != nil {
+		return err
+	}
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: ns,
+			Name:      name,
+			Labels:    map[string]string{"app.kubernetes.io/managed-by": "swiss"},
+		},
+		Data: data,
+	}
+	_, err = k.client.CoreV1().ConfigMaps(ns).Update(ctx, cm, metav1.UpdateOptions{})
+	if apierrors.IsNotFound(err) {
+		_, err = k.client.CoreV1().ConfigMaps(ns).Create(ctx, cm, metav1.CreateOptions{})
+	}
+	return err
+}
+
+// PlanRef is where a release's plan is stored.
+func (k *Kube) PlanRef(namespace, release string) string {
+	return namespace + "/" + k.SwissPlanPrefix + release
+}

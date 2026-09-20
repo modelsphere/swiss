@@ -56,3 +56,35 @@ the RBAC that reads it cannot disagree.
 {{- include "swiss.profileRef" . -}}
 {{- end -}}
 {{- end -}}
+
+{{/* Exactly what the sglang and vllm charts render, plus helm's release storage. */}}
+{{- define "swiss.deployRules" -}}
+{{- $all := list "get" "list" "watch" "create" "update" "patch" "delete" }}
+- apiGroups: [""]
+  resources: ["secrets", "configmaps", "services", "serviceaccounts"]
+  verbs: {{ $all | toJson }}
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: {{ $all | toJson }}
+- apiGroups: ["policy"]
+  resources: ["poddisruptionbudgets"]
+  verbs: {{ $all | toJson }}
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources: ["roles", "rolebindings"]
+  verbs: {{ $all | toJson }}
+- apiGroups: ["monitoring.coreos.com"]
+  resources: ["servicemonitors"]
+  verbs: {{ $all | toJson }}
+- apiGroups: ["leaderworkerset.x-k8s.io"]
+  resources: ["leaderworkersets"]
+  verbs: {{ $all | toJson }}
+- apiGroups: ["autoscaling.4pd.io"]
+  resources: ["llmscalers"]
+  verbs: {{ $all | toJson }}
+- apiGroups: ["inference.x-k8s.io"]
+  resources: ["llmslorequirements"]
+  verbs: {{ $all | toJson }}
+- apiGroups: ["routing.gpucluster.io"]
+  resources: ["modelroutes"]
+  verbs: {{ $all | toJson }}
+{{- end -}}

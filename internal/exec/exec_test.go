@@ -1,0 +1,138 @@
+package exec
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/aceforeverd/swiss/internal/plan"
+	"github.com/aceforeverd/swiss/internal/values"
+	"gopkg.in/yaml.v3"
+)
+
+func testPlan() *plan.Plan {
+	return &plan.Plan{
+		APIVersion: plan.APIVersion,
+		Release:    plan.Release{Name: "glm-53", Namespace: "modelforge"},
+		Chart:      plan.ChartRef{Name: "sglang", Version: "0.8.0", Repo: "oci://harbor.4pd.io/hardcore-tech"},
+		Engine:     "sglang",
+		Values:     values.Tree{"replicaCount": 2, "extraArgs": []any{"--tp-size=8"}},
+	}
+}
+
+func TestMaterializeWritesAValuesFileAndAOneReleaseHelmfile(t *testing.T) {
+	ws, err := Runner{}.Materialize(testPlan())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close()
+
+	vals, err := os.ReadFile(filepath.Join(ws.Dir, "values.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got values.Tree
+	if err := yaml.Unmarshal(vals, &got); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := values.Get(got, "replicaCount"); v != 2 {
+		t.Errorf("values not written: %v", got)
+	}
+
+	doc, err := os.ReadFile(ws.Helmfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hf document
+	if err := yaml.Unmarshal(doc, &hf); err != nil {
+		t.Fatal(err)
+	}
+	if len(hf.Releases) != 1 {
+		t.Fatalf("want one release, got %d", len(hf.Releases))
+	}
+	r := hf.Releases[0]
+	if r.Name != "glm-53" || r.Namespace != "modelforge" || r.Version != "0.8.0" {
+		t.Errorf("release wrong: %+v", r)
+	}
+	if r.Chart != "oci://harbor.4pd.io/hardcore-tech/sglang" {
+		t.Errorf("chart ref wrong: %q", r.Chart)
+	}
+}
+
+// These are load-bearing for a 20-40 minute cold load, and swissd must behave
+// the same as `make apply` rather than approximately the same.
+func TestHelmDefaultsMatchTheRepo(t *testing.T) {
+	ws, err := Runner{}.Materialize(testPlan())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close()
+
+	doc, _ := os.ReadFile(ws.Helmfile)
+	var hf document
+	if err := yaml.Unmarshal(doc, &hf); err != nil {
+		t.Fatal(err)
+	}
+	d := hf.HelmDefaults
+	if d.Wait || d.Atomic || d.CleanupOnFail {
+		t.Errorf("wait/atomic/cleanupOnFail must all be false: %+v", d)
+	}
+	if d.HistoryMax != 20 {
+		t.Errorf("historyMax = %d, want 20", d.HistoryMax)
+	}
+	if len(d.DiffArgs) != 1 || d.DiffArgs[0] != "--three-way-merge" {
+		t.Errorf("diffArgs = %v", d.DiffArgs)
+	}
+}
+
+func TestWorkspaceIsRemovedUnlessKept(t *testing.T) {
+	ws, err := Runner{}.Materialize(testPlan())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := ws.Dir
+	ws.Close()
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Error("workspace should be removed")
+	}
+
+	kept, err := Runner{KeepWorkspace: true}.Materialize(testPlan())
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept.Close()
+	if _, err := os.Stat(kept.Dir); err != nil {
+		t.Error("--keep-workspace should leave it on disk")
+	}
+	os.RemoveAll(kept.Dir)
+}
+
+func TestLocalChartPathIsAbsolute(t *testing.T) {
+	p := testPlan()
+	p.Chart.Repo, p.Chart.Path = "", "../charts"
+	ws, err := Runner{}.Materialize(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close()
+	doc, _ := os.ReadFile(ws.Helmfile)
+	var hf document
+	_ = yaml.Unmarshal(doc, &hf)
+	// helmfile runs with cwd inside the temp dir, so a relative chart path would
+	// resolve against the wrong place.
+	if !filepath.IsAbs(hf.Releases[0].Chart) {
+		t.Errorf("chart path must be absolute, got %q", hf.Releases[0].Chart)
+	}
+	if hf.Releases[0].Version != "" {
+		t.Error("a local chart path carries no version for helm to resolve")
+	}
+}
+
+func TestNoChartSourceIsAnError(t *testing.T) {
+	p := testPlan()
+	p.Chart.Repo, p.Chart.Path = "", ""
+	if _, err := (Runner{}).Materialize(p); err == nil || !strings.Contains(err.Error(), "no chart source") {
+		t.Fatalf("got %v", err)
+	}
+}

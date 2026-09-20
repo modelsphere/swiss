@@ -5,13 +5,15 @@ Go backend for the deploy control plane described in
 It writes nothing to a cluster and nothing to the charts repo.
 
 ```
-chart/                the helm chart that deploys swissd
+helm/swiss/           the helm chart that deploys swissd
 cmd/swiss/            the CLI
 cmd/swissd/           the server (read path)
 web/                  the SPA, embedded into swissd
 internal/values/      values trees, helm merge semantics, the ownership table
 internal/catalog/     swiss-catalog entries; validates what it loads
 internal/config/      the one config document, shared by both binaries
+internal/exec/        materialises a plan and runs helmfile against it
+internal/store/       sqlite: plans, deployments, audit log
 internal/site/        site profile: paths, mirror, route ConfigMaps
 internal/compose/     the four-layer merge -- the heart
 internal/plan/        the Plan, shared with the server that does not exist yet
@@ -21,9 +23,19 @@ internal/server/      swissd: config, read API, SPA serving
 examples/             an example site profile and swissd config
 ```
 
-`swissd` serves the **read path** only: it browses the catalog, lists live
-releases, and reports which of them Swiss knows the provenance of. It writes
-nothing, to a cluster or anywhere else, and holds no database.
+`swissd` serves the read path always, and the write path when
+`server.allowDeploy` is on:
+
+```
+GET  /api/cluster /api/peers /api/catalog /api/catalog/{model}
+GET  /api/releases /api/nodes /api/deployments /api/runs
+POST /api/plans /api/diff /api/apply /api/install     (allowDeploy only)
+```
+
+With it off, every mutating endpoint returns 403 saying so, and swissd needs no
+database and no write RBAC. With it on, each apply writes the plan into
+`swiss-plan-<release>` beside the release, so the cluster describes itself and
+the database is rebuildable rather than precious.
 
 The rule that keeps the two frontends honest: **no compose, validate, render or
 apply logic lives outside `internal/`.** If the server needs something the CLI
@@ -109,7 +121,7 @@ fail loudly when it disagrees, it hangs the group at rendezvous.
 ```sh
 docker build -t harbor.4pd.io/hardcore-tech/swissd:0.1.0 --build-arg VERSION=0.1.0 .
 
-helm install swiss ./chart -n swiss --create-namespace \
+helm install swiss ./helm/swiss -n swiss --create-namespace \
   --set config.cluster.name=prod-b300 \
   --set 'rbac.namespaces={modelforge,kimi}'
 ```
@@ -151,10 +163,12 @@ binary with no UI in it serves an explanatory 404 while the API keeps working.
 
 ## Not built
 
-- `diff`, `emit`, `apply` — present as subcommands that fail loudly. A subcommand
-  that silently does nothing is worse than one that is missing.
+- `emit` — the git-path writer, still a subcommand that fails loudly.
 - **Preflight.** `internal/cluster` has the interface and a fake; no rule is
   implemented. The seven rules are listed in the design doc.
+- **`swissd reconcile`** — the DB rebuild from a cluster scan. The plan
+  ConfigMaps it would read are written; nothing reads them back yet.
+- **Auth.** No identity anywhere, so `runs.actor` is always empty.
 - **Catalog over git/HTTP.** `catalog.Load` reads a local checkout. `Catalog.Ref`
   reads `.git/HEAD` directly, so a plan composed from a tarball records no ref.
 - **helm SDK.** `render.Exec` shells out. `helm.sh/helm/v4` is the intended home

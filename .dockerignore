@@ -7,7 +7,7 @@ web/dist
 .gitignore
 *.md
 docs/
-chart/
+helm/
 examples/
 Dockerfile
 .dockerignore

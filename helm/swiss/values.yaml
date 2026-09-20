@@ -45,6 +45,14 @@ config:
   # How long a fetched catalog or profile is reused before refetching.
   cacheTTL: 60s
 
+  # Gates every endpoint that changes a cluster. Must be set together with
+  # rbac.allowDeploy below; on its own it only produces failing applies.
+  allowDeploy: false
+
+  # Drafts, plans and the audit log. Never the source of truth for what is
+  # deployed -- every applied plan is also written beside its release.
+  database: /data/swiss.db
+
 # ---------------------------------------------------------------------------
 # The site profile: what makes a model work in THIS cluster. It describes this
 # cluster, so it lives in this cluster -- and a lost database does not take the
@@ -107,10 +115,25 @@ rbac:
     # - modelforge
     # - kimi
 
-  # Write access to ConfigMaps in those namespaces, for the per-release plan
-  # (swiss-plan-<release>). The server writes nothing today, so leave this off
-  # until apply lands -- an unused permission is only ever a liability.
-  allowWrite: false
+  # Deploy permissions: everything the sglang and vllm charts actually render,
+  # and nothing else. Off by default -- an unused permission is only ever a
+  # liability.
+  #
+  # Granted when on, in the namespaces above:
+  #   core                      configmaps, services, serviceaccounts, secrets
+  #   apps                      deployments
+  #   policy                    poddisruptionbudgets
+  #   rbac                      roles, rolebindings   (the cart subchart)
+  #   monitoring.coreos.com     servicemonitors
+  #   leaderworkerset.x-k8s.io  leaderworkersets
+  #   autoscaling.4pd.io        llmscalers
+  #   inference.x-k8s.io        llmslorequirements
+  #   routing.gpucluster.io     modelroutes
+  #
+  # roles/rolebindings means swissd can create RBAC -- a privilege-escalation
+  # path, bounded by Kubernetes to what swissd already holds. Still the widest
+  # thing here.
+  allowDeploy: false
 
 serviceAccount:
   create: true
@@ -175,6 +198,18 @@ podAnnotations: {}
 podLabels: {}
 
 logLevel: info
+
+# Scratch space for helm caches and the per-operation workspace.
+tmpSizeLimit: 1Gi
+
+# Where the database lives when config.allowDeploy is on. emptyDir loses the
+# audit log and drafts on restart; the inventory itself survives, because
+# `swissd reconcile` rebuilds it from the cluster.
+persistence:
+  enabled: false
+  size: 2Gi
+  storageClass: ""
+  existingClaim: ""
 
 # /healthz is liveness: the process is up. /readyz is readiness and reports the
 # cluster, the profile and the catalog separately -- so a catalog that goes

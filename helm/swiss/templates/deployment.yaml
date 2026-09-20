@@ -1,3 +1,6 @@
+{{- if and .Values.config.allowDeploy (not .Values.rbac.allowDeploy) }}
+{{- fail "config.allowDeploy is on but rbac.allowDeploy is off: swissd would accept applies it has no permission to perform" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -56,10 +59,30 @@ spec:
             - name: config
               mountPath: /etc/swiss
               readOnly: true
+            # helm and helmfile write caches, plugin state and the materialised
+            # workspace; the root filesystem is read-only.
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.config.allowDeploy }}
+            - name: data
+              mountPath: {{ dir .Values.config.database }}
+            {{- end }}
       volumes:
         - name: config
           configMap:
             name: {{ include "swiss.fullname" . }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ .Values.tmpSizeLimit }}
+        {{- if .Values.config.allowDeploy }}
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | default (printf "%s-data" (include "swiss.fullname" .)) }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

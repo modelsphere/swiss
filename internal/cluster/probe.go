@@ -84,3 +84,9 @@ func (f Fake) Nodes(context.Context) ([]Node, error)       { return f.Nod, nil }
 func (f Fake) ConfigMap(_ context.Context, ref string) (map[string]string, error) {
 	return f.Maps[ref], nil
 }
+
+// Writer is the write half, kept separate so a read-only swissd can hold a
+// Probe and nothing else.
+type Writer interface {
+	PutConfigMap(ctx context.Context, ref string, data map[string]string) error
+}

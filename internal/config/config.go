@@ -59,6 +59,16 @@ type Profile struct {
 
 type Server struct {
 	Addr string `yaml:"addr,omitempty"`
+	// Database path. Drafts, plans and the audit log; never the source of truth
+	// for what is deployed.
+	Database string `yaml:"database,omitempty"`
+	// AllowDeploy gates every endpoint that changes a cluster. Off means swissd
+	// is a read-only view, which is what it should be until its RBAC is
+	// widened to match.
+	AllowDeploy bool `yaml:"allowDeploy,omitempty"`
+	// Binaries, when not on PATH.
+	HelmBin     string `yaml:"helmBin,omitempty"`
+	HelmfileBin string `yaml:"helmfileBin,omitempty"`
 	// CacheTTL bounds how long a fetched catalog or profile is reused.
 	CacheTTL time.Duration `yaml:"cacheTTL,omitempty"`
 	// Peers are the other clusters' swissd instances, for the nav switcher.
@@ -122,6 +132,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Server.CacheTTL == 0 {
 		c.Server.CacheTTL = 60 * time.Second
+	}
+	if c.Server.Database == "" {
+		c.Server.Database = "/tmp/swiss/swiss.db"
 	}
 }
 

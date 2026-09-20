@@ -14,7 +14,9 @@ import (
 	"github.com/aceforeverd/swiss/internal/catalog"
 	"github.com/aceforeverd/swiss/internal/cluster"
 	"github.com/aceforeverd/swiss/internal/config"
+	"github.com/aceforeverd/swiss/internal/exec"
 	"github.com/aceforeverd/swiss/internal/site"
+	"github.com/aceforeverd/swiss/internal/store"
 )
 
 // Server is the read path. It holds no database: every answer comes from the
@@ -27,6 +29,8 @@ type Server struct {
 	log     *slog.Logger
 	version string
 	web     fs.FS
+	store   *store.Store
+	writer  cluster.Writer
 
 	mu        sync.Mutex
 	cat       *catalog.Catalog
@@ -38,6 +42,12 @@ type Server struct {
 func New(cfg *config.Config, probe cluster.Probe, log *slog.Logger, version string) *Server {
 	return &Server{cfg: cfg, probe: probe, log: log, version: version}
 }
+
+// SetStore installs the database. Without one swissd is read-only.
+func (s *Server) SetStore(st *store.Store) { s.store = st }
+
+// SetWriter enables the endpoints that change a cluster.
+func (s *Server) SetWriter(w cluster.Writer) { s.writer = w }
 
 // Catalog returns the opened catalog, refetching once the TTL has passed.
 //
@@ -125,6 +135,20 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/releases", s.handleReleases)
 	mux.HandleFunc("GET /api/deployments", s.handleDeployments)
 	mux.HandleFunc("GET /api/nodes", s.handleNodes)
+	mux.HandleFunc("GET /api/runs", s.handleRuns)
+
+	if s.cfg.Server.AllowDeploy {
+		mux.HandleFunc("POST /api/plans", s.handlePlan)
+		mux.HandleFunc("POST /api/diff", s.handleDiff)
+		mux.HandleFunc("POST /api/apply", s.handleApply(exec.Upgrade))
+		mux.HandleFunc("POST /api/install", s.handleApply(exec.Install))
+	} else {
+		for _, p := range []string{"POST /api/plans", "POST /api/diff", "POST /api/apply", "POST /api/install"} {
+			mux.HandleFunc(p, func(w http.ResponseWriter, _ *http.Request) {
+				writeError(w, http.StatusForbidden, "this swissd is read-only: set server.allowDeploy and grant rbac.allowDeploy")
+			})
+		}
+	}
 	// Least specific, so it only sees what the routes above did not match.
 	mux.HandleFunc("GET /", s.spa)
 	return s.recover(s.logRequests(mux))
