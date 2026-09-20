@@ -1,53 +1,37 @@
 # Site profile: what makes a model work in THIS cluster.
-#
-# Belongs in the private charts repo next to deploys/, not in the public catalog.
-# Everything here is either secret-ish (a registry, a decision server) or simply
-# not the same for two readers (host paths, namespaces, the openresty ConfigMap).
-name: prod
+name: testenv
+namespace: swiss-deploy
 
-# Default namespace. A deploy may override it; there is no cluster-current
-# default, because a release landing in whatever namespace kubectl happens to be
-# pointed at is how you get two engines on one set of GPUs.
-namespace: modelforge
-
-# Where charts come from. chartPath is a local checkout, which is fine for the
-# CLI; a server needs chartRepo, because it has no checkout to point at.
-chartPath: ../charts
-# chartRepo: oci://harbor.4pd.io/hardcore-tech
+# Charts come from the registry. A local path works for the CLI; swissd has no
+# checkout to point at, so the registry is the real answer.
+chartRepo: https://harbor.4pd.io/chartrepo/hardcore-tech/
+# chartPath: ../charts
 
 registry:
-  # Engine images are pulled from the mirror, keeping the catalog's tag. The
-  # catalog pins WHICH build; this says where it is fetched from.
+  # Engine images are pulled from the mirror, keeping the catalog's tag.
   mirror: harbor.4pd.io/hardcore-tech
 
 model:
-  # model.localPath, built from the catalog's source.hf. A template rather than a
-  # per-model table: a site that has to add a row for every model in a public
-  # catalog will not keep up with it.
-  #   {{hf}}    zai-org/GLM-5.3
-  #   {{org}}   zai-org
-  #   {{name}}  GLM-5.3
-  #   {{model}} glm-5.3     (the catalog entry name)
-  pathTemplate: /mnt/disk0/models/{{name}}
+  # model.localPath, built from the catalog's source.hf.
+  #   {{hf}} modelforge/Qwen3.6-35B-A3B-793303
+  #   {{org}} modelforge   {{name}} Qwen3.6-35B-A3B-793303   {{model}} <entry name>
+  pathTemplate: /mnt/disk0/models/{{org}}/{{name}}
+  # Weights that do not sit where the template says. Kimi is at the models root
+  # rather than under an org directory, and a template with no escape hatch
+  # would simply make it undeployable.
+  overrides:
+    kimi-k2.5: /mnt/disk0/models/Kimi-K2.5
 
 cache:
   enabled: true
   hostPath: /mnt/disk0/sglang-cache
 
 scaler:
-  # The decision server, under metricProvider: Custom. A deploy chooses the
-  # provider; the address is the same for every model here either way.
   serverAddress: http://decision-gen.llm-scaler.svc:80
 
 route:
-  # The shared openresty ConfigMap every model on this entrypoint writes one key
-  # into. Route-collision preflight is scoped to this value: two models with the
-  # same route name here is the failure the namespace split does not catch.
   nginxConfigMap: llm-route/openresty-conf
   monitorConfigMap: llm-route/monitor-conf
 
 nodes:
-  # A full GPU node. Used to derive cache.maxSlotsPerNode as
-  # floor(gpusPerNode / model gpus) -- 1 slot for an 8-GPU model, 4 for a 2-GPU
-  # one, which is the rule spelled out in the chart's own comment.
   gpusPerNode: 8

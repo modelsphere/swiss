@@ -60,7 +60,9 @@ func Compose(in Input) (*plan.Plan, error) {
 	prov := values.Provenance{}
 	values.Merge(out, catalogVals, values.LayerCatalog, prov)
 	values.Merge(out, siteVals, values.LayerSite, prov)
-	applyDerived(out, prov, in)
+	if err := applyDefaults(out, prov, in); err != nil {
+		return nil, err
+	}
 	values.Merge(out, in.Overrides, values.LayerForm, prov)
 
 	p := &plan.Plan{
@@ -129,13 +131,6 @@ func catalogLayer(e catalog.Entry, v catalog.Variant) (values.Tree, error) {
 func siteLayer(p site.Profile, e catalog.Entry, v catalog.Variant) (values.Tree, error) {
 	out := values.Tree{}
 
-	localPath, err := p.LocalPath(e.Source.HF, e.Name)
-	if err != nil {
-		return nil, err
-	}
-	if err := values.Set(out, "model.localPath", localPath); err != nil {
-		return nil, err
-	}
 	if v.Image != nil {
 		if err := values.Set(out, "image.repository", p.MirrorImage(v.Image.Repository)); err != nil {
 			return nil, err
@@ -182,30 +177,38 @@ func siteLayer(p site.Profile, e catalog.Entry, v catalog.Variant) (values.Tree,
 	return out, values.CheckOwnership(out, values.LayerSite)
 }
 
-// applyDerived computes the short, enumerated set of values that follow from
-// catalog x site and that nobody should be asked to work out by hand.
+// applyDefaults fills values the site can work out but the deploy may override.
+// It runs before the form is merged, so an explicit override simply wins and is
+// attributed to the form.
 //
-// Two rules keep this from becoming magic, and both are load-bearing: every rule
-// is listed here by name, and a derived value is skipped entirely when a human
-// already set it. It is also recorded in provenance, so it shows up in a plan as
-// "derived" rather than appearing in a cluster from nowhere.
-func applyDerived(out values.Tree, prov values.Provenance, in Input) {
+// Every rule is listed here by name -- that is what keeps it from being magic --
+// and each one lands in provenance, so it shows up in a plan rather than
+// appearing in a cluster from nowhere.
+func applyDefaults(out values.Tree, prov values.Provenance, in Input) error {
+	// model.localPath from the site's path template. Owned by the form because
+	// weights move and a deploy has to be able to say so.
+	localPath, err := in.Profile.LocalPath(in.Entry.Source.HF, in.Entry.Name)
+	if err != nil {
+		return err
+	}
+	if err := values.Set(out, "model.localPath", localPath); err != nil {
+		return err
+	}
+	prov["model.localPath"] = values.LayerSite
+
 	// cache.maxSlotsPerNode: how many pods of this model can share a node's
 	// cache directory. The chart's own comment gives the rule -- 1 for an 8-GPU
 	// model, 4 for a 2-GPU one -- which is just floor(node GPUs / model GPUs).
 	if in.Profile.Nodes.GPUsPerNode > 0 && in.Variant.Requires.GPUs > 0 {
 		if _, set := values.Get(out, "cache.maxSlotsPerNode"); !set {
-			if _, overridden := values.Get(in.Overrides, "cache.maxSlotsPerNode"); !overridden {
-				slots := in.Profile.Nodes.GPUsPerNode / in.Variant.Requires.GPUs
-				if slots < 1 {
-					slots = 1
-				}
-				if err := values.Set(out, "cache.maxSlotsPerNode", slots); err == nil {
-					prov["cache.maxSlotsPerNode"] = values.LayerDerived
-				}
+			slots := max(in.Profile.Nodes.GPUsPerNode/in.Variant.Requires.GPUs, 1)
+			if err := values.Set(out, "cache.maxSlotsPerNode", slots); err != nil {
+				return err
 			}
+			prov["cache.maxSlotsPerNode"] = values.LayerDerived
 		}
 	}
+	return nil
 }
 
 func toAnySlice(s []string) []any {

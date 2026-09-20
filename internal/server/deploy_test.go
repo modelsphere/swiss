@@ -61,7 +61,7 @@ func post(t *testing.T, srv *httptest.Server, path string, body any) (int, map[s
 func TestReadOnlyServerRefusesDeployEndpoints(t *testing.T) {
 	srv, _ := deployServer(t, false)
 	for _, p := range []string{"/api/plans", "/api/diff", "/api/apply", "/api/install"} {
-		code, body := post(t, srv, p, map[string]any{"model": "glm-5.3"})
+		code, body := post(t, srv, p, map[string]any{"model": "qwen3.6-35b-a3b"})
 		if code != http.StatusForbidden {
 			t.Errorf("%s: status %d, want 403", p, code)
 		}
@@ -78,7 +78,7 @@ func TestReadOnlyServerRefusesDeployEndpoints(t *testing.T) {
 func TestPlanEndpointComposesAndStores(t *testing.T) {
 	srv, s := deployServer(t, true)
 	code, body := post(t, srv, "/api/plans", map[string]any{
-		"model": "glm-5.3", "release": "glm-53",
+		"model": "qwen3.6-35b-a3b", "release": "glm-53",
 		"overrides": map[string]any{"replicaCount": 2},
 	})
 	if code != 200 {
@@ -98,7 +98,7 @@ func TestPlanEndpointComposesAndStores(t *testing.T) {
 func TestPlanEndpointRejectsCatalogOverrides(t *testing.T) {
 	srv, _ := deployServer(t, true)
 	code, body := post(t, srv, "/api/plans", map[string]any{
-		"model":     "glm-5.3",
+		"model":     "qwen3.6-35b-a3b",
 		"overrides": map[string]any{"extraArgs": []string{"--tp-size=2"}},
 	})
 	if code != http.StatusBadRequest {
@@ -118,8 +118,11 @@ func TestApplyNeedsAStoredPlan(t *testing.T) {
 // stale expectRevision must be refused too.
 func TestApplyPreconditionsAreEnforcedByTheServer(t *testing.T) {
 	srv, _ := deployServer(t, true)
-	_, body := post(t, srv, "/api/plans", map[string]any{"model": "glm-5.3", "release": "glm-53"})
-	hash := body["hash"].(string)
+	code, body := post(t, srv, "/api/plans", map[string]any{"model": "qwen3.6-35b-a3b", "release": "glm-53"})
+	hash, _ := body["hash"].(string)
+	if code != 200 || hash == "" {
+		t.Fatalf("plan failed: %d %v", code, body)
+	}
 
 	code, out := post(t, srv, "/api/install", map[string]any{"planHash": hash})
 	if code != http.StatusConflict {
@@ -133,9 +136,13 @@ func TestApplyPreconditionsAreEnforcedByTheServer(t *testing.T) {
 
 func TestApplyOnAMissingReleaseIsAConflict(t *testing.T) {
 	srv, _ := deployServer(t, true)
-	_, body := post(t, srv, "/api/plans", map[string]any{"model": "kimi-k2.5", "release": "not-live"})
-	hash := body["hash"].(string)
-	if code, out := post(t, srv, "/api/apply", map[string]any{"planHash": hash}); code != http.StatusConflict {
+	code, body := post(t, srv, "/api/plans", map[string]any{"model": "kimi-k2.5", "release": "not-live"})
+	hash, _ := body["hash"].(string)
+	if code != 200 || hash == "" {
+		t.Fatalf("plan failed: %d %v", code, body)
+	}
+	code, out := post(t, srv, "/api/apply", map[string]any{"planHash": hash})
+	if code != http.StatusConflict {
 		t.Fatalf("status %d %v", code, out)
 	}
 }
@@ -147,7 +154,7 @@ func TestPlanConfigMapRefIsBesideTheRelease(t *testing.T) {
 	w := &fakeWriter{}
 	s.SetWriter(w)
 
-	p, err := s.compose(context.Background(), planRequest{Model: "glm-5.3", Release: "glm-53"})
+	p, err := s.compose(context.Background(), planRequest{Model: "qwen3.6-35b-a3b", Release: "glm-53"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,17 +171,17 @@ func TestPlanConfigMapRefIsBesideTheRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sum.Model != "glm-5.3" || sum.Hash != p.Hash {
+	if sum.Model != "qwen3.6-35b-a3b" || sum.Hash != p.Hash {
 		t.Fatalf("plan did not round trip: %+v", sum)
 	}
 }
 
 func TestRunsAreRecorded(t *testing.T) {
 	srv, s := deployServer(t, true)
-	post(t, srv, "/api/plans", map[string]any{"model": "glm-5.3", "release": "glm-53"})
+	post(t, srv, "/api/plans", map[string]any{"model": "qwen3.6-35b-a3b", "release": "glm-53"})
 	// No helmfile in the test environment, so diff fails -- the audit entry must
 	// still exist, carrying the error.
-	post(t, srv, "/api/diff", map[string]any{"model": "glm-5.3", "release": "glm-53"})
+	post(t, srv, "/api/diff", map[string]any{"model": "qwen3.6-35b-a3b", "release": "glm-53"})
 
 	runs, err := s.store.Runs(context.Background(), "prod-b300", 10)
 	if err != nil {
@@ -185,5 +192,39 @@ func TestRunsAreRecorded(t *testing.T) {
 	}
 	if runs[0].Action != "diff" || runs[0].Error == "" {
 		t.Errorf("unexpected run: %+v", runs[0])
+	}
+}
+
+func TestServiceIDAndLocalPathAreFirstClassFormFields(t *testing.T) {
+	srv, _ := deployServer(t, true)
+	code, body := post(t, srv, "/api/plans", map[string]any{
+		"model":     "qwen3.6-35b-a3b",
+		"release":   "fallback-modelforge-01",
+		"serviceId": "fallback-modelforge-01",
+		"localPath": "/mnt/disk1/models/moved",
+	})
+	if code != 200 {
+		t.Fatalf("status %d: %v", code, body)
+	}
+	vals := body["values"].(map[string]any)
+	if vals["serviceId"] != "fallback-modelforge-01" {
+		t.Errorf("serviceId = %v", vals["serviceId"])
+	}
+	model := vals["model"].(map[string]any)
+	if model["localPath"] != "/mnt/disk1/models/moved" {
+		t.Errorf("localPath = %v", model["localPath"])
+	}
+	prov := body["provenance"].(map[string]any)
+	if prov["serviceId"] != "form" || prov["model.localPath"] != "form" {
+		t.Errorf("both must be attributed to the form: %v / %v", prov["serviceId"], prov["model.localPath"])
+	}
+}
+
+func TestLocalPathFallsBackToTheSiteTemplate(t *testing.T) {
+	srv, _ := deployServer(t, true)
+	_, body := post(t, srv, "/api/plans", map[string]any{"model": "kimi-k2.5"})
+	prov := body["provenance"].(map[string]any)
+	if prov["model.localPath"] != "site" {
+		t.Errorf("the template default must be attributed to the site, got %v", prov["model.localPath"])
 	}
 }

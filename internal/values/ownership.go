@@ -61,10 +61,17 @@ var owners = []struct {
 	{"image.tag", LayerCatalog},
 	{"image.digest", LayerCatalog},
 
+	// Form, stated rather than left to the default below because both are
+	// central to a deploy. serviceId is the identity modelRoute, sloRequirement
+	// and the scaler all key off. model.localPath has a site-wide default built
+	// from the path template, but weights move and a deploy has to be able to
+	// say where they are.
+	{"serviceId", LayerForm},
+	{"model.localPath", LayerForm},
+
 	// Site: what makes it work in this cluster. image.repository is split from
 	// image.tag deliberately -- the catalog pins which build, the site says
 	// which mirror it is pulled from, and neither can answer the other.
-	{"model.localPath", LayerSite},
 	{"cache", LayerSite},
 	{"image.repository", LayerSite},
 	{"scaler.serverAddress", LayerSite},

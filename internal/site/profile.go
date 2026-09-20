@@ -50,6 +50,10 @@ type ModelPaths struct {
 	// catalog entry name. A template rather than a per-model table: a site that
 	// has to add a row here for every model in a public catalog will not keep up.
 	PathTemplate string `yaml:"pathTemplate"`
+	// Overrides, keyed by catalog model name, for weights that do not sit where
+	// the template says. Real layouts are not uniform; a template with no escape
+	// hatch just means the first irregular model cannot be deployed at all.
+	Overrides map[string]string `yaml:"overrides,omitempty"`
 }
 
 type Cache struct {
@@ -119,6 +123,9 @@ func Parse(raw []byte, origin string) (*Profile, error) {
 
 // LocalPath renders model.localPath for one model.
 func (p Profile) LocalPath(hf, model string) (string, error) {
+	if v, ok := p.Model.Overrides[model]; ok {
+		return v, nil
+	}
 	org, name, ok := strings.Cut(hf, "/")
 	if !ok {
 		return "", fmt.Errorf("source.hf %q is not org/name", hf)

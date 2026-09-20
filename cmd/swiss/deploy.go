@@ -17,6 +17,7 @@ const (
 
 type deployFlags struct {
 	model, variant, release, namespace, planFile, chartRoot string
+	serviceID, localPath                                    string
 	sets                                                    []string
 	keepWorkspace                                           bool
 	yes                                                     bool
@@ -29,6 +30,8 @@ func (d *deployFlags) bind(c *cobra.Command) {
 	f.StringVar(&d.variant, "variant", "", "variant id")
 	f.StringVar(&d.release, "release", "", "helm release name")
 	f.StringVar(&d.namespace, "namespace", "", "namespace")
+	f.StringVar(&d.serviceID, "service-id", "", "serviceId for this release")
+	f.StringVar(&d.localPath, "local-path", "", "model.localPath, overriding the site's path template")
 	f.StringArrayVar(&d.sets, "set", nil, "deploy-time override, key=value")
 	f.StringVarP(&d.planFile, "plan", "p", "", "use an existing plan file")
 	f.StringVar(&d.chartRoot, "chart-root", os.Getenv("SWISS_CHART_ROOT"), "chart directory, when the profile names no repo")
@@ -42,7 +45,8 @@ func (d *deployFlags) plan(cmd *cobra.Command) (*plan.Plan, error) {
 	if d.model == "" {
 		return nil, fmt.Errorf("pass --model, or --plan with an existing plan")
 	}
-	return buildPlan(cmd.Context(), d.model, d.variant, d.release, d.namespace, d.sets)
+	return buildPlan(cmd.Context(), d.model, d.variant, d.release, d.namespace,
+		append(d.sets, kv("serviceId", d.serviceID), kv("model.localPath", d.localPath)))
 }
 
 func (d *deployFlags) runner() exec.Runner {

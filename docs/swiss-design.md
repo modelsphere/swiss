@@ -1,14 +1,13 @@
 # Swiss: a deploy control plane for the sglang and vllm charts
 
-**Status:** P0 built, 2026-09-20. The charts, `helmfile.yaml` and the `Makefile`
-targets are unchanged by this document; Swiss feeds them rather than replacing
-them.
+**Status:** 2026-09-20. The charts, `helmfile.yaml` and the `Makefile` targets are
+unchanged by this document; Swiss feeds them rather than replacing them.
 
-What exists: the `swiss` CLI composes a model from the catalog, a site profile
-and deploy-time overrides, and renders it through `helm template` against the
-real charts. `catalog list|show`, `plan`, `plan --explain` and `render` work.
-`diff`, `emit` and `apply` are subcommands that fail loudly. `swissd` does not
-exist. See `../README.md`.
+What exists: both binaries. `swiss` composes a model from the catalog, a site
+profile and deploy-time overrides, then renders, diffs, applies or installs it.
+`swissd` serves the same core over HTTP with a read-only SPA embedded in it, and
+a write path behind `server.allowDeploy`. Not built: preflight, `emit`,
+`reconcile`, auth.
 
 Today a release is created by hand: copy a values file from `deploys/production/`,
 edit it, add an entry to `helmfile.yaml`, `make diff`, `make apply`. That works,
@@ -37,33 +36,66 @@ Five pieces, three of them deployed.
 
 | piece | artifact | runtime | state |
 | --- | --- | --- | --- |
-| **swiss-catalog** | public git repo, data only | none | built |
+| **swiss-catalog** | published static files, data only | none | built |
 | **core** | Go module, `internal/` | library | built |
-| **`swiss`** | binary | CLI, stateless | P0 built |
-| **`swissd`** | binary | HTTP server | not started |
-| **web UI** | React + TypeScript, `embed.FS` into `swissd` | — | not started |
+| **`swiss`** | binary | CLI, stateless | built |
+| **`swissd`** | binary | HTTP server | built |
+| **web UI** | React + TypeScript, `embed.FS` into `swissd` | — | read-only |
 
 The SPA is embedded in the server binary rather than served separately: one
 artifact to deploy, no CORS, no second nginx to configure. Deployed things are
 therefore the catalog repo, `swissd`, and the charts in harbor.
 
 `swiss` and `swissd` come out of one Go module and share everything that matters.
-Go because helm and helmfile are Go — the render path can use the helm SDK in
-process and read `charts/*/values.schema.json` directly, instead of shelling out
-and juggling chart tarballs.
+
+The chart lives in `swiss/helm/swiss` rather than the parent repo's `charts/`, so
+that directory is the whole of Swiss — Go, web, image and deployment together —
+and splitting it into its own repo later is a move rather than a reassembly. It
+is deliberately **not** in `helmfile.yaml`: that file is the model-release
+inventory ("every sglang release running in production, and nothing else"), and
+swissd is not a model. That also keeps swissd out of its own inventory view.
+
+The image is four stages: the SPA is built with node, embedded into the Go
+binary, helm/helmfile/helm-diff are fetched as pinned static binaries, and the
+result runs on `distroless/static` as non-root with a read-only root filesystem.
+No shell, no package manager, no libc.
 
 ## The catalog
 
-A public git repo of model entries, pinned by commit SHA. Not a branch: a public
-catalog that moves under you is a supply-chain surface, and the SHA is what makes
-a deploy reproducible six months later.
+A published static site: `index.json` plus the entry documents it points at,
+served over HTTPS or read from a directory. There is no git protocol and no
+cloning — making the consumer speak git would buy nothing a static file server
+does not already give it.
 
 ```
 swiss-catalog/
-  index.json                 generated, the published surface
+  index.json                 generated, committed, the published surface
   schema/entry.schema.json
-  models/glm-5.3/entry.yaml
+  models/<name>/entry.yaml
+  hack/{build-index,validate,serve}.sh
 ```
+
+`index.json` is fetched once to render a listing; an entry is fetched only when a
+model is opened. A listing must not cost one request per model, which is why
+`IndexModel` is a separate type from `Entry` and carries no variant `values` —
+nothing can compose from a summary and render a model with half its flags
+missing.
+
+**The catalog reference is a digest of the index bytes**, not a git SHA. Over
+plain HTTP no SHA is available, and an ETag is the server's opinion rather than
+the content's; hashing what was actually read gives every source the same kind of
+reference, and two consumers that fetched the same bytes agree without
+coordinating. That reference is recorded in every plan.
+
+An index is remote input. Paths in it are checked before they are fetched, a
+`count` that disagrees with the list is refused rather than guessed at, and an
+entry whose name disagrees with the index it came from is an error — one of them
+is stale, and composing from the wrong one deploys a model nobody chose.
+
+`apiVersion: catalog.swiss/v1` is a version marker in a document, **not** a
+Kubernetes CRD. Nothing is registered with an API server. The group-shaped name
+is borrowed convention and is a known trip hazard in this repo, which contains
+real CRDs in exactly that shape; see Open.
 
 Because the repo is public, site-specific keys are not merely discouraged there,
 they are unusable — a namespace, an `outputConfigMap` or a harbor URL in a public
@@ -73,60 +105,69 @@ it is about thirty lines.
 
 ### An entry is a matrix, not a deploy
 
-`model.yaml` at the repo root is one worked example of one model on one machine.
-A catalog entry is not that shape. GLM-5.3 on 8×B300 at `--tp-size=8` and the same
-weights on 2 GPUs at `--tp-size=2` are one model and two **variants**, and the
-fields that distinguish them — `extraArgs`, `model.gpus`, `lws.size` — only ever
-move together.
+A catalog entry is not one deploy's values file. One model may be servable in
+several ways, and the fields that distinguish them — `extraArgs`, `requires.gpus`,
+`lws.size`, the engine image — only ever move together.
 
 ```yaml
 apiVersion: catalog.swiss/v1
-name: glm-5.3
-displayName: GLM 5.3
+name: qwen3.6-35b-a3b
+servedName: kimi
 source:
-  hf: zai-org/GLM-5.3            # identity, not a path
-  sizeGiB: 700
-  requiredGlobs: [config.json]   # feeds modelCheck.requiredGlobs
+  hf: modelforge/Qwen3.6-35B-A3B-793303    # identity, not a path
+  requiredGlobs: [config.json, "*.safetensors"]
 variants:
-  - id: sglang-tp8-b300
+  - id: sglang-tp2
+    default: true
     engine: sglang
     chart: { name: sglang, version: "0.8.0" }
-    image: { repository: lmsysorg/sglang, tag: v0.5.19 }
-    requires:
-      gpus: 8
-      gpuProduct: [NVIDIA-B300-SXM6-AC]
-      topology: single-node
+    image: { repository: harbor.4pd.io/hardcore-tech/sglang, tag: v0.5.15-cu129 }
+    requires: { gpus: 2, topology: single-node }
     values:
-      model: { mountPath: /model, hostPathType: Directory, gpus: "8" }
-      extraArgs:
-        - --tp-size=8
-        - --mem-fraction-static=0.85
-        - --reasoning-parser=glm45
-      env: [...]
-      volumes: [...]
-
-  - id: sglang-pp2-lws-h100
-    engine: sglang
-    chart: { name: sglang, version: "0.8.0" }
-    requires: { gpus: 8, gpuProduct: [NVIDIA-H100-80GB-HBM3], topology: lws, nodes: 2 }
-    values:
-      lws: { enabled: true, size: 2 }
-      extraArgs: [--tp-size=8, ...]
+      extraArgs: [--tp-size=2, --mamba-radix-cache-strategy=extra_buffer, ...]
+      startupProbe: { periodSeconds: 15, failureThreshold: 80 }
 ```
 
-Bundling them is not tidiness. A form that lets someone pick `--tp-size=8` and
-a 2-GPU node independently will eventually be used to do exactly that, and the
-failure arrives forty minutes later as an OOM in a log nobody is watching. The
-variant is the unit precisely because its fields cannot be chosen separately.
+Bundling them is not tidiness. A form that lets someone pick `--tp-size=8` and a
+2-GPU node independently will eventually be used to do exactly that, and the
+failure arrives forty minutes later as an OOM in a log nobody is watching.
+
+The production catalog proves the point. Two entries are the same Qwen family on
+the same hardware, and their flags are not interchangeable:
+
+```
+qwen3.6-35b-a3b-glm-5   v0.5.10.post1    --tp=2       --mamba-scheduler-strategy=…
+qwen3.6-35b-a3b         v0.5.15-cu129    --tp-size=2  --mamba-radix-cache-strategy=…
+```
+
+The flag was renamed between those images and argparse **exits** on an unknown
+one, so a tag bump without a flag change is a CrashLoopBackOff that never loads
+the model. Image and `extraArgs` belong to one object or the pairing is only a
+convention.
+
+**Three fields are projected, not copied**, because the schema refuses a second
+spelling of each: `model.name` from `servedName`, `model.gpus` from
+`requires.gpus`, `image.tag` from the variant's image. Two spellings of one fact
+drift — the same line the charts take with `nvidia.com/gpu`.
 
 `chart` names a name and a version, never a repository — the site maps that to
-harbor. `image` is the canonical upstream reference; the site rewrites it to a
-mirror. Both follow from the repo being public.
+harbor. `image` is the canonical reference; the site rewrites it to a mirror.
+Both follow from the catalog being public.
 
 `source.hf` is an identity, not a location. The chart mounts weights from
 `model.localPath` on the host, which is a fact about a cluster, so the catalog
-cannot supply it: the site profile derives the path from `source.hf`, and
-preflight checks it exists before anything is applied.
+cannot supply it.
+
+### The catalog is validated at load, every time
+
+It is fetched over a network from a repo this cluster does not control, so it is
+untrusted input at the point of use; trusting it because some CI somewhere was
+supposed to have run is hoping, not validating. The JSON schema in the catalog
+repo is the authority on shape; the Go loader re-checks the subset a consumer
+must not take on trust, plus the cross-variant rules a per-file schema cannot
+see — notably `lws.size` against `requires.nodes`, which does not fail loudly
+when it disagrees, it hangs the group at rendezvous waiting for a peer that was
+never scheduled.
 
 ## Layers
 
@@ -138,18 +179,31 @@ becomes a question about precedence, and there is no good answer to any of them.
 | --- | --- | --- |
 | chart defaults | everything not claimed below | `charts/*/values.yaml` |
 | **catalog variant** | model identity, and how it parallelizes | `model.{name,mountPath,hostPathType,gpus}`, `extraArgs`, `lws.{enabled,size}`, `env`, `volumes`, `modelCheck.requiredGlobs`, `image` |
-| **site profile** | what makes it work here | `model.localPath`, `cache.hostPath`, the registry rewrite for `image.repository`, `scaler.serverAddress`, `modelRoute.nginx.outputConfigMap`, `modelRoute.monitor.outputConfigMap`, namespace |
-| **user form** | how much, where, how routed | `replicaCount`, `scaler.{minReplicas,maxReplicas,scaleDown}`, `nodeSelector`, `affinity`, `tolerations`, `priorityClassName`, `schedulerName`, `podDisruptionBudget`, `modelRoute.*`, `cart.*`, `sloRequirement.extraSpec` |
+| **site profile** | what makes it work here | `cache.hostPath`, the registry rewrite for `image.repository`, `scaler.serverAddress`, `modelRoute.nginx.outputConfigMap`, `modelRoute.monitor.outputConfigMap`, namespace, and the path template `model.localPath` defaults from |
+| **user form** | how much, where, how routed | **`serviceId`**, **`model.localPath`**, `replicaCount`, `scaler.{minReplicas,maxReplicas,scaleDown}`, `nodeSelector`, `affinity`, `tolerations`, `priorityClassName`, `schedulerName`, `podDisruptionBudget`, `modelRoute.*`, `cart.*`, `sloRequirement.extraSpec` |
+
+Two of those are central enough to be named fields rather than `--set` keys.
+`serviceId` is the identity `modelRoute`, `sloRequirement` and the scaler all key
+off, and it is per release rather than per model or per cluster.
+`model.localPath` has a site-wide default built from the path template, but
+weights move and a deploy has to be able to say where they are -- a template with
+no override just means the first irregular model cannot be deployed at all.
 
 The site profile lives in this repo, alongside `deploys/`. Namespace, route name
 and `serviceId` truth already lives here — `helmfile.yaml` documents at length how
 it was reconstructed — and `make verify` already checks part of it. A second repo
 would split that in half.
 
-### Derived values
+**Ownership is a table, not a convention.** `internal/values/ownership.go` maps
+every values path to exactly one layer, longest prefix wins, and each layer is
+checked before anything merges — so a rejected key never half-applies and the
+error names every offending path at once.
 
-A short, enumerated set is computed from variant × site rather than being asked
-for. `cache.maxSlotsPerNode` is the clear case: the chart's own comment gives the
+### Site defaults and derived values
+
+A short, enumerated set is filled in before the form is merged, so an explicit
+override simply wins and is attributed to the form. `model.localPath` comes from
+the site's path template this way. `cache.maxSlotsPerNode` is the clear case: the chart's own comment gives the
 rule as 1 for an 8-GPU model, 4 for a 2-GPU one, which is ⌊node GPUs ÷
 `model.gpus`⌋ and needs no human.
 
@@ -186,27 +240,64 @@ wrong package.
 
 ```
 cmd/swiss/        CLI
-cmd/swissd/       HTTP server; adds auth, job history, PR creation, the web UI
+cmd/swissd/       HTTP server
+web/              the SPA, embedded into swissd
+helm/swiss/       the chart that deploys swissd
 internal/
-  catalog/   fetch by commit SHA, verify, index
-  compose/   four-layer merge, ownership check, derived rules
-  validate/  the chart's own values.schema.json, plus preflight
-  render/    helm SDK template, in process; diff
+  values/    values trees, helm merge semantics, the ownership table
+  catalog/   index + entry fetch over https or a path; validates what it loads
+  site/      site profile: path template, mirror, route ConfigMaps
+  compose/   the four-layer merge -- the heart
   plan/      the Plan type
-  emit/      values file, helmfile release entry, provenance sidecar
-  cluster/   ClusterProbe: kubeconfig | in-cluster ServiceAccount | fake
+  config/    the one config document, shared by both binaries
+  render/    helm template
+  exec/      materialises a plan and runs helmfile against it
+  cluster/   Probe + Writer: kubeconfig | in-cluster ServiceAccount | fake
+  store/     sqlite: plans, deployments, audit log
+  server/    swissd: read API, write API, SPA serving
 ```
+
+### One config document, for both binaries
+
+```yaml
+catalog: https://models.example.com/swiss-catalog/
+cluster:
+  name: prod-b300
+  profile:
+    configMap: swiss/site-profile     # or file: ./profile.yaml -- exactly one
+server:                               # parsed and ignored by the CLI
+  addr: ":8080"
+  allowDeploy: false
+  peers: [{ name: dev, url: https://swiss.dev.internal }]
+```
+
+They are one tool: the CLI and the server compose the same plans against the same
+catalog and the same cluster wiring, and two formats would eventually disagree.
+Found via `--config`, `$SWISS_CONFIG`, `./swiss.yaml`,
+`~/.config/swiss/swiss.yaml`.
+
+Relative paths in it resolve against the **config file**, not the working
+directory: it is discovered, so it may come from `~/.config` while the shell is
+anywhere at all, and "next to this file" is also the only reading that survives
+the file being moved or mounted elsewhere.
+
+The profile source is named, never sniffed. `swiss/site-profile` is a plausible
+relative path as well as a plausible ConfigMap reference, and guessing wrong
+means composing against another cluster's wiring.
 
 What makes two frontends worth more than one — rather than the same thing built
 twice — is that both produce and consume the same serializable `Plan`:
 
 ```
-swiss plan --model glm-5.3 --variant sglang-tp8-b300 \
-           --profile prod --set scaler.maxReplicas=8  > plan.json
-swiss diff  plan.json      # helmfile diff; touches nothing
-swiss emit  plan.json      # writes deploys/prod/<release>.yaml + the helmfile entry
-swiss apply plan.json
+swiss plan --model qwen3.6-35b-a3b --release fallback-modelforge-01 \
+           --service-id fallback-modelforge-01 -o plan.json
+swiss diff   --plan plan.json     # exit 2 when something would change
+swiss apply  --plan plan.json     # release must exist
+swiss install --plan plan.json    # release must not exist
 ```
+
+**A plan verifies its own hash on read**, so a hand-edited plan is an error
+rather than a surprise in a cluster.
 
 The web form builds the same document. CI consumes it. Either side can hand a
 plan to the other, which is what makes the CLI useful in a pipeline instead of
@@ -322,16 +413,36 @@ the `helm-diff` plugin. A second implementation of "what will change" is a secon
 answer that can disagree with the first, which is the drift every comment in that
 repo is written against.
 
-So `swiss diff` shells to `helm diff upgrade --install ... --three-way-merge`,
-and repo-mode apply shells to `helmfile`. Both honour a `--helm-binary` override,
-for the reason `docs/deploy.md` gives: the helm here is v4 while much of the diff
-ecosystem still assumes v3.
+**helmfile needs files, not a repository.** So both paths materialise a plan into
+a temp directory — `values.yaml` plus a one-release `helmfile.yaml` — and run
+helmfile against it, then discard it. The server needs no checkout, and there is
+exactly one executor rather than a repo path and a server path that can disagree.
+
+```yaml
+helmDefaults:
+    wait: false
+    atomic: false
+    cleanupOnFail: false
+    createNamespace: true
+    historyMax: 20
+    diffArgs: [--three-way-merge]
+releases:
+    - { name: glm-53, namespace: modelforge, chart: oci://…/sglang, version: "0.8.0",
+        values: [values.yaml] }
+```
+
+Those `helmDefaults` are the point, and a test asserts them against the repo's
+own `helmfile.yaml`: swissd must behave *identically* to `make apply`, not
+approximately like it. Local chart paths are made absolute, because helmfile runs
+with its working directory inside the temp dir.
+
+`--helm-binary` is honoured for the reason `docs/deploy.md` gives: the helm here
+is v4 while much of the diff ecosystem still assumes v3. The image pins helm,
+helmfile and helm-diff, so that mismatch lives in one place.
 
 `swiss diff` passes helm-diff's `--detailed-exitcode` through — **0 unchanged,
-2 changed, 1 error** — which is what makes the P0 exit criterion scriptable
-rather than something a person eyeballs. It emits `-o json` from the first
-version, because retrofitting structured output onto a command people already
-parse with `grep` is worse than having it early.
+2 changed, 1 error** — which is what makes the exit criterion scriptable rather
+than something a person eyeballs.
 
 ### Two diffs, and conflating them is the trap
 
@@ -420,6 +531,16 @@ name breaks on the first migration `docs/blue-green-migration.md` describes.
 No repo beside it; management happens in the web UI. Desired state is therefore
 the database, with the cluster as the backstop.
 
+The write path is gated by `server.allowDeploy`, off by default. With it off
+every mutating endpoint returns 403 saying so, and swissd needs no database and
+no write RBAC at all. The chart refuses the half-configured case — `allowDeploy`
+on with `rbac.allowDeploy` off would accept applies it has no permission to
+perform, failing at the API server a long way from the cause.
+
+A failed plan-ConfigMap write does **not** fail the apply. The release is already
+live by then; erroring out would be lying about what happened. It is reported in
+the response and logged.
+
 | store | holds |
 | --- | --- |
 | **SQLite** | `plan` (immutable, keyed by hash), `deployment` (release → current plan, live revision, version), `run` (append-only audit), `draft`, `catalog_cache` |
@@ -436,6 +557,26 @@ costs audit history and drafts rather than the inventory.
 The site profile is a ConfigMap rather than a database row: it describes a
 cluster, so it lives in the cluster it describes, and a lost database does not
 take the route ConfigMap names and mirror config with it.
+
+### RBAC is the decision to read before installing
+
+helm stores each release in a **Secret**, and Kubernetes RBAC cannot filter a
+secret read by label or name. So "read helm releases" and "read every credential
+in those namespaces" are the same grant. There is no third option.
+
+The chart defaults to `rbac.scope: namespaced` with an explicit namespace list,
+and refuses to render with an empty one rather than installing something that can
+see nothing. The cost of that default is real and stated where it is set: a
+release in an unlisted namespace is *invisible*, not reported as untracked, which
+partly defeats the reconciliation view. `rbac.scope: cluster` buys completeness
+for cluster-wide secret reads.
+
+Deploy permissions are a second switch (`rbac.allowDeploy`), granting exactly
+what the sglang and vllm charts render and nothing else — core, apps, policy,
+rbac, `monitoring.coreos.com`, `leaderworkerset.x-k8s.io`, `autoscaling.4pd.io`,
+`inference.x-k8s.io`, `routing.gpucluster.io`. The widest rule in that set is
+`roles`/`rolebindings`, needed by the cart subchart: a privilege-escalation path
+that Kubernetes bounds to what swissd already holds.
 
 ### What git was doing for free, and must be replaced
 
@@ -476,25 +617,28 @@ from it.
 
 ## Phases
 
-- **P0 — `swiss` only.** Catalog repo, entry schema, and fetch → compose →
-  validate → render. No server, no database, no web. **Done.**
-- **P1 — `swiss diff`.** Read-only, needs no repo write, and settles the exit
-  criterion below. Highest value per line in the project, which is why it moved
-  ahead of `emit`: the first thing to learn is whether catalog plus profile
-  reproduces the live releases, before any code exists that writes files you
-  would then have to redo.
+- **P0 — compose and render.** Catalog, entry schema, fetch → compose → validate
+  → render. **Done.**
+- **P1 — `diff`.** Materialised workspace, helmfile, `--detailed-exitcode`.
+  **Done.**
 - **P2 — preflight** as its own command, so the rules can be trusted in isolation
-  before they gate anything.
-- **P3 — the write path.** `emit`, `emit --check`, PR creation.
-- **P4 — `apply`, `install`, `status`, rollback.**
-- **P5 — `swissd`** around the same core: read-only web UI first, then the write
-  path with the approval gate and revision locking.
-- **P6** — multiple clusters and profiles, RBAC.
+  before they gate anything. **Not started** — the `Probe` interface and its fake
+  exist; no rule is implemented.
+- **P3 — `apply` / `install` / revision locking.** **Done** for the CLI and the
+  server; `status` and `emit` are not built.
+- **P4 — `swissd`.** Read API, write API behind `allowDeploy`, SQLite, plan
+  ConfigMaps, embedded read-only SPA. **Done.**
+- **P5 — the write path in the UI**, with the approval gate.
+- **P6** — auth, `reconcile`, multiple clusters in one view.
 
 ### P0's exit criterion
 
 Reproduce all three live releases from catalog plus site profile, and get an
 **empty `helmfile diff`** against the existing `deploys/production/*.yaml`.
+
+**Not yet done.** The catalog now mirrors those three values files and the
+composed `model.localPath` matches each of them exactly, but no diff has been run
+against a cluster.
 
 That empty diff is the entire proof. It says the layering holds for the releases
 that already exist, that nothing was quietly lost in the merge, and that adopting
@@ -507,20 +651,46 @@ this check is mechanical rather than a judgement call.
 
 ## Prerequisite
 
-Charts must be packaged and pushed to harbor before P1 — the "Moving off the
-local chart path" section of `docs/deploy.md`. `swiss` can run against the local
-chart path; `swissd` cannot. Per that section, `helmfile diff` must still come
+Charts must be packaged and pushed to harbor — the "Moving off the local chart
+path" section of `docs/deploy.md`. The site profile now names `chartRepo` by
+default; `swiss` can still run against a local `chartPath`, and `swissd` cannot,
+having no checkout to point at. Per that section, `helmfile diff` must still come
 back empty after the switch, which is the check that what is in harbor is the
 tree these values were tested against.
 
+## Not built
+
+- **Preflight.** The seven rules above; `internal/cluster` has the interface and
+  a fake, and nothing else.
+- **`emit`** — the git-path writer.
+- **`swissd reconcile`** — the DB rebuild from a cluster scan. The plan
+  ConfigMaps it would read are written; nothing reads them back.
+- **Auth.** No identity anywhere, so the audit log records what happened but not
+  who.
+- **The write path in the UI.** The API has it; the SPA is read-only.
+- **Image and chart digests.** Carried, never resolved.
+
 ## Open
 
-- **Catalog trust.** Pinning by SHA and requiring a chart digest covers accidents.
-  It does not cover a compromised catalog repo, and signing is not specified here.
-- **Site profile format.** Assumed to be one YAML file per environment next to
-  `deploys/`. Whether the derived-value rules live in it or in `internal/compose`
-  is unsettled; the argument for `internal/` is that a rule like
-  `maxSlotsPerNode` is a property of the chart, not of a cluster.
+- **`servedName` is doing a job it should not.** The fallback release serves a
+  Qwen model under the name `kimi` so callers do not change — a deploy-time
+  routing decision, but `model.name` is catalog-owned, so today the catalog has
+  to assert that a Qwen model is called "kimi". Wants either a form-layer
+  override or an explicit alias concept.
+- **`apiVersion: catalog.swiss/v1` reads as a CRD group.** It is a document
+  version marker and nothing is registered with an API server, but this repo
+  contains real CRDs in exactly that shape (`routing.gpucluster.io/v1alpha1`,
+  `autoscaling.4pd.io/v1alpha1`), so the ambiguity is likelier here than
+  elsewhere. `schemaVersion: 1` would be unmistakable; renaming touches the
+  schema, the entries, `index.json` and two Go constants.
+- **Namespaces are unconnected to RBAC.** A plan composed for a namespace outside
+  `rbac.namespaces` passes compose and preconditions, then fails at the API
+  server — and in namespaced mode swissd cannot even see releases there, so the
+  precondition check reports "no release" and lets `install` proceed. Wants a
+  preflight rule, or a SelfSubjectAccessReview.
+- **Catalog trust.** Pinning by content digest and requiring a chart digest covers
+  accidents. It does not cover a compromised catalog, and signing is not
+  specified here.
 - **Standard labels.** `docs/deploy.md` notes nothing rendered carries
   `helm.sh/chart`, so a live object cannot report which chart version produced it.
   Swiss's sidecar records this at emit time, which is not the same as reading it

@@ -176,3 +176,37 @@ func TestHashCoversValuesButNotProvenance(t *testing.T) {
 		t.Fatal("a changed value must change the hash")
 	}
 }
+
+func TestFormCanSetServiceIDAndOverrideLocalPath(t *testing.T) {
+	in := testInput()
+	in.Overrides = values.Tree{
+		"serviceId": "modelforge-01-glm",
+		"model":     map[string]any{"localPath": "/mnt/disk1/models/moved"},
+	}
+	p, err := Compose(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := values.Get(p.Values, "serviceId"); v != "modelforge-01-glm" {
+		t.Errorf("serviceId = %v", v)
+	}
+	if v, _ := values.Get(p.Values, "model.localPath"); v != "/mnt/disk1/models/moved" {
+		t.Errorf("localPath = %v, want the override", v)
+	}
+	if p.Provenance["model.localPath"] != values.LayerForm {
+		t.Errorf("an overridden path must be attributed to the form, got %q", p.Provenance["model.localPath"])
+	}
+}
+
+func TestLocalPathDefaultsFromTheSiteTemplate(t *testing.T) {
+	p, err := Compose(testInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := values.Get(p.Values, "model.localPath"); v != "/mnt/disk0/models/GLM-5.3" {
+		t.Errorf("localPath = %v", v)
+	}
+	if p.Provenance["model.localPath"] != values.LayerSite {
+		t.Errorf("the template default must be attributed to the site, got %q", p.Provenance["model.localPath"])
+	}
+}

@@ -98,7 +98,7 @@ func TestCatalogEndpointServesIndexOnly(t *testing.T) {
 
 func TestCatalogModelEndpointFetchesTheEntry(t *testing.T) {
 	srv := testServer(t, fakeProbe())
-	code, body := get(t, srv, "/api/catalog/glm-5.3")
+	code, body := get(t, srv, "/api/catalog/qwen3.6-35b-a3b")
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, body)
 	}
@@ -120,7 +120,7 @@ func TestDeploymentsFlagsUntrackedReleases(t *testing.T) {
 	probe.Rel = []cluster.Release{
 		{Name: "by-hand", Namespace: "modelforge", Chart: "sglang-0.8.0", Status: "deployed", Revision: 1},
 		{Name: "glm-53", Namespace: "modelforge", Chart: "sglang-0.8.0", Status: "deployed", Revision: 4,
-			SwissPlan: []byte("source:\n  model: glm-5.3\n  variant: sglang-tp8-b300\n  ref: sha256:stale\nprofile: prod\n")},
+			SwissPlan: []byte("source:\n  model: qwen3.6-35b-a3b\n  variant: sglang-tp2\n  ref: sha256:stale\nprofile: prod\n")},
 	}
 	srv := testServer(t, probe)
 	code, body := get(t, srv, "/api/deployments")
@@ -144,7 +144,7 @@ func TestDeploymentsFlagsUntrackedReleases(t *testing.T) {
 				t.Errorf("hand-installed release must be reported untracked: %v", row)
 			}
 		case "glm-53":
-			if !row["managed"].(bool) || row["model"] != "glm-5.3" {
+			if !row["managed"].(bool) || row["model"] != "qwen3.6-35b-a3b" {
 				t.Errorf("plan not read off the release: %v", row)
 			}
 		}

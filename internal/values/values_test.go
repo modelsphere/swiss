@@ -39,9 +39,12 @@ func TestOwnerLongestPrefixWins(t *testing.T) {
 		"image.tag":             LayerCatalog,
 		"image.repository":      LayerSite,
 		"model.gpus":            LayerCatalog,
-		"model.localPath":       LayerSite,
-		"scaler.maxReplicas":    LayerForm, // unmatched -> form
-		"somethingNewInChart":   LayerForm,
+		// Site-defaulted from the path template, but the form owns it: weights
+		// move, and a deploy has to be able to say where they are.
+		"model.localPath":     LayerForm,
+		"serviceId":           LayerForm,
+		"scaler.maxReplicas":  LayerForm, // unmatched -> form
+		"somethingNewInChart": LayerForm,
 	} {
 		if got := Owner(path); got != want {
 			t.Errorf("Owner(%q) = %q, want %q", path, got, want)
@@ -50,9 +53,24 @@ func TestOwnerLongestPrefixWins(t *testing.T) {
 }
 
 func TestCheckOwnershipRejectsSiteKeyInCatalogLayer(t *testing.T) {
-	err := CheckOwnership(Tree{"model": map[string]any{"localPath": "/mnt/x"}}, LayerCatalog)
-	if err == nil {
-		t.Fatal("a public catalog must not be able to set model.localPath")
+	for _, tree := range []Tree{
+		{"model": map[string]any{"localPath": "/mnt/x"}},
+		{"cache": map[string]any{"hostPath": "/mnt/cache"}},
+	} {
+		if err := CheckOwnership(tree, LayerCatalog); err == nil {
+			t.Errorf("a public catalog must not be able to set %v", LeafPaths(tree))
+		}
+	}
+}
+
+// Both are central to a deploy, so both must be settable from the form.
+func TestFormOwnsServiceIDAndLocalPath(t *testing.T) {
+	tree := Tree{
+		"serviceId": "modelforge-01-glm",
+		"model":     map[string]any{"localPath": "/mnt/disk1/models/x"},
+	}
+	if err := CheckOwnership(tree, LayerForm); err != nil {
+		t.Fatal(err)
 	}
 }
 

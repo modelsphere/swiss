@@ -17,10 +17,16 @@ import (
 )
 
 type planRequest struct {
-	Model     string      `json:"model"`
-	Variant   string      `json:"variant,omitempty"`
-	Release   string      `json:"release,omitempty"`
-	Namespace string      `json:"namespace,omitempty"`
+	Model     string `json:"model"`
+	Variant   string `json:"variant,omitempty"`
+	Release   string `json:"release,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
+	// ServiceID is the identity modelRoute, sloRequirement and the scaler all
+	// key off, and LocalPath overrides the site's path template. Both are form
+	// values; they are named here rather than left to Overrides because a
+	// deploy form should not have to know the key path.
+	ServiceID string      `json:"serviceId,omitempty"`
+	LocalPath string      `json:"localPath,omitempty"`
 	Overrides values.Tree `json:"overrides,omitempty"`
 }
 
@@ -84,6 +90,19 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 	if release == "" {
 		release = entry.Name
 	}
+
+	overrides := values.Tree{}
+	values.Merge(overrides, req.Overrides, values.LayerForm, nil)
+	if req.ServiceID != "" {
+		if err := values.Set(overrides, "serviceId", req.ServiceID); err != nil {
+			return nil, err
+		}
+	}
+	if req.LocalPath != "" {
+		if err := values.Set(overrides, "model.localPath", req.LocalPath); err != nil {
+			return nil, err
+		}
+	}
 	return compose.Compose(compose.Input{
 		Catalog:   cat.Fetcher.String(),
 		Ref:       cat.Ref,
@@ -92,7 +111,7 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 		Profile:   *prof,
 		Release:   release,
 		Namespace: req.Namespace,
-		Overrides: req.Overrides,
+		Overrides: overrides,
 	})
 }
 

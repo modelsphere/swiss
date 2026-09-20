@@ -139,7 +139,7 @@ func TestLocalDirectoryAndFileBothWork(t *testing.T) {
 		if err != nil {
 			t.Skipf("example catalog not present: %v", err)
 		}
-		if _, err := c.Entry(context.Background(), "glm-5.3"); err != nil {
+		if _, err := c.Entry(context.Background(), "qwen3.6-35b-a3b"); err != nil {
 			t.Errorf("%s: %v", loc, err)
 		}
 	}
