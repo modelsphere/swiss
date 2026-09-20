@@ -1,0 +1,166 @@
+{{- if .Values.rbac.create }}
+{{- $fullName := include "swiss.fullname" . }}
+{{- $sa := include "swiss.serviceAccountName" . }}
+{{- $profileNS := (include "swiss.effectiveProfileRef" . | splitList "/" | first) }}
+# ---------------------------------------------------------------------------
+# Nodes are cluster-scoped, so the fit check needs a ClusterRole no matter which
+# rbac.scope is chosen. Read-only, and node objects carry no secrets.
+# ---------------------------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fullName }}-nodes
+  labels:
+    {{- include "swiss.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $fullName }}-nodes
+  labels:
+    {{- include "swiss.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $fullName }}-nodes
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sa }}
+    namespace: {{ .Release.Namespace }}
+---
+# ---------------------------------------------------------------------------
+# swissd's own namespace: it reads the site profile ConfigMap from here. Granted
+# whichever scope is in use, and only when the profile lives in this namespace.
+# ---------------------------------------------------------------------------
+{{- if eq $profileNS .Release.Namespace }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fullName }}-profile
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "swiss.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fullName }}-profile
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "swiss.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $fullName }}-profile
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sa }}
+    namespace: {{ .Release.Namespace }}
+---
+{{- end }}
+{{- if eq .Values.rbac.scope "cluster" }}
+# ---------------------------------------------------------------------------
+# CLUSTER SCOPE. This grants read access to EVERY SECRET IN THE CLUSTER.
+#
+# Not an oversight, and not avoidable at this scope: helm stores each release in
+# a Secret, and Kubernetes RBAC cannot filter a secret read by label or name.
+# "Read helm releases everywhere" and "read every credential everywhere" are one
+# grant.
+#
+# What it buys is a complete untracked-release view -- a release installed by
+# hand in a namespace nobody listed is exactly what this is for, and a namespaced
+# scope cannot see it.
+# ---------------------------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fullName }}-releases
+  labels:
+    {{- include "swiss.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list"]
+  {{- if .Values.rbac.allowWrite }}
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create", "update", "patch"]
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $fullName }}-releases
+  labels:
+    {{- include "swiss.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $fullName }}-releases
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sa }}
+    namespace: {{ .Release.Namespace }}
+{{- else }}
+# ---------------------------------------------------------------------------
+# NAMESPACED SCOPE (the default). One Role per listed namespace.
+#
+# Still a full secret read within each -- see above, it cannot be narrower -- but
+# bounded to the namespaces that actually hold model releases. The cost is that
+# a release in an unlisted namespace is invisible rather than reported as
+# untracked, so this list is worth revisiting when namespaces are added.
+# ---------------------------------------------------------------------------
+{{- if not .Values.rbac.namespaces }}
+{{- fail "rbac.scope is namespaced but rbac.namespaces is empty: swissd would see no releases at all. List the namespaces holding model releases, or set rbac.scope: cluster knowing it grants cluster-wide secret reads." }}
+{{- end }}
+{{- range $ns := .Values.rbac.namespaces }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fullName }}-releases
+  namespace: {{ $ns }}
+  labels:
+    {{- include "swiss.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list"]
+  {{- if $.Values.rbac.allowWrite }}
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create", "update", "patch"]
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fullName }}-releases
+  namespace: {{ $ns }}
+  labels:
+    {{- include "swiss.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $fullName }}-releases
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sa }}
+    namespace: {{ $.Release.Namespace }}
+---
+{{- end }}
+{{- end }}
+{{- end }}

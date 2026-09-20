@@ -1,0 +1,195 @@
+# swissd runs one replica. The read path is stateless, so more would work -- but
+# persistence lands next (drafts, the audit log) as SQLite on a PVC, which is a
+# single writer. Scaling out is a Postgres decision, not a replica-count one.
+replicaCount: 1
+
+image:
+  repository: harbor.4pd.io/hardcore-tech/swissd
+  # Empty follows the chart's appVersion, so a chart bump and an image bump
+  # cannot silently disagree.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# ---------------------------------------------------------------------------
+# swiss.yaml, rendered into a ConfigMap. One document, the same shape the CLI
+# reads: `swiss` and `swissd` are one tool, and two config formats would
+# eventually disagree.
+# ---------------------------------------------------------------------------
+config:
+  # The catalog: an https base or a path. index.json is appended when the
+  # location does not already name a .json file. No git; a catalog is a
+  # published index plus the documents it points at.
+  catalog: "https://models.example.com/swiss-catalog/"
+
+  cluster:
+    # REQUIRED. Labels every plan composed here and names this cluster in the
+    # switcher. There is no default worth guessing: it ends up recorded against
+    # real deploys.
+    name: ""
+    # The site profile ConfigMap, "namespace/name". Empty uses the one this
+    # chart creates below.
+    profile: ""
+    profileKey: profile.yaml
+
+  # The other clusters' swissd instances, for the nav switcher. Config, not
+  # discovery -- a list you deploy, and every instance serves the same switcher,
+  # so any one of them is a valid entry point.
+  peers: []
+    # - name: prod-h100
+    #   url: https://swiss.h100.internal
+
+  # How long a fetched catalog or profile is reused before refetching.
+  cacheTTL: 60s
+
+# ---------------------------------------------------------------------------
+# The site profile: what makes a model work in THIS cluster. It describes this
+# cluster, so it lives in this cluster -- and a lost database does not take the
+# route ConfigMap names and mirror config with it.
+#
+# Set create: false when the profile is managed elsewhere (GitOps, or by hand)
+# and point config.cluster.profile at it instead.
+# ---------------------------------------------------------------------------
+profile:
+  create: true
+  content:
+    name: prod
+    namespace: modelforge
+    # chartRepo: oci://harbor.4pd.io/hardcore-tech
+    registry:
+      mirror: harbor.4pd.io/hardcore-tech
+    model:
+      # model.localPath, built from the catalog's source.hf. A template rather
+      # than a per-model table: a site that has to add a row for every model in
+      # a public catalog will not keep up with it.
+      pathTemplate: /mnt/disk0/models/{{name}}
+    cache:
+      enabled: true
+      hostPath: /mnt/disk0/sglang-cache
+    scaler:
+      serverAddress: http://decision-gen.llm-scaler.svc:80
+    route:
+      nginxConfigMap: llm-route/openresty-conf
+      monitorConfigMap: llm-route/monitor-conf
+    nodes:
+      # A full GPU node, used to derive cache.maxSlotsPerNode.
+      gpusPerNode: 8
+
+# ---------------------------------------------------------------------------
+# RBAC. Read the comments before widening this.
+# ---------------------------------------------------------------------------
+rbac:
+  create: true
+
+  # namespaced (default) or cluster.
+  #
+  # swissd reads helm's own release storage, which is SECRETS. Kubernetes RBAC
+  # cannot filter a secret read by label or name prefix, so "let it read helm
+  # releases" and "let it read every credential in those namespaces" are the
+  # same grant. There is no third option.
+  #
+  #   namespaced  Role/RoleBinding in each namespace listed below. Tight, and
+  #               the default -- but swissd can only see releases in those
+  #               namespaces, so an unlisted namespace is invisible rather than
+  #               reported as untracked.
+  #   cluster     One ClusterRole. swissd sees every release, which is what makes
+  #               the untracked-release view complete -- at the cost of read
+  #               access to every Secret in the cluster.
+  #
+  # Start namespaced. Widen deliberately, knowing what it grants.
+  scope: namespaced
+
+  # Namespaces holding model releases. Used when scope is namespaced.
+  namespaces: []
+    # - modelforge
+    # - kimi
+
+  # Write access to ConfigMaps in those namespaces, for the per-release plan
+  # (swiss-plan-<release>). The server writes nothing today, so leave this off
+  # until apply lands -- an unused permission is only ever a liability.
+  allowWrite: false
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  # Predictable hostnames keep the peer list trivial: swiss.<cluster>.internal.
+  host: ""
+  path: /
+  pathType: Prefix
+  tls: []
+
+# CPU-only, and small: swissd holds no model and does no rendering of its own.
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  # The binary and its embedded UI are all swissd needs; nothing is written to
+  # disk until the database lands, and that will be a mounted volume.
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+# swissd is CPU-only, so it has no business occupying a GPU node -- the same
+# reasoning the sglang chart applies to CART. Preferred rather than required, so
+# it still schedules in a cluster where every node carries GPUs.
+affinity:
+  nodeAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        preference:
+          matchExpressions:
+            - key: nvidia.com/gpu.product
+              operator: DoesNotExist
+
+nodeSelector: {}
+tolerations: []
+
+podAnnotations: {}
+podLabels: {}
+
+logLevel: info
+
+# /healthz is liveness: the process is up. /readyz is readiness and reports the
+# cluster, the profile and the catalog separately -- so a catalog that goes
+# briefly unreachable takes this pod out of the Service rather than leaving it
+# serving errors.
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 3
+  periodSeconds: 10
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: http
+  initialDelaySeconds: 3
+  periodSeconds: 10
+  failureThreshold: 3

@@ -5,6 +5,7 @@ Go backend for the deploy control plane described in
 It writes nothing to a cluster and nothing to the charts repo.
 
 ```
+chart/                the helm chart that deploys swissd
 cmd/swiss/            the CLI
 cmd/swissd/           the server (read path)
 web/                  the SPA, embedded into swissd
@@ -108,7 +109,7 @@ fail loudly when it disagrees, it hangs the group at rendezvous.
 ```sh
 docker build -t harbor.4pd.io/hardcore-tech/swissd:0.1.0 --build-arg VERSION=0.1.0 .
 
-helm install swiss ../charts/swiss -n swiss --create-namespace \
+helm install swiss ./chart -n swiss --create-namespace \
   --set config.cluster.name=prod-b300 \
   --set 'rbac.namespaces={modelforge,kimi}'
 ```
@@ -117,10 +118,12 @@ The image is three stages: the SPA is built with node, embedded into the Go
 binary, and the result runs on distroless/static as non-root with a read-only
 root filesystem. No shell, no package manager, no libc.
 
-`charts/swiss` deliberately does **not** go in `helmfile.yaml` -- that file is
-the model-release inventory ("every sglang release running in production, and
-nothing else"), and swissd is not a model. It also keeps swissd out of its own
-inventory view.
+The chart lives here rather than in the parent repo's `charts/`, so this
+directory is the whole of Swiss: Go, web, image and deployment together, and
+splitting it into its own repo later is a move rather than a reassembly. It is
+also deliberately **not** in `helmfile.yaml` -- that file is the model-release
+inventory ("every sglang release running in production, and nothing else"), and
+swissd is not a model. That also keeps swissd out of its own inventory view.
 
 **RBAC is the decision to read before installing.** helm stores releases in
 Secrets and Kubernetes cannot filter a secret read by label, so "read helm

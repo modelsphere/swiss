@@ -1,0 +1,30 @@
+swissd is installed as {{ include "swiss.fullname" . }} in {{ .Release.Namespace }},
+serving cluster "{{ .Values.config.cluster.name }}".
+
+Reach it:
+{{- if .Values.ingress.enabled }}
+  https://{{ .Values.ingress.host }}
+{{- else }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "swiss.fullname" . }} 8080:{{ .Values.service.port }}
+  open http://localhost:8080
+{{- end }}
+
+Check what it can actually see -- /readyz reports the cluster, the profile and
+the catalog separately, so a failure names the dependency:
+
+  kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "swiss.fullname" . }} -- true 2>/dev/null \
+    || echo "(no shell in the image -- use the port-forward above and curl /readyz)"
+
+RBAC is {{ .Values.rbac.scope }}.
+{{- if eq .Values.rbac.scope "namespaced" }}
+swissd can see releases in: {{ join ", " .Values.rbac.namespaces }}
+A release in any other namespace is invisible to it -- not reported as
+untracked. Add namespaces to rbac.namespaces as they appear.
+{{- else }}
+This grants read access to every Secret in the cluster, because helm stores
+releases in Secrets and RBAC cannot filter a secret read. It buys a complete
+untracked-release view. Make sure that trade was deliberate.
+{{- end }}
+
+Swiss does not deploy Swiss: upgrade this release with helm or helmfile, never
+through its own UI.

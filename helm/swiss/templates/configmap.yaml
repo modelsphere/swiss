@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "swiss.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "swiss.labels" . | nindent 4 }}
+data:
+  # One document, the same shape `swiss` reads on a laptop. The CLI ignores the
+  # server section, so this file can be copied out of the cluster and used
+  # as-is.
+  swiss.yaml: |
+    catalog: {{ .Values.config.catalog | quote }}
+    cluster:
+      name: {{ required "config.cluster.name is required -- it is recorded against every plan composed here" .Values.config.cluster.name | quote }}
+      profile:
+        configMap: {{ include "swiss.effectiveProfileRef" . | quote }}
+        key: {{ .Values.config.cluster.profileKey | quote }}
+    server:
+      addr: ":8080"
+      cacheTTL: {{ .Values.config.cacheTTL }}
+      {{- with .Values.config.peers }}
+      peers:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+{{- if .Values.profile.create }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "swiss.fullname" . }}-profile
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "swiss.labels" . | nindent 4 }}
+data:
+  {{ .Values.config.cluster.profileKey }}: |
+    {{- toYaml .Values.profile.content | nindent 4 }}
+{{- end }}
