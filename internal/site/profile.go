@@ -1,0 +1,131 @@
+// Package site holds the cluster-shaped half of a deploy: the values a public
+// catalog cannot know and a deploy form should not have to retype.
+//
+// A profile lives in the private charts repo next to deploys/, because that is
+// already where namespace, route and serviceId truth lives.
+package site
+
+import (
+	"fmt"
+	"os"
+	"strings"
+
+	"github.com/aceforeverd/swiss/internal/values"
+	"gopkg.in/yaml.v3"
+)
+
+type Profile struct {
+	Name string `yaml:"name"`
+
+	// Namespace a release lands in unless the deploy overrides it.
+	Namespace string `yaml:"namespace,omitempty"`
+
+	// ChartRepo is where charts are pulled from -- the registry the catalog
+	// deliberately does not name. Empty means a local chart path, which is fine
+	// for the CLI and not for a server.
+	ChartRepo string `yaml:"chartRepo,omitempty"`
+	ChartPath string `yaml:"chartPath,omitempty"`
+
+	// Registry rewrites engine image repositories to a mirror. The catalog pins
+	// which build (image.tag); this says where it is pulled from.
+	Registry Registry `yaml:"registry,omitempty"`
+
+	Model  ModelPaths  `yaml:"model"`
+	Cache  Cache       `yaml:"cache,omitempty"`
+	Scaler Scaler      `yaml:"scaler,omitempty"`
+	Route  Route       `yaml:"route,omitempty"`
+	Nodes  Nodes       `yaml:"nodes,omitempty"`
+	Extra  values.Tree `yaml:"extra,omitempty"`
+}
+
+type Registry struct {
+	// Mirror replaces the registry host/org of an image repository. "" disables
+	// the rewrite and the catalog's repository is used as-is.
+	Mirror string `yaml:"mirror,omitempty"`
+}
+
+type ModelPaths struct {
+	// PathTemplate builds model.localPath from the catalog's source.hf.
+	// {{hf}} is the full repo id, {{org}} and {{name}} its halves, {{model}} the
+	// catalog entry name. A template rather than a per-model table: a site that
+	// has to add a row here for every model in a public catalog will not keep up.
+	PathTemplate string `yaml:"pathTemplate"`
+}
+
+type Cache struct {
+	Enabled  bool   `yaml:"enabled,omitempty"`
+	HostPath string `yaml:"hostPath,omitempty"`
+}
+
+type Scaler struct {
+	// ServerAddress is the decision server or the Prometheus query API,
+	// depending on which provider a deploy selects.
+	ServerAddress string            `yaml:"serverAddress,omitempty"`
+	ServerHeaders map[string]string `yaml:"serverHeaders,omitempty"`
+}
+
+type Route struct {
+	// NginxConfigMap is the shared openresty ConfigMap ("ns/name") every model
+	// on one entrypoint writes a key into. The route-collision preflight is
+	// scoped to this value.
+	NginxConfigMap   string `yaml:"nginxConfigMap,omitempty"`
+	NginxService     string `yaml:"nginxService,omitempty"`
+	NginxSelector    string `yaml:"nginxSelector,omitempty"`
+	MonitorConfigMap string `yaml:"monitorConfigMap,omitempty"`
+}
+
+type Nodes struct {
+	// GPUsPerNode is what a full GPU node has, used to derive
+	// cache.maxSlotsPerNode. 0 leaves that value to the chart's default.
+	GPUsPerNode int `yaml:"gpusPerNode,omitempty"`
+}
+
+// Load reads a profile file.
+func Load(path string) (*Profile, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var p Profile
+	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
+	dec.KnownFields(true)
+	if err := dec.Decode(&p); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	if p.Name == "" {
+		return nil, fmt.Errorf("%s: name is required", path)
+	}
+	if p.Model.PathTemplate == "" {
+		return nil, fmt.Errorf("%s: model.pathTemplate is required -- the catalog gives an identity, not a path", path)
+	}
+	if p.Extra != nil {
+		if err := values.CheckOwnership(p.Extra, values.LayerSite); err != nil {
+			return nil, fmt.Errorf("%s: extra: %w", path, err)
+		}
+	}
+	return &p, nil
+}
+
+// LocalPath renders model.localPath for one model.
+func (p Profile) LocalPath(hf, model string) (string, error) {
+	org, name, ok := strings.Cut(hf, "/")
+	if !ok {
+		return "", fmt.Errorf("source.hf %q is not org/name", hf)
+	}
+	r := strings.NewReplacer("{{hf}}", hf, "{{org}}", org, "{{name}}", name, "{{model}}", model)
+	out := r.Replace(p.Model.PathTemplate)
+	if strings.Contains(out, "{{") {
+		return "", fmt.Errorf("model.pathTemplate %q has an unknown placeholder", p.Model.PathTemplate)
+	}
+	return out, nil
+}
+
+// MirrorImage rewrites an image repository to the site's mirror, keeping the
+// final path element. Returns the input unchanged when no mirror is configured.
+func (p Profile) MirrorImage(repository string) string {
+	if p.Registry.Mirror == "" {
+		return repository
+	}
+	parts := strings.Split(repository, "/")
+	return strings.TrimSuffix(p.Registry.Mirror, "/") + "/" + parts[len(parts)-1]
+}
