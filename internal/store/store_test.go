@@ -31,11 +31,11 @@ func testPlan(hash string) *plan.Plan {
 
 func TestPlansAreImmutableAndRoundTrip(t *testing.T) {
 	s, ctx := open(t), context.Background()
-	if err := s.PutPlan(ctx, "prod", testPlan("sha256:a")); err != nil {
+	if err := s.PutPlan(ctx, testPlan("sha256:a")); err != nil {
 		t.Fatal(err)
 	}
 	// Re-storing the same hash must not clobber: history is what rollback uses.
-	if err := s.PutPlan(ctx, "prod", testPlan("sha256:a")); err != nil {
+	if err := s.PutPlan(ctx, testPlan("sha256:a")); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.Plan(ctx, "sha256:a")
@@ -55,11 +55,11 @@ func TestPlansAreImmutableAndRoundTrip(t *testing.T) {
 
 func TestRecordApplyBumpsVersionAndDetectsAConcurrentWrite(t *testing.T) {
 	s, ctx := open(t), context.Background()
-	d := Deployment{Cluster: "prod", Namespace: "modelforge", Release: "glm-53", PlanHash: "sha256:a", Revision: 4}
+	d := Deployment{Namespace: "modelforge", Release: "glm-53", PlanHash: "sha256:a", Revision: 4}
 	if err := s.RecordApply(ctx, d, 0); err != nil {
 		t.Fatal(err)
 	}
-	list, err := s.Deployments(ctx, "prod")
+	list, err := s.Deployments(ctx)
 	if err != nil || len(list) != 1 || list[0].Version != 1 {
 		t.Fatalf("got %+v err=%v", list, err)
 	}
@@ -68,7 +68,7 @@ func TestRecordApplyBumpsVersionAndDetectsAConcurrentWrite(t *testing.T) {
 	if err := s.RecordApply(ctx, d, 1); err != nil {
 		t.Fatal(err)
 	}
-	list, _ = s.Deployments(ctx, "prod")
+	list, _ = s.Deployments(ctx)
 	if list[0].Version != 2 || list[0].PlanHash != "sha256:b" {
 		t.Fatalf("version/plan not advanced: %+v", list[0])
 	}
@@ -83,14 +83,14 @@ func TestRunsAreAppendOnlyAndNewestFirst(t *testing.T) {
 	s, ctx := open(t), context.Background()
 	for _, a := range []string{"diff", "apply"} {
 		if _, err := s.RecordRun(ctx, Run{
-			Cluster: "prod", Namespace: "modelforge", Release: "glm-53",
+			Namespace: "modelforge", Release: "glm-53",
 			Action: a, PlanHash: "sha256:a", Changed: a == "apply",
 			StartedAt: "2026-09-20T10:00:00Z", EndedAt: "2026-09-20T10:00:01Z",
 		}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	runs, err := s.Runs(ctx, "prod", 10)
+	runs, err := s.Runs(ctx, 10)
 	if err != nil || len(runs) != 2 {
 		t.Fatalf("got %d runs err=%v", len(runs), err)
 	}
@@ -99,15 +99,17 @@ func TestRunsAreAppendOnlyAndNewestFirst(t *testing.T) {
 	}
 }
 
-func TestDeploymentsAreScopedByCluster(t *testing.T) {
+// One swissd, one cluster, one database: a release is identified by namespace
+// and name, with no cluster key anywhere.
+func TestReleasesAreKeyedByNamespaceAndName(t *testing.T) {
 	s, ctx := open(t), context.Background()
-	for _, c := range []string{"prod", "dev"} {
-		if err := s.RecordApply(ctx, Deployment{Cluster: c, Namespace: "n", Release: "r", PlanHash: "h"}, 0); err != nil {
+	for _, ns := range []string{"modelforge", "kimi"} {
+		if err := s.RecordApply(ctx, Deployment{Namespace: ns, Release: "r", PlanHash: "h"}, 0); err != nil {
 			t.Fatal(err)
 		}
 	}
-	list, _ := s.Deployments(ctx, "prod")
-	if len(list) != 1 || list[0].Cluster != "prod" {
-		t.Fatalf("cluster scoping broken: %+v", list)
+	list, _ := s.Deployments(ctx)
+	if len(list) != 2 {
+		t.Fatalf("the same name in two namespaces is two deployments: %+v", list)
 	}
 }

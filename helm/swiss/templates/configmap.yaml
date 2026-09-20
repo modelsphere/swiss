@@ -27,6 +27,11 @@ data:
       {{- end }}
 ---
 {{- if .Values.profile.create }}
+{{/* The profile names the cluster it describes, so it takes that name from
+     config.cluster.name rather than repeating it. Two spellings of one fact
+     drift, and this pair drifted in the chart's own defaults. */}}
+{{- $content := deepCopy .Values.profile.content }}
+{{- $_ := set $content "name" (default .Values.config.cluster.name $content.name) }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -36,5 +41,5 @@ metadata:
     {{- include "swiss.labels" . | nindent 4 }}
 data:
   {{ .Values.config.cluster.profileKey }}: |
-    {{- toYaml .Values.profile.content | nindent 4 }}
+    {{- toYaml $content | nindent 4 }}
 {{- end }}

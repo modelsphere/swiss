@@ -1,0 +1,18 @@
+config:
+  catalog: "http://172.24.4.56:8000"
+  cluster:
+    name: "testenv"
+    profile: ""
+    profileKey: profile.yaml
+
+profile:
+  create: true
+  content:
+    namespace: swiss-deploy
+    # chartRepo: oci://harbor.4pd.io/hardcore-tech
+    registry:
+      mirror: harbor.4pd.io/hardcore-tech
+
+rbac:
+  namespaces:
+    - swiss-deploy

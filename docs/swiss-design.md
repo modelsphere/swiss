@@ -543,12 +543,25 @@ the response and logged.
 
 | store | holds |
 | --- | --- |
-| **SQLite** | `plan` (immutable, keyed by hash), `deployment` (release → current plan, live revision, version), `run` (append-only audit), `draft`, `catalog_cache` |
+| **SQLite** | `plan` (immutable, keyed by hash), `deployment` (release → current plan, live revision, version), `run` (append-only audit), `draft` |
 | **cluster** | `swiss-plan-<release>` per release; the site profile as a ConfigMap in swissd's namespace |
 | **helm** | 20 revisions of real values, already |
 
 `plan` immutable plus `deployment` pointing at one gives history and rollback for
 free: reverting is applying an earlier plan row. Plans are never mutated in place.
+
+**Nothing in the server is keyed by cluster.** One swissd serves one cluster and
+owns one database, so a cluster column would hold one value in every row and
+invite queries that can never be answered — a swissd cannot reach another
+cluster's releases, database or profile, and should not pretend it can. A release
+is identified by namespace and name. `cluster.name` exists only as a label: it
+appears in API responses and logs so the web knows which cluster it is looking
+at.
+
+Seeing several clusters is a **front-end** concern and nothing else. The switcher
+reads `peers` and navigates to another origin; that instance answers for itself.
+Any cross-cluster view is the browser talking to several swissds, never one
+swissd talking to several clusters.
 
 SQLite on a PVC, one replica. Nothing here justifies Postgres until `swissd` runs
 more than one replica, and the migration stays cheap precisely because a wipe
@@ -603,7 +616,7 @@ ConfigMap keys every time. Cache them for a dropdown; never let the cache answer
 ### Disaster recovery, written before it is needed
 
 ```
-swissd reconcile --cluster prod
+swissd reconcile
 ```
 
 scans namespaces for helm releases and `swiss-plan-*` ConfigMaps and repopulates
@@ -627,9 +640,10 @@ from it.
 - **P3 — `apply` / `install` / revision locking.** **Done** for the CLI and the
   server; `status` and `emit` are not built.
 - **P4 — `swissd`.** Read API, write API behind `allowDeploy`, SQLite, plan
-  ConfigMaps, embedded read-only SPA. **Done.**
+  ConfigMaps, embedded read-only SPA. **Done.** One cluster per instance, no
+  cluster keying anywhere in it.
 - **P5 — the write path in the UI**, with the approval gate.
-- **P6** — auth, `reconcile`, multiple clusters in one view.
+- **P6** — auth, `reconcile`.
 
 ### P0's exit criterion
 

@@ -64,7 +64,6 @@ config:
 profile:
   create: true
   content:
-    name: prod
     namespace: modelforge
     # chartRepo: oci://harbor.4pd.io/hardcore-tech
     registry:

@@ -53,7 +53,7 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.store != nil {
-		if err := s.store.PutPlan(ctx, s.cfg.Cluster.Name, p); err != nil {
+		if err := s.store.PutPlan(ctx, p); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -199,8 +199,8 @@ func (s *Server) handleApply(mode exec.Mode) http.HandlerFunc {
 
 		after, _ := exec.Lookup(ctx, s.probe, p.Release.Namespace, p.Release.Name)
 		if err := s.store.RecordApply(ctx, store.Deployment{
-			Cluster: s.cfg.Cluster.Name, Namespace: p.Release.Namespace,
-			Release: p.Release.Name, PlanHash: p.Hash, Revision: after.Revision,
+			Namespace: p.Release.Namespace, Release: p.Release.Name,
+			PlanHash: p.Hash, Revision: after.Revision,
 		}, req.ExpectVersion); err != nil {
 			writeError(w, http.StatusConflict, err.Error())
 			return
@@ -256,7 +256,7 @@ func (s *Server) record(ctx context.Context, action string, p *plan.Plan, res ex
 		return
 	}
 	run := store.Run{
-		Cluster: s.cfg.Cluster.Name, Namespace: p.Release.Namespace, Release: p.Release.Name,
+		Namespace: p.Release.Namespace, Release: p.Release.Name,
 		Action: action, PlanHash: p.Hash, Changed: res.Changed, Output: res.Output,
 		StartedAt: started.UTC().Format(time.RFC3339), EndedAt: time.Now().UTC().Format(time.RFC3339),
 	}
@@ -282,7 +282,7 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := contextWithTimeout(r, 15*time.Second)
 	defer cancel()
-	runs, err := s.store.Runs(ctx, s.cfg.Cluster.Name, 50)
+	runs, err := s.store.Runs(ctx, 50)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

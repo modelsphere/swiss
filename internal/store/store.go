@@ -2,6 +2,10 @@
 // log. It is never the source of truth for what is deployed -- every applied
 // plan is also written beside its release, so this can be rebuilt from the
 // cluster.
+//
+// One swissd serves one cluster and owns one database, so nothing here is keyed
+// by cluster. Seeing several clusters at once is a link in the web nav, not a
+// query.
 package store
 
 import (
@@ -20,7 +24,6 @@ type Store struct{ db *sql.DB }
 const schema = `
 CREATE TABLE IF NOT EXISTS plans (
   hash       TEXT PRIMARY KEY,
-  cluster    TEXT NOT NULL,
   namespace  TEXT NOT NULL,
   release    TEXT NOT NULL,
   model      TEXT NOT NULL,
@@ -29,18 +32,16 @@ CREATE TABLE IF NOT EXISTS plans (
   created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS deployments (
-  cluster    TEXT NOT NULL,
   namespace  TEXT NOT NULL,
   release    TEXT NOT NULL,
   plan_hash  TEXT NOT NULL,
   revision   INTEGER NOT NULL DEFAULT 0,
   version    INTEGER NOT NULL DEFAULT 1,
   updated_at TEXT NOT NULL,
-  PRIMARY KEY (cluster, namespace, release)
+  PRIMARY KEY (namespace, release)
 );
 CREATE TABLE IF NOT EXISTS runs (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  cluster    TEXT NOT NULL,
   namespace  TEXT NOT NULL,
   release    TEXT NOT NULL,
   action     TEXT NOT NULL,
@@ -52,7 +53,7 @@ CREATE TABLE IF NOT EXISTS runs (
   started_at TEXT NOT NULL,
   ended_at   TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS runs_release ON runs (cluster, namespace, release, id DESC);
+CREATE INDEX IF NOT EXISTS runs_release ON runs (namespace, release, id DESC);
 `
 
 func Open(path string) (*Store, error) {
@@ -74,15 +75,15 @@ func (s *Store) Close() error { return s.db.Close() }
 
 // PutPlan stores a plan. Plans are immutable: re-storing the same hash is a
 // no-op, which is what makes "revert to the plan applied on the 3rd" work.
-func (s *Store) PutPlan(ctx context.Context, cluster string, p *plan.Plan) error {
+func (s *Store) PutPlan(ctx context.Context, p *plan.Plan) error {
 	doc, err := json.Marshal(p)
 	if err != nil {
 		return err
 	}
 	_, err = s.db.ExecContext(ctx,
-		`INSERT OR IGNORE INTO plans (hash, cluster, namespace, release, model, variant, document, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.Hash, cluster, p.Release.Namespace, p.Release.Name, p.Source.Model, p.Source.Variant,
+		`INSERT OR IGNORE INTO plans (hash, namespace, release, model, variant, document, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		p.Hash, p.Release.Namespace, p.Release.Name, p.Source.Model, p.Source.Variant,
 		string(doc), now())
 	return err
 }
@@ -104,7 +105,6 @@ func (s *Store) Plan(ctx context.Context, hash string) (*plan.Plan, error) {
 }
 
 type Deployment struct {
-	Cluster   string `json:"cluster"`
 	Namespace string `json:"namespace"`
 	Release   string `json:"release"`
 	PlanHash  string `json:"planHash"`
@@ -118,18 +118,18 @@ type Deployment struct {
 func (s *Store) RecordApply(ctx context.Context, d Deployment, expectVersion int) error {
 	if expectVersion == 0 {
 		_, err := s.db.ExecContext(ctx,
-			`INSERT INTO deployments (cluster, namespace, release, plan_hash, revision, version, updated_at)
-			 VALUES (?, ?, ?, ?, ?, 1, ?)
-			 ON CONFLICT (cluster, namespace, release) DO UPDATE SET
+			`INSERT INTO deployments (namespace, release, plan_hash, revision, version, updated_at)
+			 VALUES (?, ?, ?, ?, 1, ?)
+			 ON CONFLICT (namespace, release) DO UPDATE SET
 			   plan_hash = excluded.plan_hash, revision = excluded.revision,
 			   version = deployments.version + 1, updated_at = excluded.updated_at`,
-			d.Cluster, d.Namespace, d.Release, d.PlanHash, d.Revision, now())
+			d.Namespace, d.Release, d.PlanHash, d.Revision, now())
 		return err
 	}
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE deployments SET plan_hash = ?, revision = ?, version = version + 1, updated_at = ?
-		 WHERE cluster = ? AND namespace = ? AND release = ? AND version = ?`,
-		d.PlanHash, d.Revision, now(), d.Cluster, d.Namespace, d.Release, expectVersion)
+		 WHERE namespace = ? AND release = ? AND version = ?`,
+		d.PlanHash, d.Revision, now(), d.Namespace, d.Release, expectVersion)
 	if err != nil {
 		return err
 	}
@@ -139,10 +139,10 @@ func (s *Store) RecordApply(ctx context.Context, d Deployment, expectVersion int
 	return nil
 }
 
-func (s *Store) Deployments(ctx context.Context, cluster string) ([]Deployment, error) {
+func (s *Store) Deployments(ctx context.Context) ([]Deployment, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT cluster, namespace, release, plan_hash, revision, version, updated_at
-		 FROM deployments WHERE cluster = ? ORDER BY namespace, release`, cluster)
+		`SELECT namespace, release, plan_hash, revision, version, updated_at
+		 FROM deployments ORDER BY namespace, release`)
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +150,7 @@ func (s *Store) Deployments(ctx context.Context, cluster string) ([]Deployment, 
 	var out []Deployment
 	for rows.Next() {
 		var d Deployment
-		if err := rows.Scan(&d.Cluster, &d.Namespace, &d.Release, &d.PlanHash, &d.Revision, &d.Version, &d.UpdatedAt); err != nil {
+		if err := rows.Scan(&d.Namespace, &d.Release, &d.PlanHash, &d.Revision, &d.Version, &d.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, d)
@@ -160,7 +160,6 @@ func (s *Store) Deployments(ctx context.Context, cluster string) ([]Deployment, 
 
 type Run struct {
 	ID        int64  `json:"id"`
-	Cluster   string `json:"cluster"`
 	Namespace string `json:"namespace"`
 	Release   string `json:"release"`
 	Action    string `json:"action"`
@@ -175,9 +174,9 @@ type Run struct {
 
 func (s *Store) RecordRun(ctx context.Context, r Run) (int64, error) {
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO runs (cluster, namespace, release, action, plan_hash, actor, changed, error, output, started_at, ended_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		r.Cluster, r.Namespace, r.Release, r.Action, r.PlanHash, r.Actor,
+		`INSERT INTO runs (namespace, release, action, plan_hash, actor, changed, error, output, started_at, ended_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.Namespace, r.Release, r.Action, r.PlanHash, r.Actor,
 		boolInt(r.Changed), r.Error, r.Output, r.StartedAt, r.EndedAt)
 	if err != nil {
 		return 0, err
@@ -185,13 +184,13 @@ func (s *Store) RecordRun(ctx context.Context, r Run) (int64, error) {
 	return res.LastInsertId()
 }
 
-func (s *Store) Runs(ctx context.Context, cluster string, limit int) ([]Run, error) {
+func (s *Store) Runs(ctx context.Context, limit int) ([]Run, error) {
 	if limit <= 0 {
 		limit = 50
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, cluster, namespace, release, action, plan_hash, actor, changed, error, started_at, ended_at
-		 FROM runs WHERE cluster = ? ORDER BY id DESC LIMIT ?`, cluster, limit)
+		`SELECT id, namespace, release, action, plan_hash, actor, changed, error, started_at, ended_at
+		 FROM runs ORDER BY id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +199,7 @@ func (s *Store) Runs(ctx context.Context, cluster string, limit int) ([]Run, err
 	for rows.Next() {
 		var r Run
 		var changed int
-		if err := rows.Scan(&r.ID, &r.Cluster, &r.Namespace, &r.Release, &r.Action, &r.PlanHash,
+		if err := rows.Scan(&r.ID, &r.Namespace, &r.Release, &r.Action, &r.PlanHash,
 			&r.Actor, &changed, &r.Error, &r.StartedAt, &r.EndedAt); err != nil {
 			return nil, err
 		}

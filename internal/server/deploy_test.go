@@ -183,7 +183,7 @@ func TestRunsAreRecorded(t *testing.T) {
 	// still exist, carrying the error.
 	post(t, srv, "/api/diff", map[string]any{"model": "qwen3.6-35b-a3b", "release": "glm-53"})
 
-	runs, err := s.store.Runs(context.Background(), "prod-b300", 10)
+	runs, err := s.store.Runs(context.Background(), 10)
 	if err != nil {
 		t.Fatal(err)
 	}
