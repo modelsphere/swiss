@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DiffView } from "@/components/DiffView";
 import { ErrorState, Loading } from "@/components/States";
+import { groupByLayer } from "@/components/Provenance";
+import { subtree, toYaml } from "@/lib/yaml";
 
 export function Upgrade() {
   const { namespace = "", release = "" } = useParams();
@@ -223,11 +225,7 @@ function Change({ label, from, to }: { label: string; from?: string; to?: string
 }
 
 function Carried({ title, plan, layer }: { title: string; plan: Plan; layer: string }) {
-  const paths = Object.entries(plan.provenance ?? {})
-    .filter(([, l]) => l === layer)
-    .map(([p]) => p)
-    .sort();
-
+  const paths = groupByLayer(plan).get(layer) ?? [];
   return (
     <Card>
       <CardHeader>
@@ -237,33 +235,12 @@ function Carried({ title, plan, layer }: { title: string; plan: Plan; layer: str
         </p>
       </CardHeader>
       <CardContent>
-        <dl className="grid gap-x-3 text-xs sm:grid-cols-[minmax(0,14rem)_1fr]">
-          {paths.map((path) => (
-            <div key={path} className="contents">
-              <dt className="truncate text-muted-foreground">{path}</dt>
-              <dd className="truncate font-mono">{render(get(plan.values, path))}</dd>
-            </div>
-          ))}
-        </dl>
+        <pre className="overflow-x-auto rounded-md border bg-muted/40 p-3 text-xs leading-relaxed">
+          {toYaml(subtree(plan.values, paths))}
+        </pre>
       </CardContent>
     </Card>
   );
-}
-
-function get(tree: Record<string, unknown>, path: string): unknown {
-  let cur: unknown = tree;
-  for (const seg of path.split(".")) {
-    if (typeof cur !== "object" || cur === null) return undefined;
-    cur = (cur as Record<string, unknown>)[seg];
-  }
-  return cur;
-}
-
-function render(v: unknown): string {
-  if (v === undefined) return "";
-  if (Array.isArray(v)) return v.map(render).join(" ");
-  if (typeof v === "object") return JSON.stringify(v);
-  return String(v);
 }
 
 function Back({ namespace }: { namespace: string }) {

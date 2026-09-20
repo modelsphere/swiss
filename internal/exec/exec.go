@@ -58,10 +58,20 @@ type release struct {
 	Values    []string `yaml:"values"`
 }
 
+type repository struct {
+	Name string `yaml:"name"`
+	URL  string `yaml:"url"`
+}
+
 type document struct {
+	Repositories []repository `yaml:"repositories,omitempty"`
 	HelmDefaults helmDefaults `yaml:"helmDefaults"`
 	Releases     []release    `yaml:"releases"`
 }
+
+// repoAlias names the generated repositories entry. The document is ephemeral,
+// so the name never escapes the temp directory.
+const repoAlias = "charts"
 
 func (r Runner) bin(which string) string {
 	switch which {
@@ -94,7 +104,7 @@ func (w Workspace) Close() {
 // Materialize writes the plan to a temp directory. helmfile needs files, not a
 // repository, so the server can produce them per operation and discard them.
 func (r Runner) Materialize(p *plan.Plan) (Workspace, error) {
-	chart, version, err := r.chartRef(p)
+	chart, version, repo, err := r.chartRef(p)
 	if err != nil {
 		return Workspace{}, err
 	}
@@ -120,7 +130,7 @@ func (r Runner) Materialize(p *plan.Plan) (Workspace, error) {
 		return Workspace{}, err
 	}
 
-	doc, err := yaml.Marshal(document{
+	d := document{
 		HelmDefaults: defaults(),
 		Releases: []release{{
 			Name:      p.Release.Name,
@@ -129,7 +139,11 @@ func (r Runner) Materialize(p *plan.Plan) (Workspace, error) {
 			Version:   version,
 			Values:    []string{"values.yaml"},
 		}},
-	})
+	}
+	if repo != nil {
+		d.Repositories = []repository{*repo}
+	}
+	doc, err := yaml.Marshal(d)
 	if err != nil {
 		ws.Close()
 		return Workspace{}, err
@@ -141,18 +155,29 @@ func (r Runner) Materialize(p *plan.Plan) (Workspace, error) {
 	return ws, nil
 }
 
-func (r Runner) chartRef(p *plan.Plan) (chart, version string, err error) {
+// chartRef resolves where helmfile pulls the chart from.
+//
+// An OCI registry is addressed directly: oci://host/path/name plus a version.
+// A classic HTTP chart repository is not -- helm has to be told it is a repo
+// before it can resolve name+version into an archive, so the document declares
+// a repositories entry and the release refers to it as alias/name. Passing the
+// repo URL as the chart instead makes helm fetch that URL as an archive, which
+// 404s because the archive is <url>/<name>-<version>.tgz.
+func (r Runner) chartRef(p *plan.Plan) (chart, version string, repo *repository, err error) {
 	switch {
+	case strings.HasPrefix(p.Chart.Repo, "oci://"):
+		return strings.TrimSuffix(p.Chart.Repo, "/") + "/" + p.Chart.Name, p.Chart.Version, nil, nil
 	case p.Chart.Repo != "":
-		return strings.TrimSuffix(p.Chart.Repo, "/") + "/" + p.Chart.Name, p.Chart.Version, nil
+		return repoAlias + "/" + p.Chart.Name, p.Chart.Version,
+			&repository{Name: repoAlias, URL: strings.TrimSuffix(p.Chart.Repo, "/")}, nil
 	case p.Chart.Path != "":
 		abs, err := filepath.Abs(filepath.Join(p.Chart.Path, p.Chart.Name))
-		return abs, "", err
+		return abs, "", nil, err
 	case r.ChartRoot != "":
 		abs, err := filepath.Abs(filepath.Join(r.ChartRoot, p.Chart.Name))
-		return abs, "", err
+		return abs, "", nil, err
 	}
-	return "", "", fmt.Errorf("no chart source: set chartRepo or chartPath in the site profile, or pass --chart-root")
+	return "", "", nil, fmt.Errorf("no chart source: set chartRepo or chartPath in the site profile, or pass --chart-root")
 }
 
 // Diff reports what applying the plan would change. Changed is true when

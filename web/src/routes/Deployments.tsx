@@ -1,4 +1,5 @@
 import { Link } from "react-router";
+import { Plus } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { api, type Deployment } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
@@ -26,6 +27,15 @@ export function Deployments() {
 
   return (
     <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h1 className="text-lg font-semibold">Deployments</h1>
+        <Link to="/catalog">
+          <Button size="sm">
+            <Plus className="size-4" /> Deploy a model
+          </Button>
+        </Link>
+      </div>
+
       <div className="grid gap-3 sm:grid-cols-3">
         <Stat label="Releases" value={data.summary.total} />
         <Stat label="Untracked" value={data.summary.untracked} tone={data.summary.untracked > 0 ? "warn" : undefined} />
@@ -33,7 +43,13 @@ export function Deployments() {
       </div>
 
       {rows.length === 0 ? (
-        <Empty>No helm releases in this cluster.</Empty>
+        <Empty>
+          No helm releases in this cluster.{" "}
+          <Link to="/catalog" className="underline">
+            Deploy one
+          </Link>
+          .
+        </Empty>
       ) : (
         <Card>
           <Table>

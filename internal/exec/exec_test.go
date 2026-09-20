@@ -108,6 +108,55 @@ func TestWorkspaceIsRemovedUnlessKept(t *testing.T) {
 	os.RemoveAll(kept.Dir)
 }
 
+// A classic HTTP chart repo is not a chart URL: helm must be told it is a repo
+// before it can resolve name+version into an archive. Passing the repo URL as
+// the chart 404s, because the archive is <url>/<name>-<version>.tgz.
+func TestClassicChartRepoBecomesARepositoriesEntry(t *testing.T) {
+	p := testPlan()
+	p.Chart.Repo = "https://harbor.4pd.io/chartrepo/hardcore-tech/"
+	ws, err := Runner{}.Materialize(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close()
+
+	doc, _ := os.ReadFile(ws.Helmfile)
+	var hf document
+	if err := yaml.Unmarshal(doc, &hf); err != nil {
+		t.Fatal(err)
+	}
+	if len(hf.Repositories) != 1 {
+		t.Fatalf("want a repositories entry, got %+v", hf.Repositories)
+	}
+	if hf.Repositories[0].URL != "https://harbor.4pd.io/chartrepo/hardcore-tech" {
+		t.Errorf("trailing slash should be trimmed: %q", hf.Repositories[0].URL)
+	}
+	if hf.Releases[0].Chart != repoAlias+"/sglang" || hf.Releases[0].Version != "0.8.0" {
+		t.Errorf("release must refer to the alias: %+v", hf.Releases[0])
+	}
+}
+
+// OCI needs no repositories entry: the reference is the chart.
+func TestOCIRegistryIsAddressedDirectly(t *testing.T) {
+	ws, err := Runner{}.Materialize(testPlan())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close()
+
+	doc, _ := os.ReadFile(ws.Helmfile)
+	var hf document
+	if err := yaml.Unmarshal(doc, &hf); err != nil {
+		t.Fatal(err)
+	}
+	if len(hf.Repositories) != 0 {
+		t.Errorf("oci needs no repositories entry: %+v", hf.Repositories)
+	}
+	if hf.Releases[0].Chart != "oci://harbor.4pd.io/hardcore-tech/sglang" {
+		t.Errorf("chart = %q", hf.Releases[0].Chart)
+	}
+}
+
 func TestLocalChartPathIsAbsolute(t *testing.T) {
 	p := testPlan()
 	p.Chart.Repo, p.Chart.Path = "", "../charts"

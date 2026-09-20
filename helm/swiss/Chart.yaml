@@ -6,5 +6,5 @@ description: >-
   model catalog over HTTP, reads this cluster's releases and nodes through its
   own ServiceAccount, and serves the web UI embedded in its binary.
 type: application
-version: 0.2.0
-appVersion: "0.2.0"
+version: 0.2.1
+appVersion: "0.2.1"
