@@ -88,11 +88,27 @@ func (c *Catalog) Entry(ctx context.Context, name, wantVersion string) (Entry, e
 		return Entry{}, fmt.Errorf("%s %s (%s): entry says %s %s -- index is stale", name, iv.Version, iv.Path, e.Name, e.Version)
 	}
 	e.Digest = iv.Digest
+	e.applyMetadata(m)
+	if err := e.Validate(); err != nil {
+		return Entry{}, fmt.Errorf("%s %s (%s): %w", name, iv.Version, iv.Path, err)
+	}
 
 	c.mu.Lock()
 	c.entries[key] = *e
 	c.mu.Unlock()
 	return *e, nil
+}
+
+// applyMetadata fills the cosmetic half from the index, which build-index.sh
+// inlined from metadata.yaml. A version file carries none of it, so that a
+// description can be fixed without republishing a version somebody has pinned.
+func (e *Entry) applyMetadata(m IndexModel) {
+	e.Source = Source{HF: m.Source.HF, Revision: m.Source.Revision, SizeGiB: m.Source.SizeGiB}
+	e.DisplayName = m.DisplayName
+	e.Description = m.Description
+	e.Family = m.Family
+	e.Tags = m.Tags
+	e.Deprecated = m.Deprecated
 }
 
 // All fetches every entry. Used by validation and by anything that genuinely
@@ -109,15 +125,14 @@ func (c *Catalog) All(ctx context.Context) ([]Entry, error) {
 	return out, nil
 }
 
-// ParseEntry decodes and validates one entry document.
+// ParseEntry decodes and validates one version document. Source and the
+// cosmetic fields arrive separately, from metadata.yaml by way of the index, so
+// Validate is called by the caller once they are in place.
 func ParseEntry(raw []byte) (*Entry, error) {
 	var e Entry
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true) // an unknown key is a typo, not a setting that does nothing
 	if err := dec.Decode(&e); err != nil {
-		return nil, err
-	}
-	if err := e.Validate(); err != nil {
 		return nil, err
 	}
 	return &e, nil
@@ -172,6 +187,11 @@ func (e Entry) Validate() error {
 		}
 		if v.Requires.GPUs < 1 {
 			return fmt.Errorf("%s: requires.gpus must be at least 1", where)
+		}
+		// An unknown vendor would render a pod requesting an empty resource
+		// name, which schedules and then runs on no accelerator at all.
+		if _, ok := accelerators[v.Requires.VendorOrDefault()]; !ok {
+			return fmt.Errorf("%s: requires.vendor %q is not a known accelerator", where, v.Requires.Vendor)
 		}
 
 		// The catalog layer may only write keys it owns. This is the check that

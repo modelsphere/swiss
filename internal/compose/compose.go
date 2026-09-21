@@ -123,11 +123,6 @@ func catalogLayer(e catalog.Entry, v catalog.Variant) (values.Tree, error) {
 	if err := values.Set(out, "model.gpus", fmt.Sprintf("%d", v.Requires.GPUs)); err != nil {
 		return nil, err
 	}
-	if _, ok := values.Get(out, "modelCheck.requiredGlobs"); !ok {
-		if err := values.Set(out, "modelCheck.requiredGlobs", toAnySlice(e.Source.RequiredGlobsOrDefault())); err != nil {
-			return nil, err
-		}
-	}
 	if v.Image != nil {
 		if err := values.Set(out, "image.tag", v.Image.Tag); err != nil {
 			return nil, err

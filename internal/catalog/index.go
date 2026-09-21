@@ -41,8 +41,9 @@ type IndexVersion struct {
 }
 
 type IndexSource struct {
-	HF      string  `json:"hf"`
-	SizeGiB float64 `json:"sizeGiB,omitempty"`
+	HF       string  `json:"hf"`
+	Revision string  `json:"revision,omitempty"`
+	SizeGiB  float64 `json:"sizeGiB,omitempty"`
 }
 
 type IndexVariant struct {

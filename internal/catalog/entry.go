@@ -28,7 +28,9 @@ type Entry struct {
 	Homepage    string   `yaml:"homepage,omitempty" json:"homepage,omitempty"`
 	Tags        []string `yaml:"tags,omitempty" json:"tags,omitempty"`
 	Deprecated  any      `yaml:"deprecated,omitempty" json:"deprecated,omitempty"`
-	Source      Source   `yaml:"source" json:"source"`
+	// Source comes from metadata.yaml by way of the index, not from the version
+	// document: a different repo id is a different model, not a new version.
+	Source Source `yaml:"-" json:"source"`
 	// Digest is set on fetch from the index, not read from the document.
 	Digest   string    `yaml:"-" json:"digest,omitempty"`
 	Variants []Variant `yaml:"variants" json:"variants"`
@@ -38,10 +40,9 @@ type Entry struct {
 // model.localPath on the host, which is a fact about a cluster -- so the path is
 // the site profile's to supply, derived from HF.
 type Source struct {
-	HF            string   `yaml:"hf" json:"hf"`
-	Revision      string   `yaml:"revision,omitempty" json:"revision,omitempty"`
-	SizeGiB       float64  `yaml:"sizeGiB,omitempty" json:"sizeGiB,omitempty"`
-	RequiredGlobs []string `yaml:"requiredGlobs,omitempty" json:"requiredGlobs,omitempty"`
+	HF       string  `yaml:"hf" json:"hf"`
+	Revision string  `yaml:"revision,omitempty" json:"revision,omitempty"`
+	SizeGiB  float64 `yaml:"sizeGiB,omitempty" json:"sizeGiB,omitempty"`
 }
 
 // Variant is a hardware and parallelism decision. Its fields only ever move
@@ -73,13 +74,45 @@ type Image struct {
 
 type Requires struct {
 	// GPUs is per pod, not per group. A two-pod lws group at 8 needs 16.
-	GPUs            int      `yaml:"gpus" json:"gpus"`
+	GPUs int `yaml:"gpus" json:"gpus"`
+	// Vendor decides the extended resource and the product label, so it is one
+	// brand per variant: a CANN build of an engine is a different image with
+	// different flags than a CUDA one.
+	Vendor          string   `yaml:"vendor,omitempty" json:"vendor,omitempty"`
 	Nodes           int      `yaml:"nodes,omitempty" json:"nodes,omitempty"`
 	Topology        string   `yaml:"topology,omitempty" json:"topology,omitempty"`
 	GPUProduct      []string `yaml:"gpuProduct,omitempty" json:"gpuProduct,omitempty"`
 	MinGPUMemoryGiB float64  `yaml:"minGpuMemoryGiB,omitempty" json:"minGpuMemoryGiB,omitempty"`
 	RDMA            bool     `yaml:"rdma,omitempty" json:"rdma,omitempty"`
 }
+
+const VendorNvidia = "nvidia"
+
+// accelerators maps a vendor to the extended resource a pod requests and the
+// node label its product is published under. A table here rather than in the
+// catalog keeps Kubernetes resource strings out of a public repo, and out of
+// every site profile that would otherwise have to repeat the same well-known
+// values.
+var accelerators = map[string]struct{ Resource, ProductLabel string }{
+	VendorNvidia: {"nvidia.com/gpu", "nvidia.com/gpu.product"},
+	"ascend":     {"huawei.com/Ascend910", "accelerator/huawei-ascend910"},
+	"cambricon":  {"cambricon.com/mlu", "cambricon.com/mlu.product"},
+	"hygon":      {"hygon.com/dcu", "hygon.com/dcu.product"},
+	"amd":        {"amd.com/gpu", "amd.com/gpu.device-id"},
+}
+
+func (r Requires) VendorOrDefault() string {
+	if r.Vendor == "" {
+		return VendorNvidia
+	}
+	return r.Vendor
+}
+
+// ResourceName is the extended resource this variant's pods request.
+func (r Requires) ResourceName() string { return accelerators[r.VendorOrDefault()].Resource }
+
+// ProductLabel is the node label GPUProduct values are matched against.
+func (r Requires) ProductLabel() string { return accelerators[r.VendorOrDefault()].ProductLabel }
 
 const (
 	TopologySingleNode = "single-node"
@@ -109,14 +142,6 @@ func (e Entry) ServedModelName() string {
 		return e.ServedName
 	}
 	return e.Name
-}
-
-// RequiredGlobsOrDefault mirrors the charts' own default.
-func (s Source) RequiredGlobsOrDefault() []string {
-	if len(s.RequiredGlobs) > 0 {
-		return s.RequiredGlobs
-	}
-	return []string{"config.json"}
 }
 
 // Variant looks up a variant by id.

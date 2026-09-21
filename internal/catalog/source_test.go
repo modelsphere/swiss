@@ -13,7 +13,6 @@ const testEntry = `
 apiVersion: catalog.swiss/v1
 name: m
 version: 1.0.0
-source: {hf: org/m}
 variants:
   - id: v
     engine: sglang
@@ -27,7 +26,6 @@ const testEntryV2 = `
 apiVersion: catalog.swiss/v1
 name: m
 version: 1.1.0
-source: {hf: org/m}
 variants:
   - id: v
     engine: sglang

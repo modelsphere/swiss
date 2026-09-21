@@ -50,6 +50,9 @@ export interface Chart {
 
 export interface Requires {
   gpus: number;
+  // Accelerator brand. Absent means nvidia; it decides the extended resource
+  // the pod requests, not just which card matches.
+  vendor?: "nvidia" | "ascend" | "cambricon" | "hygon" | "amd";
   nodes?: number;
   topology?: string;
   gpuProduct?: string[];
@@ -78,7 +81,7 @@ export interface IndexModel {
   description?: string;
   family?: string;
   tags?: string[];
-  source: { hf: string; sizeGiB?: number };
+  source: { hf: string; revision?: string; sizeGiB?: number };
   latest: string;
   versions: IndexVersion[];
 }
@@ -105,7 +108,7 @@ export interface Entry {
   family?: string;
   license?: string;
   tags?: string[];
-  source: { hf: string; sizeGiB?: number; requiredGlobs?: string[] };
+  source: { hf: string; revision?: string; sizeGiB?: number };
   variants: Variant[];
 }
 
