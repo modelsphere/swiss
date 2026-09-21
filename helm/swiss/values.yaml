@@ -132,9 +132,11 @@ rbac:
   #   inference.x-k8s.io        llmslorequirements
   #   routing.gpucluster.io     modelroutes
   #
-  # roles/rolebindings means swissd can create RBAC -- a privilege-escalation
-  # path, bounded by Kubernetes to what swissd already holds. Still the widest
-  # thing here.
+  # roles/rolebindings means swissd can create RBAC. Kubernetes bounds that to
+  # what swissd already holds -- which is why the grant also includes
+  # coordination.k8s.io leases and pods watch/patch: the cart subchart's HA
+  # Role hands those to CART, and a subject cannot grant what it lacks. swissd
+  # never uses them itself. Still the widest thing here.
   allowDeploy: false
 
 serviceAccount:
@@ -204,11 +206,23 @@ logLevel: info
 # Scratch space for helm caches and the per-operation workspace.
 tmpSizeLimit: 1Gi
 
-# Where the database lives when config.allowDeploy is on. emptyDir loses the
-# audit log and drafts on restart; the inventory itself survives, because
-# `swissd reconcile` rebuilds it from the cluster.
+# Where the database lives when config.allowDeploy is on.
+#
+# REQUIRED for deploys, not optional.
+#
+#   run          every diff, apply and install -- not cluster state, nothing can
+#                rebuild it
+#   deployment   release -> current plan, read by apply and upgrade
+#   plan         immutable, keyed by hash; rollback history lives here
+#
+# An emptyDir loses all of it on restart, so the chart refuses allowDeploy
+# without a volume. Upgrades survive that loss anyway -- the whole plan is
+# written beside every release and swissd falls back to reading it -- but the
+# log and the history do not, and nothing can rebuild them.
+#
+# ReadWriteOnce and one replica: sqlite is a single writer.
 persistence:
-  enabled: false
+  enabled: true
   size: 2Gi
   storageClass: ""
   existingClaim: ""

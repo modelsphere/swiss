@@ -28,13 +28,13 @@ swissd --config swissd.yaml -web-dir web/dist
 | `/` | deployments, untracked first |
 | `/catalog` | the catalog index |
 | `/catalog/:name` | one model's entry, with a per-variant fit check |
-| `/deploy/:name` | form -> plan -> diff -> apply/install |
+| `/deploy/:name` | tabs: plan (form + advanced + editor) / diff / apply / status |
 | `/upgrade/:ns/:release` | pick a model version -> what moves -> diff -> approve |
 
 ## Notes
 
 **Bundle size is binary size.** The SPA ships inside `swissd`, to every cluster,
-pulled on every rollout. Current build is ~357 KB JS (~110 KB gzipped). The
+pulled on every rollout. Current build is ~370 KB JS (~113 KB gzipped). The
 Vite chunk warning is set to 400 KB so growth is noticed rather than discovered.
 This is also why the YAML escape hatch, when it lands, should use CodeMirror
 (~300 KB) and not Monaco (~2 MB).

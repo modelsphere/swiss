@@ -33,6 +33,13 @@ type planRequest struct {
 	ServiceID string      `json:"serviceId,omitempty"`
 	LocalPath string      `json:"localPath,omitempty"`
 	Overrides values.Tree `json:"overrides,omitempty"`
+	// OverridesYAML is the advanced section: a values fragment typed by hand.
+	// Parsed here rather than in the browser so there is one parser, and the
+	// ownership check still decides what it may contain.
+	OverridesYAML string `json:"overridesYAML,omitempty"`
+	// EditsYAML is the plan editor: applied after every layer, exempt from
+	// ownership, and labelled "edit" wherever the plan is shown.
+	EditsYAML string `json:"editsYAML,omitempty"`
 }
 
 type applyRequest struct {
@@ -103,6 +110,13 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 	}
 
 	overrides := values.Tree{}
+	if req.OverridesYAML != "" {
+		var extra values.Tree
+		if err := yaml.Unmarshal([]byte(req.OverridesYAML), &extra); err != nil {
+			return nil, fmt.Errorf("advanced overrides: %w", err)
+		}
+		values.Merge(overrides, extra, values.LayerForm, nil)
+	}
 	values.Merge(overrides, req.Overrides, values.LayerForm, nil)
 	if req.ServiceID != "" {
 		if err := values.Set(overrides, "serviceId", req.ServiceID); err != nil {
@@ -114,6 +128,13 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 			return nil, err
 		}
 	}
+	var edits values.Tree
+	if req.EditsYAML != "" {
+		if err := yaml.Unmarshal([]byte(req.EditsYAML), &edits); err != nil {
+			return nil, fmt.Errorf("plan edits: %w", err)
+		}
+	}
+
 	return compose.Compose(compose.Input{
 		Catalog:   cat.Fetcher.String(),
 		Ref:       cat.Ref,
@@ -123,6 +144,7 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 		Release:   release,
 		Namespace: req.Namespace,
 		Overrides: overrides,
+		Edits:     edits,
 	})
 }
 
@@ -144,6 +166,9 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 		Namespace: prev.Release.Namespace,
 		Overrides: prev.Overrides,
 	}
+	if len(prev.Edits) > 0 {
+		out.EditsYAML = mustYAML(prev.Edits)
+	}
 	if req.Variant != "" {
 		out.Variant = req.Variant
 	}
@@ -151,20 +176,45 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 }
 
 // currentPlan is the plan a release was last deployed from.
+// currentPlan is the plan a release was last deployed from.
+//
+// Database first: its deployment row is written only after a successful apply,
+// so it names what is running. The plan ConfigMap is written before the apply,
+// so on a failed one it describes an attempt rather than the live release.
+//
+// Cluster second, and this is the important half: the whole plan sits beside
+// every release, so an empty or lost database costs the audit log and the
+// rollback history, never the ability to upgrade what is deployed.
 func (s *Server) currentPlan(ctx context.Context, namespace, release string) (*plan.Plan, error) {
-	if s.store == nil {
-		return nil, fmt.Errorf("no database")
+	if s.store != nil {
+		if deployments, err := s.store.Deployments(ctx); err == nil {
+			for _, d := range deployments {
+				if d.Release == release && (namespace == "" || d.Namespace == namespace) {
+					if p, err := s.store.Plan(ctx, d.PlanHash); err == nil {
+						return p, nil
+					}
+				}
+			}
+		}
 	}
-	deployments, err := s.store.Deployments(ctx)
+	return s.planFromCluster(ctx, namespace, release)
+}
+
+func (s *Server) planFromCluster(ctx context.Context, namespace, release string) (*plan.Plan, error) {
+	releases, err := s.probe.Releases(ctx)
 	if err != nil {
 		return nil, err
 	}
-	for _, d := range deployments {
-		if d.Release == release && (namespace == "" || d.Namespace == namespace) {
-			return s.store.Plan(ctx, d.PlanHash)
+	for _, r := range releases {
+		if r.Name != release || (namespace != "" && r.Namespace != namespace) {
+			continue
 		}
+		if r.SwissPlan == nil {
+			return nil, fmt.Errorf("release %q has no plan beside it -- swiss did not deploy it", release)
+		}
+		return plan.ParseYAML(r.SwissPlan)
 	}
-	return nil, fmt.Errorf("no plan recorded for release %q -- swiss did not deploy it", release)
+	return nil, fmt.Errorf("no release %q", release)
 }
 
 func (s *Server) handleReleasePlan(w http.ResponseWriter, r *http.Request) {
@@ -392,4 +442,12 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"runs": runs})
+}
+
+func mustYAML(t values.Tree) string {
+	b, err := yaml.Marshal(t)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }

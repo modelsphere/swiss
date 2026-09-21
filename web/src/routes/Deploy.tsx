@@ -11,8 +11,14 @@ import { Toggle } from "@/components/ui/toggle";
 import { DiffView } from "@/components/DiffView";
 import { Provenance } from "@/components/Provenance";
 import { ErrorState, Loading } from "@/components/States";
+import { Tabs } from "@/components/ui/tabs";
+import { ReleaseStatus } from "@/components/ReleaseStatus";
 
 interface Form {
+  edits: string;
+  priorityClassName: string;
+  schedulerName: string;
+  advanced: string;
   cart: boolean;
   modelRoute: boolean;
   slo: boolean;
@@ -28,6 +34,10 @@ interface Form {
 }
 
 const EMPTY: Form = {
+  edits: "",
+  priorityClassName: "",
+  schedulerName: "",
+  advanced: "",
   cart: true,
   modelRoute: false,
   slo: false,
@@ -63,6 +73,7 @@ export function Deploy() {
   const [plan, setPlan] = useState<Plan | null>(null);
   const [diff, setDiff] = useState<DiffResult | null>(null);
   const [applied, setApplied] = useState<ApplyResult | null>(null);
+  const [tab, setTab] = useState("plan");
 
   // A diff is bound to the plan it was computed from. Touching the form
   // invalidates it, so apply is never reachable from a diff nobody saw.
@@ -70,6 +81,10 @@ export function Deploy() {
     setPlan(null);
     setDiff(null);
     setApplied(null);
+  };
+  const setArea = (k: keyof Form) => (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setForm({ ...form, [k]: e.target.value });
+    reset();
   };
   const set = (k: keyof Form) => (e: React.ChangeEvent<HTMLInputElement>) => {
     if (k === "release") setReleaseEdited(true);
@@ -92,12 +107,17 @@ export function Deploy() {
     mutationFn: () => deployApi.diff({ planHash: plan!.hash } as never),
     onSuccess: setDiff,
   });
+  const install = diff ? !diff.exists : false;
+
   const applyM = useMutation({
     mutationFn: () =>
       diff!.exists
         ? deployApi.apply(plan!.hash, diff!.revision)
         : deployApi.install(plan!.hash),
-    onSuccess: setApplied,
+    onSuccess: (r) => {
+      setApplied(r);
+      setTab("status");
+    },
   });
 
   if (model.isPending || cluster.isPending) return <Loading what="the model" />;
@@ -145,6 +165,21 @@ export function Deploy() {
         </p>
       </div>
 
+      <Tabs
+        tabs={[
+          { id: "plan", label: "Plan" },
+          { id: "diff", label: "Diff", disabled: !plan, hint: "compose a plan first" },
+          { id: "install", label: install ? "Install" : "Apply", disabled: !diff, hint: "diff first" },
+          { id: "status", label: "Status", disabled: !applied && !diff?.exists, hint: "nothing deployed yet" },
+        ]}
+        active={tab}
+        onSelect={setTab}
+      />
+
+      {error && <ErrorState what="the request" error={error} />}
+
+      {tab === "plan" && (
+        <div className="space-y-5">
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Deploy settings</CardTitle>
@@ -222,62 +257,151 @@ export function Deploy() {
         </CardContent>
       </Card>
 
-      {error && <ErrorState what="the request" error={error} />}
+      <details className="rounded-lg border">
+        <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
+          Advanced — scheduling, resources, rollout
+        </summary>
+        <div className="space-y-4 border-t p-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Priority class" hint="priorityClassName">
+              <Input value={form.priorityClassName} onChange={set("priorityClassName")} />
+            </Field>
+            <Field label="Scheduler" hint="schedulerName, e.g. volcano">
+              <Input value={form.schedulerName} onChange={set("schedulerName")} />
+            </Field>
+          </div>
+          <Field
+            label="Extra values (YAML)"
+            hint="merged into this deploy's layer; catalog and site keys are still refused"
+          >
+            <textarea
+              value={form.advanced}
+              onChange={setArea("advanced")}
+              spellCheck={false}
+              rows={10}
+              placeholder={ADVANCED_PLACEHOLDER}
+              className="w-full rounded-md border bg-background px-3 py-2 font-mono text-xs"
+            />
+          </Field>
+        </div>
+      </details>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <Button onClick={() => planM.mutate()} disabled={!form.serviceId || planM.isPending}>
-          {planM.isPending ? "Composing…" : "Compose plan"}
-        </Button>
-        <Button variant="outline" onClick={() => diffM.mutate()} disabled={!plan || diffM.isPending}>
-          {diffM.isPending ? "Diffing…" : "Diff"}
-        </Button>
-        <Button onClick={() => applyM.mutate()} disabled={!diff || applyM.isPending || !!applied}>
-          {applyM.isPending ? "Submitting…" : diff?.exists ? "Apply" : "Install"}
-        </Button>
-        {plan && !diff && (
-          <span className="text-xs text-muted-foreground">Diff before applying.</span>
-        )}
-      </div>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Plan editor</CardTitle>
+              <p className="text-sm text-muted-foreground">
+                Applied after every layer, and the only input exempt from layer ownership —
+                it can set a catalog or site key the form refuses. Shown as its own{" "}
+                <span className="font-medium">edit</span> layer in the composed plan, so it is
+                never invisible.
+              </p>
+            </CardHeader>
+            <CardContent>
+              <textarea
+                value={form.edits}
+                onChange={setArea("edits")}
+                spellCheck={false}
+                rows={8}
+                placeholder={"# last word, any key\nextraArgs:\n  - --tp-size=4"}
+                className="w-full rounded-md border bg-background px-3 py-2 font-mono text-xs"
+              />
+            </CardContent>
+          </Card>
 
-      {applied && <Applied result={applied} />}
+          <div className="flex flex-wrap items-center gap-2">
+            <Button onClick={() => planM.mutate()} disabled={!form.serviceId || planM.isPending}>
+              {planM.isPending ? "Composing…" : "Compose plan"}
+            </Button>
+            {plan && <span className="font-mono text-xs text-muted-foreground">{plan.hash}</span>}
+          </div>
 
-      {diff && !applied && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex flex-wrap items-center gap-2 text-base">
-              Diff
-              {diff.changed ? (
-                <Badge variant="warning">changes</Badge>
-              ) : (
-                <Badge variant="success">no changes</Badge>
-              )}
-              {diff.exists && (
-                <span className="text-xs font-normal text-muted-foreground">
-                  live revision {diff.revision}
-                </span>
-              )}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {diff.output.trim() ? (
-              <DiffView output={diff.output} />
-            ) : (
-              <p className="text-sm text-muted-foreground">Nothing would change.</p>
-            )}
-          </CardContent>
-        </Card>
+          {plan && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Composed plan</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <Provenance plan={plan} />
+              </CardContent>
+            </Card>
+          )}
+        </div>
       )}
 
-      {plan && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Composed plan</CardTitle>
-            <p className="font-mono text-xs text-muted-foreground">{plan.hash}</p>
-          </CardHeader>
-          <CardContent>
-            <Provenance plan={plan} />
-          </CardContent>
-        </Card>
+      {tab === "diff" && plan && (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button onClick={() => diffM.mutate()} disabled={diffM.isPending}>
+              {diffM.isPending ? "Diffing…" : diff ? "Diff again" : "Diff"}
+            </Button>
+            {diff && (
+              <span className="text-xs text-muted-foreground">
+                {diff.exists ? `against live revision ${diff.revision}` : "release does not exist yet"}
+              </span>
+            )}
+          </div>
+
+          {diff && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+                  Diff
+                  {diff.changed ? (
+                    <Badge variant="warning">changes</Badge>
+                  ) : (
+                    <Badge variant="success">no changes</Badge>
+                  )}
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {diff.output.trim() ? (
+                  <DiffView output={diff.output} />
+                ) : (
+                  <p className="text-sm text-muted-foreground">Nothing would change.</p>
+                )}
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
+
+      {tab === "install" && plan && diff && (
+        <div className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">{install ? "Install" : "Apply"}</CardTitle>
+              <p className="text-sm text-muted-foreground">
+                {install
+                  ? "The release does not exist; this creates it."
+                  : `Upgrading the live release, asserting it is still at revision ${diff.revision}.`}
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <dl className="grid gap-x-4 gap-y-1 text-sm sm:grid-cols-[10rem_1fr]">
+                <dt className="text-muted-foreground">Release</dt>
+                <dd>{plan.release.namespace}/{plan.release.name}</dd>
+                <dt className="text-muted-foreground">Chart</dt>
+                <dd>{plan.chart.name}-{plan.chart.version}</dd>
+                <dt className="text-muted-foreground">Model</dt>
+                <dd>{plan.source.model} v{plan.source.version}</dd>
+                <dt className="text-muted-foreground">Plan</dt>
+                <dd className="font-mono text-xs break-all">{plan.hash}</dd>
+              </dl>
+              <Button onClick={() => applyM.mutate()} disabled={applyM.isPending || !!applied}>
+                {applyM.isPending ? "Submitting…" : install ? "Install" : "Approve and apply"}
+              </Button>
+            </CardContent>
+          </Card>
+
+          {applied && <Applied result={applied} />}
+        </div>
+      )}
+
+      {tab === "status" && (
+        <ReleaseStatus
+          namespace={plan?.release.namespace ?? cluster.data.namespace ?? ""}
+          release={plan?.release.name ?? release}
+        />
       )}
     </div>
   );
@@ -318,6 +442,21 @@ function Back({ name }: { name: string }) {
   );
 }
 
+const ADVANCED_PLACEHOLDER = `nodeSelector:
+  nvidia.com/gpu.product: NVIDIA-B300-SXM6-AC
+tolerations:
+  - key: gpu
+    operator: Exists
+    effect: NoSchedule
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution: {}
+resources:
+  limits:
+    rdma/hca_shared: "1"
+strategy:
+  type: Recreate`;
+
 function request(model: string, version: string, variant: string, f: Form): PlanRequest {
   const overrides: Record<string, unknown> = {};
   const num = (v: string) => (v.trim() === "" ? undefined : Number(v));
@@ -340,9 +479,14 @@ function request(model: string, version: string, variant: string, f: Form): Plan
   if (num(f.maxReplicas) !== undefined) scaler.maxReplicas = num(f.maxReplicas);
   overrides.scaler = { ...scaler, enabled: Object.keys(scaler).length > 0 };
 
+  if (f.priorityClassName.trim()) overrides.priorityClassName = f.priorityClassName.trim();
+  if (f.schedulerName.trim()) overrides.schedulerName = f.schedulerName.trim();
+
   return {
     model,
     version: version || undefined,
+      overridesYAML: f.advanced.trim() || undefined,
+    editsYAML: f.edits.trim() || undefined,
     variant: variant || undefined,
     release: f.release.trim() || undefined,
     namespace: f.namespace.trim() || undefined,

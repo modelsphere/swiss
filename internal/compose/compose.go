@@ -26,6 +26,9 @@ type Input struct {
 	Release   string
 	Namespace string
 	Overrides values.Tree
+	// Edits bypass the ownership check on purpose: they are the escape hatch
+	// for a key no layer claims, or one a deploy must override anyway.
+	Edits values.Tree
 }
 
 // Compose resolves an entry, a variant, a profile and a set of overrides into a
@@ -65,6 +68,7 @@ func Compose(in Input) (*plan.Plan, error) {
 		return nil, err
 	}
 	values.Merge(out, in.Overrides, values.LayerForm, prov)
+	values.Merge(out, in.Edits, values.LayerEdit, prov)
 
 	p := &plan.Plan{
 		APIVersion: plan.APIVersion,
@@ -87,6 +91,7 @@ func Compose(in Input) (*plan.Plan, error) {
 		Profile:         in.Profile.Name,
 		CreateNamespace: in.Profile.CreateNamespace,
 		Overrides:       in.Overrides,
+		Edits:           in.Edits,
 		Values:          out,
 		Provenance:      prov,
 	}

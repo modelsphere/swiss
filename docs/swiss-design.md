@@ -7,7 +7,7 @@ What exists: both binaries. `swiss` composes a model from the catalog, a site
 profile and deploy-time overrides, then renders, diffs, applies or installs it.
 `swissd` serves the same core over HTTP with a read-only SPA embedded in it, and
 a write path behind `server.allowDeploy`. Not built: preflight, `emit`,
-`reconcile`, auth.
+auth.
 
 Today a release is created by hand: copy a values file from `deploys/production/`,
 edit it, add an entry to `helmfile.yaml`, `make diff`, `make apply`. That works,
@@ -203,6 +203,7 @@ becomes a question about precedence, and there is no good answer to any of them.
 | chart defaults | everything not claimed below | `charts/*/values.yaml` |
 | **catalog variant** | model identity, and how it parallelizes | `model.{name,mountPath,hostPathType,gpus}`, `extraArgs`, `lws.{enabled,size}`, `env`, `volumes`, `modelCheck.requiredGlobs`, `image` |
 | **site profile** | what makes it work here | `cache.hostPath`, the registry rewrite for `image.repository`, `scaler.serverAddress`, `modelRoute.nginx.outputConfigMap`, `modelRoute.monitor.outputConfigMap`, `serviceMonitor.labels`, namespace, and the path template `model.localPath` defaults from |
+| **plan editor** | the escape hatch, applied last | any key, exempt from ownership, labelled `edit` |
 | **user form** | how much, where, how routed | **`serviceId`**, **`model.localPath`**, `replicaCount`, `scaler.{minReplicas,maxReplicas,scaleDown}`, `nodeSelector`, `affinity`, `tolerations`, `priorityClassName`, `schedulerName`, `podDisruptionBudget`, `modelRoute.*`, `cart.*`, `sloRequirement.extraSpec` |
 
 Two of those are central enough to be named fields rather than `--set` keys.
@@ -250,6 +251,27 @@ blanket answer — `cart` on, `modelRoute`, `sloRequirement`, `scaler`,
 deploy wants, so it is switched on explicitly: filling in scaling numbers turns
 the scaler on, naming a route turns routing on, and an explicit `enabled: false`
 from the form still wins over both.
+
+### The plan editor is the fifth input, and the only one exempt
+
+Four layers with disjoint keys is right until a deploy needs a key no layer
+claims, or one the catalog got wrong. Rather than let that pressure erode the
+ownership table one exception at a time, there is one honest escape hatch: a YAML
+box applied **after every layer**, exempt from the ownership check, and labelled
+`edit` wherever the plan is shown.
+
+It is kept apart from the form's overrides in the stored plan, so an upgrade
+carries it forward or drops it deliberately rather than silently. The rule it
+preserves: an override that bypasses the design is fine as long as nobody can
+apply it without seeing that they did.
+
+Scheduling lives behind an **Advanced** fold: priority class and scheduler as
+plain fields, and one YAML box merged into the deploy layer for the structured
+ones — `nodeSelector`, `tolerations`, `affinity`, `resources`, `strategy`. It is
+parsed on the server rather than in the browser, so there is one parser and the
+ownership check still decides what it may contain: a `extraArgs` typed there is
+refused exactly as it would be from a flag. The placeholder shows the shape
+rather than a blank box, since these are keys people copy from a values file.
 
 The web sends all of them regardless — three toggles plus the scaler, derived
 from whether any scaling input was filled. A flag left out of the request would
@@ -393,6 +415,18 @@ new plan, and diffs it. `apply` is the execution half — it is `helm upgrade`
 underneath — and the recompose is `POST /api/plans {"fromRelease": "..."}`: the
 release's stored plan supplies the model, the variant and every deploy input, so
 only the catalog layer moves.
+
+The deploy page is four tabs — **Plan**, **Diff**, **Apply/Install**, **Status**
+— each gated on the one before it: no diff without a plan, no apply without a
+diff, no status until something is deployed. The apply tab is a summary and a
+button, not another form, so the thing being approved is the plan that was
+already diffed.
+
+Status polls pods and adds one check nothing else does: **ask the openresty
+entrypoint, not the pod**. A ready pod behind a route that was never published
+serves nobody, and closing that gap is what the whole ModelRoute path exists for.
+The check calls `/<route>/v1/models` through the entrypoint Service and reports
+the model ids it got back.
 
 The web puts that behind one screen. It names what changes before anything else
 — model version, chart version, entry digest, variant — then shows the site
@@ -657,9 +691,26 @@ reads `peers` and navigates to another origin; that instance answers for itself.
 Any cross-cluster view is the browser talking to several swissds, never one
 swissd talking to several clusters.
 
-SQLite on a PVC, one replica. Nothing here justifies Postgres until `swissd` runs
-more than one replica, and the migration stays cheap precisely because a wipe
-costs audit history and drafts rather than the inventory.
+SQLite on a PVC, one replica — sqlite is a single writer and the volume is
+ReadWriteOnce. The chart **refuses** `allowDeploy` without a volume, and refuses
+more than one replica with it.
+
+The volume exists for the **audit log**. `run` is the only record of what was
+attempted -- diffs that changed nothing, applies that failed, who asked for what
+-- and none of it is cluster state, so nothing can rebuild it. Rollback history
+is the same: only the latest plan sits beside a release.
+
+What the volume is *not* needed for is upgrading. The whole plan is written
+beside every release, so `currentPlan` reads the database first -- its deployment
+row is written only after a successful apply, so it names what is running -- and
+falls back to the plan ConfigMap. An empty or lost database therefore costs the
+log and the history, never the ability to upgrade what is deployed.
+
+There is deliberately **no reconcile command**. With that fallback there is
+nothing to repair: the deploy path already reads the cluster, and the half a
+reconcile could not recover is the half the volume is for.
+
+Nothing here justifies Postgres until `swissd` runs more than one replica.
 
 The site profile is a ConfigMap rather than a database row: it describes a
 cluster, so it lives in the cluster it describes, and a lost database does not
@@ -686,8 +737,15 @@ Deploy permissions are a second switch (`rbac.allowDeploy`), granting exactly
 what the sglang and vllm charts render and nothing else — core, apps, policy,
 rbac, `monitoring.coreos.com`, `leaderworkerset.x-k8s.io`, `autoscaling.4pd.io`,
 `inference.x-k8s.io`, `routing.gpucluster.io`. The widest rule in that set is
-`roles`/`rolebindings`, needed by the cart subchart: a privilege-escalation path
-that Kubernetes bounds to what swissd already holds.
+`roles`/`rolebindings`, needed by the cart subchart.
+
+Kubernetes bounds that: a subject cannot create a Role granting permissions it
+does not itself hold. So swissd's grant must be a superset of everything the
+charts hand out -- which is why it also carries `coordination.k8s.io` leases and
+`pods` watch/patch, the two rules CART's HA Role gives to CART. swissd never uses
+them; it only passes them on. Adding a rule to a chart's own RBAC therefore means
+adding it here too, or the install fails with "attempting to grant RBAC
+permissions not currently held".
 
 ### What git was doing for free, and must be replaced
 
@@ -711,21 +769,6 @@ which is the scenario `make verify` exists to catch. Preflight reads the live
 ConfigMap keys every time. Cache them for a dropdown; never let the cache answer
 "is this name free".
 
-### Disaster recovery, written before it is needed
-
-```
-swissd reconcile
-```
-
-scans namespaces for helm releases and `swiss-plan-*` ConfigMaps and repopulates
-`plan` and `deployment`. A database wipe then costs exactly: audit history,
-drafts and approvals. A rebuild path that has never been run is not a rebuild
-path.
-
-Git remains available to the server as an optional **sink** — emitted values and
-plans pushed for archival — but never as a dependency, and nothing reads back
-from it.
-
 ## Phases
 
 - **P0 — compose and render.** Catalog, entry schema, fetch → compose → validate
@@ -741,7 +784,7 @@ from it.
   ConfigMaps, embedded read-only SPA. **Done.** One cluster per instance, no
   cluster keying anywhere in it.
 - **P5 — the write path in the UI**, with the approval gate.
-- **P6** — auth, `reconcile`.
+- **P6** — auth.
 
 ### P0's exit criterion
 
@@ -775,8 +818,8 @@ tree these values were tested against.
 - **Preflight.** The seven rules above; `internal/cluster` has the interface and
   a fake, and nothing else.
 - **`emit`** — the git-path writer.
-- **`swissd reconcile`** — the DB rebuild from a cluster scan. The plan
-  ConfigMaps it would read are written; nothing reads them back.
+- **Rollback beyond the current plan.** Only the latest plan sits beside a
+  release, so history lives in the database and nowhere else.
 - **Auth.** No identity anywhere, so the audit log records what happened but not
   who.
 - **The write path in the UI.** The API has it; the SPA is read-only.

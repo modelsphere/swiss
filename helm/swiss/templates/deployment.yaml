@@ -1,6 +1,12 @@
 {{- if and .Values.config.allowDeploy (not .Values.rbac.allowDeploy) }}
 {{- fail "config.allowDeploy is on but rbac.allowDeploy is off: swissd would accept applies it has no permission to perform" }}
 {{- end }}
+{{- if and .Values.config.allowDeploy (not .Values.persistence.enabled) (not .Values.persistence.existingClaim) }}
+{{- fail "config.allowDeploy needs persistence: the database holds the audit log, which is not cluster state and cannot be rebuilt, plus the release -> plan mapping apply and upgrade read. Set persistence.enabled or persistence.existingClaim." }}
+{{- end }}
+{{- if and .Values.config.allowDeploy (gt (int .Values.replicaCount) 1) }}
+{{- fail "config.allowDeploy runs one replica: sqlite is a single writer and the volume is ReadWriteOnce" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -76,7 +82,7 @@ spec:
             sizeLimit: {{ .Values.tmpSizeLimit }}
         {{- if .Values.config.allowDeploy }}
         - name: data
-          {{- if .Values.persistence.enabled }}
+          {{- if or .Values.persistence.enabled .Values.persistence.existingClaim }}
           persistentVolumeClaim:
             claimName: {{ .Values.persistence.existingClaim | default (printf "%s-data" (include "swiss.fullname" .)) }}
           {{- else }}

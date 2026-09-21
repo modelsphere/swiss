@@ -148,6 +148,10 @@ export const api = {
       `/api/catalog/${encodeURIComponent(name)}` + (version ? `?version=${encodeURIComponent(version)}` : ""),
     ),
   nodes: () => get<{ cluster: string; nodes: Node[] }>("/api/nodes"),
+  status: (ns: string, release: string) =>
+    get<ReleaseStatus>(
+      `/api/releases/${encodeURIComponent(ns)}/${encodeURIComponent(release)}/status`,
+    ),
   releasePlan: (namespace: string, release: string) =>
     get<Plan>(
       `/api/releases/${encodeURIComponent(namespace)}/${encodeURIComponent(release)}/plan`,
@@ -171,6 +175,7 @@ export interface Plan {
   values: Record<string, unknown>;
   provenance?: Record<string, string>;
   helmfile?: string;
+  edits?: Record<string, unknown>;
   hash: string;
 }
 
@@ -201,6 +206,41 @@ export interface PlanRequest {
   serviceId?: string;
   localPath?: string;
   overrides?: Record<string, unknown>;
+  overridesYAML?: string;
+  editsYAML?: string;
+}
+
+export interface Pod {
+  name: string;
+  phase: string;
+  ready: boolean;
+  restarts: number;
+  node?: string;
+  message?: string;
+  ageSeconds: number;
+}
+
+export interface ReleaseStatus {
+  release: string;
+  namespace: string;
+  exists: boolean;
+  revision: number;
+  helmStatus?: string;
+  pods: Pod[];
+  ready: number;
+  total: number;
+  route?: string;
+  warning?: string;
+}
+
+export interface ProbeResult {
+  url: string;
+  ok: boolean;
+  status?: number;
+  latencyMs: number;
+  models?: string[];
+  error?: string;
+  body?: string;
 }
 
 async function post<T>(path: string, body: unknown): Promise<T> {
@@ -227,4 +267,9 @@ export const deployApi = {
   apply: (planHash: string, expectRevision: number) =>
     post<ApplyResult>("/api/apply", { planHash, expectRevision }),
   install: (planHash: string) => post<ApplyResult>("/api/install", { planHash }),
+  probe: (ns: string, release: string) =>
+    post<ProbeResult>(
+      `/api/releases/${encodeURIComponent(ns)}/${encodeURIComponent(release)}/probe`,
+      {},
+    ),
 };

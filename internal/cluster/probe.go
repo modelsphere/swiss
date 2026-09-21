@@ -41,7 +41,21 @@ type Node struct {
 	Schedulable bool
 }
 
+// Pod is enough to tell loading from broken: on this workload a pod that is
+// scheduled and not ready has usually been reading weights for twenty minutes.
+type Pod struct {
+	Name      string `json:"name"`
+	Phase     string `json:"phase"`
+	Ready     bool   `json:"ready"`
+	Restarts  int32  `json:"restarts"`
+	Node      string `json:"node,omitempty"`
+	Message   string `json:"message,omitempty"`
+	AgeSecond int64  `json:"ageSeconds"`
+}
+
 type Probe interface {
+	// Pods in a namespace matching a label selector.
+	Pods(ctx context.Context, namespace, selector string) ([]Pod, error)
 	// Ping is a cheap reachability check, for readiness probes.
 	Ping(ctx context.Context) error
 	Releases(ctx context.Context) ([]Release, error)
@@ -78,14 +92,16 @@ func SplitRef(ref string) (namespace, name string, err error) {
 // Fake is an in-memory Probe.
 type Fake struct {
 	PingErr error
+	Pod     []Pod
 	Rel     []Release
 	Nod     []Node
 	Maps    map[string]map[string]string
 }
 
-func (f Fake) Ping(context.Context) error                  { return f.PingErr }
-func (f Fake) Releases(context.Context) ([]Release, error) { return f.Rel, nil }
-func (f Fake) Nodes(context.Context) ([]Node, error)       { return f.Nod, nil }
+func (f Fake) Ping(context.Context) error                          { return f.PingErr }
+func (f Fake) Pods(context.Context, string, string) ([]Pod, error) { return f.Pod, nil }
+func (f Fake) Releases(context.Context) ([]Release, error)         { return f.Rel, nil }
+func (f Fake) Nodes(context.Context) ([]Node, error)               { return f.Nod, nil }
 func (f Fake) ConfigMap(_ context.Context, ref string) (map[string]string, error) {
 	return f.Maps[ref], nil
 }

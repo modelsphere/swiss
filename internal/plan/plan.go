@@ -32,6 +32,12 @@ type Plan struct {
 	// catalog without the user's intent having been flattened away.
 	Overrides values.Tree `json:"overrides,omitempty"`
 
+	// Edits are the escape hatch, applied after every layer and exempt from
+	// ownership. Kept apart from Overrides so an upgrade can carry them forward
+	// or drop them deliberately, and so provenance can show which values came
+	// from a human editing the plan rather than from the form.
+	Edits values.Tree `json:"edits,omitempty"`
+
 	// Values is the composed document handed to helm.
 	Values values.Tree `json:"values"`
 
@@ -130,7 +136,7 @@ func (p *Plan) YAML() ([]byte, error) {
 }
 
 // Layers are the values documents a release is applied through, in merge order.
-var Layers = []string{values.LayerCatalog, values.LayerSite, values.LayerDerived, values.LayerForm}
+var Layers = []string{values.LayerCatalog, values.LayerSite, values.LayerDerived, values.LayerForm, values.LayerEdit}
 
 // LayerValues splits the composed values by the layer that set each path, so a
 // release is applied through one document per layer rather than one merged file.
@@ -162,4 +168,22 @@ func (p *Plan) ValuesFiles() []string {
 		return []string{"values.yaml"}
 	}
 	return out
+}
+
+// ParseYAML reads a plan stored beside a release. It goes through JSON because
+// the document was written that way: the field names are the json tags.
+func ParseYAML(raw []byte) (*Plan, error) {
+	var doc map[string]any
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		return nil, err
+	}
+	b, err := json.Marshal(doc)
+	if err != nil {
+		return nil, err
+	}
+	var p Plan
+	if err := json.Unmarshal(b, &p); err != nil {
+		return nil, err
+	}
+	return &p, nil
 }

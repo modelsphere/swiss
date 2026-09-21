@@ -76,6 +76,11 @@ helm install swiss ./helm/swiss -n swiss --create-namespace \
 swissd lists only namespaces it was granted — a Role cannot authorise a
 cluster-wide list. `rbac.scope: cluster` drops the list and reads everything.
 
+Deploy mode needs a volume and one replica: the database holds the audit log and
+the rollback history, neither of which is cluster state. Upgrades do not depend
+on it -- the whole plan is written beside every release, and swissd falls back to
+reading it from there.
+
 One instance per cluster, inside the cluster it manages. Read the RBAC section of
 the design doc before installing: `rbac.scope` decides whether swissd can read
 every Secret in the cluster.

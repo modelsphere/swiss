@@ -72,6 +72,18 @@ the RBAC that reads it cannot disagree.
 - apiGroups: ["rbac.authorization.k8s.io"]
   resources: ["roles", "rolebindings"]
   verbs: {{ $all | toJson }}
+{{/*
+Kubernetes refuses to let a subject create a Role granting permissions it does
+not itself hold, so swissd must hold everything the charts hand out. These two
+are the cart subchart's HA lease election -- swissd never uses them, it only
+passes them on.
+*/}}
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch", "patch"]
 - apiGroups: ["monitoring.coreos.com"]
   resources: ["servicemonitors"]
   verbs: {{ $all | toJson }}

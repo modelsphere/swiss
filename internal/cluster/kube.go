@@ -315,3 +315,36 @@ func (k *Kube) PutConfigMap(ctx context.Context, ref string, data map[string]str
 func (k *Kube) PlanRef(namespace, release string) string {
 	return namespace + "/" + k.SwissPlanPrefix + release
 }
+
+// Pods lists pods matching a label selector.
+func (k *Kube) Pods(ctx context.Context, namespace, selector string) ([]Pod, error) {
+	list, err := k.client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		return nil, fmt.Errorf("list pods in %s: %w", namespace, err)
+	}
+	out := make([]Pod, 0, len(list.Items))
+	for i := range list.Items {
+		p := &list.Items[i]
+		pod := Pod{
+			Name:  p.Name,
+			Phase: string(p.Status.Phase),
+			Node:  p.Spec.NodeName,
+		}
+		if !p.CreationTimestamp.IsZero() {
+			pod.AgeSecond = int64(time.Since(p.CreationTimestamp.Time).Seconds())
+		}
+		for _, c := range p.Status.ContainerStatuses {
+			pod.Restarts += c.RestartCount
+		}
+		for _, c := range p.Status.Conditions {
+			if c.Type == corev1.PodReady {
+				pod.Ready = c.Status == corev1.ConditionTrue
+				if !pod.Ready && c.Message != "" {
+					pod.Message = c.Message
+				}
+			}
+		}
+		out = append(out, pod)
+	}
+	return out, nil
+}

@@ -83,6 +83,9 @@ type Route struct {
 	NginxService     string `yaml:"nginxService,omitempty"`
 	NginxSelector    string `yaml:"nginxSelector,omitempty"`
 	MonitorConfigMap string `yaml:"monitorConfigMap,omitempty"`
+	// NginxPort is the entrypoint's port; the readiness check calls
+	// http://<nginxService>:<port>/<route>/v1/models. Defaults to 8080.
+	NginxPort int `yaml:"nginxPort,omitempty"`
 }
 
 type Nodes struct {

@@ -13,6 +13,7 @@ const (
 	LayerSite    = "site"    // what makes it work here
 	LayerDerived = "derived" // computed from catalog x site; a provenance label only
 	LayerForm    = "form"    // how much, where, how routed
+	LayerEdit    = "edit"    // the escape hatch: applied last, any key
 )
 
 // LayerDerived never appears here, and that is the point: ownership says who MAY

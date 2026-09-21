@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/aceforeverd/swiss/internal/cluster"
+	"github.com/aceforeverd/swiss/internal/plan"
 	"github.com/aceforeverd/swiss/internal/store"
 )
 
@@ -391,4 +392,152 @@ func TestEveryToggledFeatureIsFormSettable(t *testing.T) {
 	if vals["serviceMonitor"].(map[string]any)["enabled"] != true {
 		t.Errorf("serviceMonitor.enabled did not take: %v", vals["serviceMonitor"])
 	}
+}
+
+// The advanced section is a values fragment typed by hand. It is parsed on the
+// server so there is one parser, and the ownership check still gates it.
+func TestAdvancedOverridesYAML(t *testing.T) {
+	srv, _ := deployServer(t, true)
+	code, body := post(t, srv, "/api/plans", map[string]any{
+		"model": "glm5.1", "release": "r", "serviceId": "r",
+		"overridesYAML": "nodeSelector:\n  pool: gpu\ntolerations:\n  - key: gpu\n    operator: Exists\npriorityClassName: high\n",
+	})
+	if code != 200 {
+		t.Fatalf("status %d: %v", code, body)
+	}
+	vals := body["values"].(map[string]any)
+	if vals["nodeSelector"].(map[string]any)["pool"] != "gpu" {
+		t.Errorf("nodeSelector not merged: %v", vals["nodeSelector"])
+	}
+	if len(vals["tolerations"].([]any)) != 1 || vals["priorityClassName"] != "high" {
+		t.Errorf("advanced fragment not merged: %v", vals)
+	}
+	if body["provenance"].(map[string]any)["priorityClassName"] != "form" {
+		t.Error("hand-typed overrides belong to the form layer")
+	}
+}
+
+func TestAdvancedOverridesStillObeyOwnership(t *testing.T) {
+	srv, _ := deployServer(t, true)
+	code, body := post(t, srv, "/api/plans", map[string]any{
+		"model": "glm5.1", "release": "r",
+		"overridesYAML": "extraArgs:\n  - --tp-size=8\n",
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("a catalog key typed by hand must still be refused: %d %v", code, body)
+	}
+}
+
+func TestAdvancedOverridesRejectBadYAML(t *testing.T) {
+	srv, _ := deployServer(t, true)
+	if code, _ := post(t, srv, "/api/plans", map[string]any{
+		"model": "glm5.1", "release": "r", "overridesYAML": "nodeSelector: [unclosed",
+	}); code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", code)
+	}
+}
+
+func TestStatusReportsPodReadiness(t *testing.T) {
+	probe := liveProbe()
+	probe.Pod = []cluster.Pod{
+		{Name: "glm-53-abc", Phase: "Running", Ready: false, AgeSecond: 700},
+		{Name: "glm-53-def", Phase: "Running", Ready: true},
+	}
+	srv := testServer(t, probe)
+	code, body := get(t, srv, "/api/releases/modelforge/glm-53/status")
+	if code != 200 {
+		t.Fatalf("status %d: %v", code, body)
+	}
+	if body["ready"].(float64) != 1 || body["total"].(float64) != 2 {
+		t.Fatalf("readiness not counted: %v", body)
+	}
+	if body["exists"] != true || body["revision"].(float64) != 4 {
+		t.Errorf("helm state missing: %v", body)
+	}
+}
+
+// The check goes through the entrypoint, not the pod: a ready pod behind an
+// unpublished route serves nobody.
+func TestProbeNeedsAnEntrypointAndARoute(t *testing.T) {
+	srv, s := deployServer(t, true)
+	_, body := post(t, srv, "/api/plans", map[string]any{"model": "glm5.1", "release": "r", "serviceId": "r"})
+	hash, _ := body["hash"].(string)
+	if err := s.store.RecordApply(context.Background(), store.Deployment{
+		Namespace: "modelforge", Release: "r", PlanHash: hash, Revision: 1,
+	}, 0); err != nil {
+		t.Fatal(err)
+	}
+	// profileYAML names no route.nginxService.
+	code, out := post(t, srv, "/api/releases/modelforge/r/probe", map[string]any{})
+	if code != http.StatusPreconditionFailed {
+		t.Fatalf("want 412, got %d %v", code, out)
+	}
+	if msg, _ := out["error"].(string); !strings.Contains(msg, "nginxService") {
+		t.Errorf("the refusal should name what is missing: %q", msg)
+	}
+}
+
+// Everything needed to upgrade a release sits beside it, so an empty database
+// costs the audit log and the rollback history -- never the ability to upgrade
+// what is deployed.
+func TestUpgradeWorksWithAnEmptyDatabase(t *testing.T) {
+	// Compose a plan, write it beside the release the way an apply would, then
+	// start a fresh swissd whose database knows nothing.
+	seed, _ := deployServer(t, true)
+	_, body := post(t, seed, "/api/plans", map[string]any{
+		"model": "glm5.1", "release": "glm-53", "serviceId": "glm-53",
+		"overrides": map[string]any{"replicaCount": 3},
+	})
+	planYAML := mustPlanYAML(t, body)
+
+	probe := fakeProbe()
+	probe.Rel = []cluster.Release{{
+		Name: "glm-53", Namespace: "modelforge", Chart: "sglang-0.7.0",
+		Status: "deployed", Revision: 4, SwissPlan: planYAML,
+	}}
+	cfg := testConfig("prod-b300")
+	cfg.Server.AllowDeploy = true
+	s := New(cfg, probe, discardLogger(), "test")
+	db, err := store.Open(filepath.Join(t.TempDir(), "empty.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s.SetStore(db)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	code, cur := get(t, srv, "/api/releases/modelforge/glm-53/plan")
+	if code != 200 {
+		t.Fatalf("the plan beside the release must be readable: %d %v", code, cur)
+	}
+	if cur["source"].(map[string]any)["model"] != "glm5.1" {
+		t.Fatalf("plan did not round trip from the ConfigMap: %v", cur["source"])
+	}
+
+	code, up := post(t, srv, "/api/plans", map[string]any{"fromRelease": "glm-53"})
+	if code != 200 {
+		t.Fatalf("upgrade must recompose with no database rows: %d %v", code, up)
+	}
+	vals := up["values"].(map[string]any)
+	if vals["replicaCount"] != float64(3) || vals["serviceId"] != "glm-53" {
+		t.Fatalf("the form layer did not survive the cluster round trip: %v", vals)
+	}
+}
+
+func mustPlanYAML(t *testing.T, body map[string]any) []byte {
+	t.Helper()
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := plan.ParseYAML(raw) // JSON is valid YAML
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := p.YAML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return doc
 }

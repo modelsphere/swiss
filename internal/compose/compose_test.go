@@ -324,3 +324,30 @@ func TestLayerValuesSplitByProvenance(t *testing.T) {
 		t.Fatalf("values files must be in merge order: %v", files)
 	}
 }
+
+// The edit layer is the escape hatch: applied last, exempt from ownership, and
+// labelled so it is visible wherever the plan is.
+func TestEditLayerBypassesOwnershipAndWinsLast(t *testing.T) {
+	in := testInput()
+	in.Overrides = values.Tree{"replicaCount": 2}
+	in.Edits = values.Tree{
+		"replicaCount": 9,
+		"extraArgs":    []any{"--tp-size=4"}, // catalog-owned; a form write is refused
+		"somethingNew": "value",
+	}
+	p, err := Compose(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := values.Get(p.Values, "replicaCount"); v != 9 {
+		t.Errorf("edits apply last: replicaCount = %v", v)
+	}
+	if v, _ := values.Get(p.Values, "extraArgs"); len(v.([]any)) != 1 {
+		t.Errorf("edits may set a catalog key: %v", v)
+	}
+	for _, path := range []string{"replicaCount", "extraArgs", "somethingNew"} {
+		if p.Provenance[path] != values.LayerEdit {
+			t.Errorf("%s should be attributed to edit, got %q", path, p.Provenance[path])
+		}
+	}
+}
