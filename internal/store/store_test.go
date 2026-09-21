@@ -53,29 +53,25 @@ func TestPlansAreImmutableAndRoundTrip(t *testing.T) {
 	}
 }
 
-func TestRecordApplyBumpsVersionAndDetectsAConcurrentWrite(t *testing.T) {
+// Nothing in this database claims to know what is deployed. That answer is the
+// plan ConfigMap beside each release, and a table holding a second copy of it
+// would disagree with the cluster the first time an apply failed between the
+// two writes.
+func TestNothingHereRecordsWhatIsDeployed(t *testing.T) {
 	s, ctx := open(t), context.Background()
-	d := Deployment{Namespace: "modelforge", Release: "glm-53", PlanHash: "sha256:a", Revision: 4}
-	if err := s.RecordApply(ctx, d, 0); err != nil {
+	rows, err := s.db.QueryContext(ctx, `SELECT name FROM sqlite_master WHERE type = 'table'`)
+	if err != nil {
 		t.Fatal(err)
 	}
-	list, err := s.Deployments(ctx)
-	if err != nil || len(list) != 1 || list[0].Version != 1 {
-		t.Fatalf("got %+v err=%v", list, err)
-	}
-
-	d.PlanHash, d.Revision = "sha256:b", 5
-	if err := s.RecordApply(ctx, d, 1); err != nil {
-		t.Fatal(err)
-	}
-	list, _ = s.Deployments(ctx)
-	if list[0].Version != 2 || list[0].PlanHash != "sha256:b" {
-		t.Fatalf("version/plan not advanced: %+v", list[0])
-	}
-
-	// Someone else applied in between.
-	if err := s.RecordApply(ctx, d, 1); err == nil {
-		t.Fatal("a stale version must be refused")
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		if name == "deployments" {
+			t.Fatal("a deployments table is a second source of truth for what is running")
+		}
 	}
 }
 
@@ -104,12 +100,22 @@ func TestRunsAreAppendOnlyAndNewestFirst(t *testing.T) {
 func TestReleasesAreKeyedByNamespaceAndName(t *testing.T) {
 	s, ctx := open(t), context.Background()
 	for _, ns := range []string{"modelforge", "kimi"} {
-		if err := s.RecordApply(ctx, Deployment{Namespace: ns, Release: "r", PlanHash: "h"}, 0); err != nil {
+		if _, err := s.RecordRun(ctx, Run{
+			Namespace: ns, Release: "r", Action: "apply", PlanHash: "h",
+			StartedAt: "2026-09-20T10:00:00Z", EndedAt: "2026-09-20T10:00:01Z",
+		}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	list, _ := s.Deployments(ctx)
-	if len(list) != 2 {
-		t.Fatalf("the same name in two namespaces is two deployments: %+v", list)
+	runs, err := s.Runs(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, r := range runs {
+		seen[r.Namespace] = true
+	}
+	if len(seen) != 2 {
+		t.Fatalf("the same release name in two namespaces is two releases: %+v", runs)
 	}
 }

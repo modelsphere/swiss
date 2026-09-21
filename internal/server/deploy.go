@@ -45,9 +45,11 @@ type planRequest struct {
 type applyRequest struct {
 	PlanHash string `json:"planHash"`
 	// ExpectRevision is the live helm revision the diff was computed against.
+	// It is the whole of the optimistic lock: the revision is helm's, held in
+	// the cluster, so two operators who diffed the same release cannot both
+	// apply. A version column in swissd's own database would have been a lock
+	// on a copy rather than on the thing being changed.
 	ExpectRevision int `json:"expectRevision,omitempty"`
-	// ExpectVersion is the deployment row the caller read.
-	ExpectVersion int `json:"expectVersion,omitempty"`
 }
 
 func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
@@ -149,11 +151,9 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 }
 
 // carryForward fills a request from a release's last plan, so an upgrade keeps
-// the deploy inputs and moves only the model version.
+// the deploy inputs and moves only the model version. It needs no database: the
+// whole plan sits beside the release.
 func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest, error) {
-	if s.store == nil {
-		return req, fmt.Errorf("no database: cannot recompose a release")
-	}
 	prev, err := s.currentPlan(ctx, req.Namespace, req.FromRelease)
 	if err != nil {
 		return req, err
@@ -175,32 +175,15 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 	return out, nil
 }
 
-// currentPlan is the plan a release was last deployed from.
-// currentPlan is the plan a release was last deployed from.
+// currentPlan is the plan a release was last deployed from, read from the
+// cluster and nowhere else.
 //
-// Database first: its deployment row is written only after a successful apply,
-// so it names what is running. The plan ConfigMap is written before the apply,
-// so on a failed one it describes an attempt rather than the live release.
-//
-// Cluster second, and this is the important half: the whole plan sits beside
-// every release, so an empty or lost database costs the audit log and the
-// rollback history, never the ability to upgrade what is deployed.
+// The plan ConfigMap is the source of truth. etcd is replicated and backed up;
+// a sqlite file on one ReadWriteOnce volume is neither, so a database row
+// claiming to know what is running is a second answer that can disagree with
+// the cluster -- and it would disagree exactly when an apply fails between the
+// two writes. The database is the audit log, and losing it costs the log.
 func (s *Server) currentPlan(ctx context.Context, namespace, release string) (*plan.Plan, error) {
-	if s.store != nil {
-		if deployments, err := s.store.Deployments(ctx); err == nil {
-			for _, d := range deployments {
-				if d.Release == release && (namespace == "" || d.Namespace == namespace) {
-					if p, err := s.store.Plan(ctx, d.PlanHash); err == nil {
-						return p, nil
-					}
-				}
-			}
-		}
-	}
-	return s.planFromCluster(ctx, namespace, release)
-}
-
-func (s *Server) planFromCluster(ctx context.Context, namespace, release string) (*plan.Plan, error) {
 	releases, err := s.probe.Releases(ctx)
 	if err != nil {
 		return nil, err
@@ -329,14 +312,6 @@ func (s *Server) handleApply(mode exec.Mode) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, applyErr.Error())
 			return
 		}
-		if err := s.store.RecordApply(ctx, store.Deployment{
-			Namespace: p.Release.Namespace, Release: p.Release.Name,
-			PlanHash: p.Hash, Revision: after.Revision,
-		}, req.ExpectVersion); err != nil {
-			writeError(w, http.StatusConflict, err.Error())
-			return
-		}
-
 		writeJSON(w, http.StatusOK, map[string]any{
 			"planHash":    p.Hash,
 			"release":     p.Release.Name,

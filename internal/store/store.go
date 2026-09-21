@@ -1,7 +1,12 @@
-// Package store is swissd's database: drafts, immutable plans, and the audit
-// log. It is never the source of truth for what is deployed -- every applied
-// plan is also written beside its release, so this can be rebuilt from the
-// cluster.
+// Package store is swissd's audit log, and the staging area plans pass through
+// between compose, diff and apply.
+//
+// It is not a record of what is deployed and nothing reads it as one. That
+// answer lives in the plan ConfigMap beside each release: etcd is replicated and
+// backed up, a sqlite file on one PVC is neither, and two stores of the same
+// fact disagree the moment an apply fails between them. So the cluster is the
+// only source of truth, and losing this database costs the operation log --
+// never the ability to see or upgrade what is running.
 //
 // One swissd serves one cluster and owns one database, so nothing here is keyed
 // by cluster. Seeing several clusters at once is a link in the web nav, not a
@@ -30,15 +35,6 @@ CREATE TABLE IF NOT EXISTS plans (
   variant    TEXT NOT NULL,
   document   TEXT NOT NULL,
   created_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS deployments (
-  namespace  TEXT NOT NULL,
-  release    TEXT NOT NULL,
-  plan_hash  TEXT NOT NULL,
-  revision   INTEGER NOT NULL DEFAULT 0,
-  version    INTEGER NOT NULL DEFAULT 1,
-  updated_at TEXT NOT NULL,
-  PRIMARY KEY (namespace, release)
 );
 CREATE TABLE IF NOT EXISTS runs (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -104,60 +100,11 @@ func (s *Store) Plan(ctx context.Context, hash string) (*plan.Plan, error) {
 	return &p, nil
 }
 
-type Deployment struct {
-	Namespace string `json:"namespace"`
-	Release   string `json:"release"`
-	PlanHash  string `json:"planHash"`
-	Revision  int    `json:"revision"`
-	Version   int    `json:"version"`
-	UpdatedAt string `json:"updatedAt"`
-}
-
-// RecordApply moves a deployment to a new plan. version is the row the caller
-// read; a mismatch means someone else applied in between.
-func (s *Store) RecordApply(ctx context.Context, d Deployment, expectVersion int) error {
-	if expectVersion == 0 {
-		_, err := s.db.ExecContext(ctx,
-			`INSERT INTO deployments (namespace, release, plan_hash, revision, version, updated_at)
-			 VALUES (?, ?, ?, ?, 1, ?)
-			 ON CONFLICT (namespace, release) DO UPDATE SET
-			   plan_hash = excluded.plan_hash, revision = excluded.revision,
-			   version = deployments.version + 1, updated_at = excluded.updated_at`,
-			d.Namespace, d.Release, d.PlanHash, d.Revision, now())
-		return err
-	}
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE deployments SET plan_hash = ?, revision = ?, version = version + 1, updated_at = ?
-		 WHERE namespace = ? AND release = ? AND version = ?`,
-		d.PlanHash, d.Revision, now(), d.Namespace, d.Release, expectVersion)
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("deployment changed since it was read; re-diff before applying")
-	}
-	return nil
-}
-
-func (s *Store) Deployments(ctx context.Context) ([]Deployment, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT namespace, release, plan_hash, revision, version, updated_at
-		 FROM deployments ORDER BY namespace, release`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Deployment
-	for rows.Next() {
-		var d Deployment
-		if err := rows.Scan(&d.Namespace, &d.Release, &d.PlanHash, &d.Revision, &d.Version, &d.UpdatedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, d)
-	}
-	return out, rows.Err()
-}
-
+// Run is one attempted operation. Append-only, and the only record that a diff
+// changed nothing or that an apply failed -- none of which is cluster state, so
+// nothing can rebuild it. It is also where a release's history lives now that
+// no table claims to know what is deployed: the applies for one release, newest
+// first, each naming the plan hash it ran.
 type Run struct {
 	ID        int64  `json:"id"`
 	Namespace string `json:"namespace"`

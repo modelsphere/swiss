@@ -15,6 +15,7 @@ import (
 	"github.com/aceforeverd/swiss/internal/cluster"
 	"github.com/aceforeverd/swiss/internal/plan"
 	"github.com/aceforeverd/swiss/internal/store"
+	"github.com/aceforeverd/swiss/internal/values"
 )
 
 type fakeWriter struct{ written map[string]map[string]string }
@@ -29,9 +30,32 @@ func (f *fakeWriter) PutConfigMap(_ context.Context, ref string, data map[string
 
 func deployServer(t *testing.T, allow bool) (*httptest.Server, *Server) {
 	t.Helper()
+	return deployServerWith(t, liveProbe(), allow)
+}
+
+// livePlan composes a plan and renders it the way an apply writes it beside the
+// release. Tests seed the cluster with this rather than the database, because
+// the ConfigMap is where a release's plan lives -- seeding a table would test a
+// path nothing reads.
+func livePlan(t *testing.T, req planRequest) (*plan.Plan, []byte) {
+	t.Helper()
+	s := New(testConfig("prod-b300"), fakeProbe(), discardLogger(), "test")
+	p, err := s.compose(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := p.YAML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p, doc
+}
+
+func deployServerWith(t *testing.T, probe cluster.Probe, allow bool) (*httptest.Server, *Server) {
+	t.Helper()
 	cfg := testConfig("prod-b300")
 	cfg.Server.AllowDeploy = allow
-	s := New(cfg, liveProbe(), discardLogger(), "test")
+	s := New(cfg, probe, discardLogger(), "test")
 	if allow {
 		db, err := store.Open(filepath.Join(t.TempDir(), "swiss.db"))
 		if err != nil {
@@ -290,19 +314,17 @@ func TestDeploymentsSurfaceTheApplyPhase(t *testing.T) {
 
 // An upgrade keeps the deploy inputs and moves only the catalog layer.
 func TestUpgradeCarriesTheFormLayerForward(t *testing.T) {
-	srv, s := deployServer(t, true)
-
-	_, body := post(t, srv, "/api/plans", map[string]any{
-		"model": "modelforge", "release": "fallback-modelforge-01",
-		"serviceId": "fallback-modelforge-01",
-		"overrides": map[string]any{"replicaCount": 3},
+	_, doc := livePlan(t, planRequest{
+		Model: "modelforge", Release: "fallback-modelforge-01",
+		ServiceID: "fallback-modelforge-01",
+		Overrides: values.Tree{"replicaCount": 3},
 	})
-	hash := body["hash"].(string)
-	if err := s.store.RecordApply(context.Background(), store.Deployment{
-		Namespace: "modelforge", Release: "fallback-modelforge-01", PlanHash: hash, Revision: 1,
-	}, 0); err != nil {
-		t.Fatal(err)
-	}
+	probe := liveProbe()
+	probe.Rel = append(probe.Rel, cluster.Release{
+		Name: "fallback-modelforge-01", Namespace: "modelforge",
+		Status: "deployed", Revision: 1, SwissPlan: doc,
+	})
+	srv, _ := deployServerWith(t, probe, true)
 
 	code, up := post(t, srv, "/api/plans", map[string]any{"fromRelease": "fallback-modelforge-01"})
 	if code != 200 {
@@ -322,17 +344,16 @@ func TestUpgradeCarriesTheFormLayerForward(t *testing.T) {
 }
 
 func TestReleasePlanEndpoint(t *testing.T) {
-	srv, s := deployServer(t, true)
-	_, body := post(t, srv, "/api/plans", map[string]any{"model": "kimi-k2.5", "release": "kimi-k25"})
-	hash := body["hash"].(string)
-	if err := s.store.RecordApply(context.Background(), store.Deployment{
-		Namespace: "modelforge", Release: "kimi-k25", PlanHash: hash, Revision: 2,
-	}, 0); err != nil {
-		t.Fatal(err)
-	}
+	p, doc := livePlan(t, planRequest{Model: "kimi-k2.5", Release: "kimi-k25"})
+	probe := liveProbe()
+	probe.Rel = append(probe.Rel, cluster.Release{
+		Name: "kimi-k25", Namespace: "modelforge",
+		Status: "deployed", Revision: 2, SwissPlan: doc,
+	})
+	srv, _ := deployServerWith(t, probe, true)
 
 	code, cur := get(t, srv, "/api/releases/modelforge/kimi-k25/plan")
-	if code != 200 || cur["hash"] != hash {
+	if code != 200 || cur["hash"] != p.Hash {
 		t.Fatalf("status %d: %v", code, cur)
 	}
 	// A release swiss did not deploy has no plan to upgrade from.
@@ -459,14 +480,12 @@ func TestStatusReportsPodReadiness(t *testing.T) {
 // The check goes through the entrypoint, not the pod: a ready pod behind an
 // unpublished route serves nobody.
 func TestProbeNeedsAnEntrypointAndARoute(t *testing.T) {
-	srv, s := deployServer(t, true)
-	_, body := post(t, srv, "/api/plans", map[string]any{"model": "glm5.1", "release": "r", "serviceId": "r"})
-	hash, _ := body["hash"].(string)
-	if err := s.store.RecordApply(context.Background(), store.Deployment{
-		Namespace: "modelforge", Release: "r", PlanHash: hash, Revision: 1,
-	}, 0); err != nil {
-		t.Fatal(err)
-	}
+	_, doc := livePlan(t, planRequest{Model: "glm5.1", Release: "r", ServiceID: "r"})
+	probe := liveProbe()
+	probe.Rel = append(probe.Rel, cluster.Release{
+		Name: "r", Namespace: "modelforge", Status: "deployed", Revision: 1, SwissPlan: doc,
+	})
+	srv, _ := deployServerWith(t, probe, true)
 	// profileYAML names no route.nginxService.
 	code, out := post(t, srv, "/api/releases/modelforge/r/probe", map[string]any{})
 	if code != http.StatusPreconditionFailed {
@@ -477,18 +496,14 @@ func TestProbeNeedsAnEntrypointAndARoute(t *testing.T) {
 	}
 }
 
-// Everything needed to upgrade a release sits beside it, so an empty database
-// costs the audit log and the rollback history -- never the ability to upgrade
-// what is deployed.
-func TestUpgradeWorksWithAnEmptyDatabase(t *testing.T) {
-	// Compose a plan, write it beside the release the way an apply would, then
-	// start a fresh swissd whose database knows nothing.
-	seed, _ := deployServer(t, true)
-	_, body := post(t, seed, "/api/plans", map[string]any{
-		"model": "glm5.1", "release": "glm-53", "serviceId": "glm-53",
-		"overrides": map[string]any{"replicaCount": 3},
+// Everything needed to see and upgrade a release sits beside it in the cluster,
+// so a swissd with no database at all can still do both. Losing the database
+// costs the operation log and nothing else.
+func TestUpgradeNeedsNoDatabase(t *testing.T) {
+	_, planYAML := livePlan(t, planRequest{
+		Model: "glm5.1", Release: "glm-53", ServiceID: "glm-53",
+		Overrides: values.Tree{"replicaCount": 3},
 	})
-	planYAML := mustPlanYAML(t, body)
 
 	probe := fakeProbe()
 	probe.Rel = []cluster.Release{{
@@ -497,13 +512,7 @@ func TestUpgradeWorksWithAnEmptyDatabase(t *testing.T) {
 	}}
 	cfg := testConfig("prod-b300")
 	cfg.Server.AllowDeploy = true
-	s := New(cfg, probe, discardLogger(), "test")
-	db, err := store.Open(filepath.Join(t.TempDir(), "empty.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	s.SetStore(db)
+	s := New(cfg, probe, discardLogger(), "test") // no SetStore
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
 
@@ -525,19 +534,42 @@ func TestUpgradeWorksWithAnEmptyDatabase(t *testing.T) {
 	}
 }
 
-func mustPlanYAML(t *testing.T, body map[string]any) []byte {
-	t.Helper()
-	raw, err := json.Marshal(body)
-	if err != nil {
-		t.Fatal(err)
+// The database is not a record of what is deployed. When it holds a plan for a
+// release anyway -- a staged plan that was never applied, or one left by an
+// apply that failed after the cluster changed -- the ConfigMap beside the
+// release is what every reader must report.
+func TestTheClusterWinsOverTheDatabase(t *testing.T) {
+	_, running := livePlan(t, planRequest{
+		Model: "glm5.1", Release: "glm-53", ServiceID: "glm-53",
+		Overrides: values.Tree{"replicaCount": 3},
+	})
+	probe := fakeProbe()
+	probe.Rel = []cluster.Release{{
+		Name: "glm-53", Namespace: "modelforge", Chart: "sglang-0.8.0",
+		Status: "deployed", Revision: 4, SwissPlan: running,
+	}}
+	srv, s := deployServerWith(t, probe, true)
+
+	// Stage a different plan for the same release, the way composing one does.
+	_, staged := post(t, srv, "/api/plans", map[string]any{
+		"model": "glm5.1", "release": "glm-53", "serviceId": "glm-53",
+		"overrides": map[string]any{"replicaCount": 9},
+	})
+	if _, err := s.store.Plan(context.Background(), staged["hash"].(string)); err != nil {
+		t.Fatalf("the staged plan should be in the database: %v", err)
 	}
-	p, err := plan.ParseYAML(raw) // JSON is valid YAML
-	if err != nil {
-		t.Fatal(err)
+
+	code, cur := get(t, srv, "/api/releases/modelforge/glm-53/plan")
+	if code != 200 {
+		t.Fatalf("status %d: %v", code, cur)
 	}
-	doc, err := p.YAML()
-	if err != nil {
-		t.Fatal(err)
+	if got := cur["values"].(map[string]any)["replicaCount"]; got != float64(3) {
+		t.Fatalf("replicaCount = %v, want the cluster's 3 -- the database was read as truth", got)
 	}
-	return doc
+
+	// And the recompose an upgrade starts from must be the running plan too.
+	_, up := post(t, srv, "/api/plans", map[string]any{"fromRelease": "glm-53"})
+	if got := up["values"].(map[string]any)["replicaCount"]; got != float64(3) {
+		t.Fatalf("upgrade carried forward %v, want the cluster's 3", got)
+	}
 }

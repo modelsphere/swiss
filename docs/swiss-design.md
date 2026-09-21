@@ -640,7 +640,17 @@ name breaks on the first migration `docs/blue-green-migration.md` describes.
 ### The server path (`swissd`)
 
 No repo beside it; management happens in the web UI. Desired state is therefore
-the database, with the cluster as the backstop.
+the **cluster** — the plan ConfigMap beside each release — and the database is
+the operation log, nothing more.
+
+That split is deliberate and it is a durability argument. etcd is replicated,
+backed up and the thing an operator already restores after an incident; a sqlite
+file on one ReadWriteOnce volume is none of those. So the fact that has to
+survive — which plan a release is running — lives in etcd, and the fact nothing
+else can reconstruct — what was attempted, by whom, and how it ended — lives in
+sqlite. Two stores holding the same fact would disagree the first time an apply
+failed between the two writes, and a reader would then have to pick. Nothing
+picks, because nothing has two answers to choose from.
 
 The write path is gated by `server.allowDeploy`, off by default. With it off
 every mutating endpoint returns 403 saying so, and swissd needs no database and
@@ -669,14 +679,19 @@ itself rather than looking like a healthy deploy. The post-apply status write is
 best effort -- the plan is already recorded by then and only the phase can go
 stale.
 
-| store | holds |
-| --- | --- |
-| **SQLite** | `plan` (immutable, keyed by hash), `deployment` (release → current plan, live revision, version), `run` (append-only audit), `draft` |
-| **cluster** | `swiss-plan-<release>` per release; the site profile as a ConfigMap in swissd's namespace |
-| **helm** | 20 revisions of real values, already |
+| store | holds | answers |
+| --- | --- | --- |
+| **cluster** | `swiss-plan-<release>` per release; the site profile as a ConfigMap in swissd's namespace | what is running, and what produced it |
+| **SQLite** | `run` (append-only audit), `plan` (immutable, keyed by hash) | what was attempted, and how it ended |
+| **helm** | 20 revisions of real values, already | what the values were, without the layering |
 
-`plan` immutable plus `deployment` pointing at one gives history and rollback for
-free: reverting is applying an earlier plan row. Plans are never mutated in place.
+There is **no `deployment` table**, and that is the point: a row saying "release
+R is on plan H" is a second copy of something etcd already holds, written a few
+milliseconds apart from it, with no way to tell which is right when they differ.
+`plan` is immutable and keyed by hash, so it is a content-addressed staging area
+for the compose → diff → apply handoff, not an inventory. History comes from
+`run`: the applies for one release, newest first, each naming the plan hash it
+ran and whether it worked. Rollback is applying an earlier hash from that log.
 
 **Nothing in the server is keyed by cluster.** One swissd serves one cluster and
 owns one database, so a cluster column would hold one value in every row and
@@ -695,20 +710,29 @@ SQLite on a PVC, one replica — sqlite is a single writer and the volume is
 ReadWriteOnce. The chart **refuses** `allowDeploy` without a volume, and refuses
 more than one replica with it.
 
-The volume exists for the **audit log**. `run` is the only record of what was
-attempted -- diffs that changed nothing, applies that failed, who asked for what
--- and none of it is cluster state, so nothing can rebuild it. Rollback history
-is the same: only the latest plan sits beside a release.
+The volume exists for the **audit log**, and only for it. `run` is the only
+record of what was attempted -- diffs that changed nothing, applies that failed,
+who asked for what -- and none of it is cluster state, so nothing can rebuild it.
 
-What the volume is *not* needed for is upgrading. The whole plan is written
-beside every release, so `currentPlan` reads the database first -- its deployment
-row is written only after a successful apply, so it names what is running -- and
-falls back to the plan ConfigMap. An empty or lost database therefore costs the
-log and the history, never the ability to upgrade what is deployed.
+What the volume is *not* needed for is seeing or upgrading a release.
+`currentPlan` reads the plan ConfigMap and nothing else, so a swissd with no
+database at all still lists what is deployed, shows each release's plan, and
+recomposes an upgrade from it. Losing the database costs the log and the
+history; it costs nothing else. That is a property worth keeping deliberately,
+and a test asserts it.
 
-There is deliberately **no reconcile command**. With that fallback there is
-nothing to repair: the deploy path already reads the cluster, and the half a
-reconcile could not recover is the half the volume is for.
+There is deliberately **no reconcile command**. Reconciliation here is a *view*,
+not a loop: every live release joined against the plan beside it, computed per
+request. Nothing needs repairing because nothing is cached -- the deploy path
+reads the cluster every time, and the half a reconcile could not recover is the
+half the volume is for.
+
+The loop-shaped version of this — a CRD owning the rendered resources, with a
+controller writing observed state back in an event loop — is a later
+consideration and would replace the view, not extend it. Today's status
+write-back is a single best-effort write after the apply. That is a deliberate
+trade, and it carries one unresolved consequence: see Open, where `plan.yaml`
+currently holds the attempted plan rather than the applied one.
 
 Nothing here justifies Postgres until `swissd` runs more than one replica.
 
@@ -819,7 +843,8 @@ tree these values were tested against.
   a fake, and nothing else.
 - **`emit`** — the git-path writer.
 - **Rollback beyond the current plan.** Only the latest plan sits beside a
-  release, so history lives in the database and nowhere else.
+  release, so history lives in `run` and nowhere else — and a lost database
+  therefore costs the ability to revert to anything but what helm itself kept.
 - **Auth.** No identity anywhere, so the audit log records what happened but not
   who.
 - **The write path in the UI.** The API has it; the SPA is read-only.
@@ -827,6 +852,15 @@ tree these values were tested against.
 
 ## Open
 
+- **`plan.yaml` holds the attempted plan, not the applied one.** The write-ahead
+  replaces the whole ConfigMap before helmfile runs, so a failed upgrade leaves
+  the key describing an attempt while the release keeps running the previous
+  plan. Now that the cluster is the only source of truth, the reconciliation
+  view has no second place to check: it reports the target version for a release
+  still on the old one, and if the best-effort `status.yaml` write is also lost,
+  it reports it as clean. The fix is a spec/status split inside the same
+  ConfigMap — write-ahead to a `pending.yaml`, promote it to `plan.yaml` on
+  success — which is also the shape a CRD would take.
 - **`servedName` is doing a job it should not.** The fallback release serves a
   Qwen model under the name `kimi` so callers do not change — a deploy-time
   routing decision, but `model.name` is catalog-owned, so today the catalog has
