@@ -112,6 +112,15 @@ rbac:
   # Start namespaced. Widen deliberately, knowing what it grants.
   scope: namespaced
 
+  # Cluster-wide pod LIST, for the GPU usage column on the nodes page.
+  #
+  # A node publishes how many GPUs it has and how many are allocatable, never
+  # how many are in use -- that has to be summed from the pods bound to it, and
+  # a sum taken over only the namespaces below would under-report every GPU held
+  # elsewhere. Off means swissd shows capacity and reports usage as unknown,
+  # which is the honest answer when it cannot see every pod.
+  nodeGPUUsage: true
+
   # Namespaces holding model releases. Used when scope is namespaced.
   namespaces: []
     # - modelforge

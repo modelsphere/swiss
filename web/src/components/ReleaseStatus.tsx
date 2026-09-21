@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { CircleCheck, CircleX, Loader2 } from "lucide-react";
-import { api, deployApi, type ProbeResult } from "@/lib/api";
+import { api, deployApi, type EntrypointAuth, type ProbeResult } from "@/lib/api";
+import { AuthFields, SentHeaders } from "@/components/EntrypointAuth";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,6 +11,7 @@ import { ErrorState, Loading } from "@/components/States";
 
 export function ReleaseStatus({ namespace, release }: { namespace: string; release: string }) {
   const [probe, setProbe] = useState<ProbeResult | null>(null);
+  const [auth, setAuth] = useState<EntrypointAuth>({});
 
   const status = useQuery({
     queryKey: ["status", namespace, release],
@@ -17,7 +19,7 @@ export function ReleaseStatus({ namespace, release }: { namespace: string; relea
     refetchInterval: 10_000,
   });
   const probeM = useMutation({
-    mutationFn: () => deployApi.probe(namespace, release),
+    mutationFn: () => deployApi.probe(namespace, release, auth),
     onSuccess: setProbe,
   });
 
@@ -100,6 +102,8 @@ export function ReleaseStatus({ namespace, release }: { namespace: string; relea
           </p>
         </CardHeader>
         <CardContent className="space-y-3">
+          <AuthFields value={auth} onChange={setAuth} />
+
           <Button size="sm" onClick={() => probeM.mutate()} disabled={probeM.isPending}>
             {probeM.isPending ? (
               <>
@@ -128,6 +132,7 @@ export function ReleaseStatus({ namespace, release }: { namespace: string; relea
                 )}
                 {probe.status ? <Badge variant="muted">HTTP {probe.status}</Badge> : null}
                 <span className="text-xs text-muted-foreground">{probe.latencyMs} ms</span>
+                <SentHeaders names={probe.sentHeaders} />
               </div>
               <div className="font-mono text-xs break-all text-muted-foreground">{probe.url}</div>
               {probe.models?.length ? (

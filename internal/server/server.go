@@ -143,6 +143,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/deployments", s.handleDeployments)
 	mux.HandleFunc("GET /api/nodes", s.handleNodes)
 	mux.HandleFunc("GET /api/runs", s.handleRuns)
+	mux.HandleFunc("GET /api/runs/{id}", s.handleRun)
 	mux.HandleFunc("GET /api/releases/{namespace}/{release}/plan", s.handleReleasePlan)
 	mux.HandleFunc("GET /api/releases/{namespace}/{release}/status", s.handleStatus)
 	mux.HandleFunc("POST /api/releases/{namespace}/{release}/probe", s.handleProbe)

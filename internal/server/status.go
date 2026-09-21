@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/aceforeverd/swiss/internal/cluster"
 	"github.com/aceforeverd/swiss/internal/plan"
+	"github.com/aceforeverd/swiss/internal/site"
 	"github.com/aceforeverd/swiss/internal/values"
 )
 
@@ -72,6 +74,14 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// entrypointAuth is the per-request half of the entrypoint credentials: an
+// operator testing a key that is not the one in the site profile, or a header
+// the profile does not carry. Never echoed back in a result.
+type entrypointAuth struct {
+	APIKey  string            `json:"apiKey,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+}
+
 type probeResult struct {
 	URL       string   `json:"url"`
 	OK        bool     `json:"ok"`
@@ -80,6 +90,9 @@ type probeResult struct {
 	Models    []string `json:"models,omitempty"`
 	Error     string   `json:"error,omitempty"`
 	Body      string   `json:"body,omitempty"`
+	// SentHeaders names the headers the call carried, values omitted. Enough to
+	// tell "the key was not sent" from "the key was wrong"; never the key.
+	SentHeaders []string `json:"sentHeaders,omitempty"`
 }
 
 // handleProbe asks the entrypoint whether the model is actually servable.
@@ -91,22 +104,26 @@ func (s *Server) handleProbe(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := contextWithTimeout(r, 30*time.Second)
 	defer cancel()
 
+	var auth entrypointAuth
+	// An empty body is a valid request: it means "use whatever the profile says".
+	_ = json.NewDecoder(r.Body).Decode(&auth)
+
 	ns, release := r.PathValue("namespace"), r.PathValue("release")
 	p, err := s.currentPlan(ctx, ns, release)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	base, err := s.entrypoint(ctx, p)
+	base, hdr, err := s.entrypoint(ctx, p, auth)
 	if err != nil {
 		writeError(w, http.StatusPreconditionFailed, err.Error())
 		return
 	}
 	url := base + "/v1/models"
 
-	res := probeResult{URL: url}
+	res := probeResult{URL: url, SentHeaders: sentHeaderNames(hdr)}
 	started := time.Now()
-	body, code, err := httpGet(ctx, url)
+	body, code, err := httpGet(ctx, url, hdr)
 	res.LatencyMS = time.Since(started).Milliseconds()
 	res.Status = code
 	if err != nil {
@@ -131,18 +148,20 @@ type chatRequest struct {
 	// the engine is serving under a name the plan does not predict.
 	Model     string `json:"model,omitempty"`
 	MaxTokens int    `json:"maxTokens,omitempty"`
+	entrypointAuth
 }
 
 type chatResult struct {
-	URL       string `json:"url"`
-	API       string `json:"api"`
-	Model     string `json:"model,omitempty"`
-	OK        bool   `json:"ok"`
-	Status    int    `json:"status,omitempty"`
-	LatencyMS int64  `json:"latencyMs"`
-	Reply     string `json:"reply,omitempty"`
-	Error     string `json:"error,omitempty"`
-	Body      string `json:"body,omitempty"`
+	URL         string   `json:"url"`
+	API         string   `json:"api"`
+	Model       string   `json:"model,omitempty"`
+	OK          bool     `json:"ok"`
+	Status      int      `json:"status,omitempty"`
+	LatencyMS   int64    `json:"latencyMs"`
+	Reply       string   `json:"reply,omitempty"`
+	Error       string   `json:"error,omitempty"`
+	Body        string   `json:"body,omitempty"`
+	SentHeaders []string `json:"sentHeaders,omitempty"`
 }
 
 // handleChat sends a real inference request through the entrypoint.
@@ -175,7 +194,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	base, err := s.entrypoint(ctx, p)
+	base, hdr, err := s.entrypoint(ctx, p, req.entrypointAuth)
 	if err != nil {
 		writeError(w, http.StatusPreconditionFailed, err.Error())
 		return
@@ -192,9 +211,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res := chatResult{URL: base + path, API: req.API, Model: model}
+	res := chatResult{URL: base + path, API: req.API, Model: model, SentHeaders: sentHeaderNames(hdr)}
 	started := time.Now()
-	raw, code, err := httpPostJSON(ctx, res.URL, body)
+	raw, code, err := httpPostJSON(ctx, res.URL, body, hdr)
 	res.LatencyMS = time.Since(started).Milliseconds()
 	res.Status = code
 	if err != nil {
@@ -212,30 +231,79 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
-// entrypoint is the openresty base URL for a release's route, the same address
-// handleProbe asks. Both go through the entrypoint rather than the pod: a ready
-// pod behind an unpublished route serves nobody.
-func (s *Server) entrypoint(ctx context.Context, p *plan.Plan) (string, error) {
+// entrypoint is the openresty base URL for a release's route and the headers to
+// call it with. Both checks go through the entrypoint rather than the pod: a
+// ready pod behind an unpublished route serves nobody.
+func (s *Server) entrypoint(ctx context.Context, p *plan.Plan, auth entrypointAuth) (string, http.Header, error) {
 	prof, err := s.Profile(ctx)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if prof.Route.NginxService == "" {
-		return "", fmt.Errorf("site profile names no route.nginxService, so there is no entrypoint to ask")
+		return "", nil, fmt.Errorf("site profile names no route.nginxService, so there is no entrypoint to ask")
 	}
 	svcNS, svcName, err := cluster.SplitRef(prof.Route.NginxService)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	route := routeOf(p)
 	if route == "" {
-		return "", fmt.Errorf("this release publishes no route")
+		return "", nil, fmt.Errorf("this release publishes no route")
 	}
 	port := prof.Route.NginxPort
 	if port == 0 {
 		port = 8080
 	}
-	return fmt.Sprintf("http://%s.%s.svc:%d/%s", svcName, svcNS, port, route), nil
+	hdr, err := s.entrypointHeaders(ctx, prof.Route.Auth, auth)
+	if err != nil {
+		return "", nil, err
+	}
+	return fmt.Sprintf("http://%s.%s.svc:%d/%s", svcName, svcNS, port, route), hdr, nil
+}
+
+// entrypointHeaders resolves what the checks send: the site profile's static
+// headers and its API key, with the request's own overriding both.
+//
+// The profile is a ConfigMap, so it names a Secret rather than holding the key.
+// A request-supplied key wins outright -- that is what makes it possible to test
+// a credential before writing it into the cluster.
+func (s *Server) entrypointHeaders(ctx context.Context, cfg site.RouteAuth, req entrypointAuth) (http.Header, error) {
+	hdr := http.Header{}
+	for k, v := range cfg.Headers {
+		hdr.Set(k, v)
+	}
+	for k, v := range req.Headers {
+		hdr.Set(k, v)
+	}
+
+	key := req.APIKey
+	if key == "" && cfg.SecretRef != "" {
+		data, err := s.probe.Secret(ctx, cfg.SecretRef)
+		if err != nil {
+			return nil, fmt.Errorf("route.auth.secretRef %s: %w", cfg.SecretRef, err)
+		}
+		name := cfg.SecretKey
+		if name == "" {
+			name = "apiKey"
+		}
+		if key = data[name]; key == "" {
+			return nil, fmt.Errorf("secret %s has no key %q", cfg.SecretRef, name)
+		}
+	}
+	if key != "" {
+		hdr.Set(cfg.HeaderName(), cfg.KeyPrefix()+key)
+	}
+	return hdr, nil
+}
+
+// sentHeaderNames is what a result may report: names, never values.
+func sentHeaderNames(h http.Header) []string {
+	out := make([]string, 0, len(h))
+	for k := range h {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func chatBody(api, model, prompt string, maxTokens int) (string, any, error) {
@@ -319,11 +387,12 @@ func routeOf(p *plan.Plan) string {
 	return p.Release.Name
 }
 
-func httpGet(ctx context.Context, url string) ([]byte, int, error) {
+func httpGet(ctx context.Context, url string, hdr http.Header) ([]byte, int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, 0, err
 	}
+	copyHeader(req, hdr)
 	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
 	if err != nil {
 		return nil, 0, err
@@ -336,7 +405,7 @@ func httpGet(ctx context.Context, url string) ([]byte, int, error) {
 // httpPostJSON is the chat check's transport. The timeout is generous because
 // the first request against a freshly loaded model pays for a cold cache, and a
 // check that times out at five seconds would report a healthy model as broken.
-func httpPostJSON(ctx context.Context, url string, body any) ([]byte, int, error) {
+func httpPostJSON(ctx context.Context, url string, body any, hdr http.Header) ([]byte, int, error) {
 	buf, err := json.Marshal(body)
 	if err != nil {
 		return nil, 0, err
@@ -345,6 +414,7 @@ func httpPostJSON(ctx context.Context, url string, body any) ([]byte, int, error
 	if err != nil {
 		return nil, 0, err
 	}
+	copyHeader(req, hdr)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := (&http.Client{Timeout: 110 * time.Second}).Do(req)
 	if err != nil {
@@ -353,6 +423,14 @@ func httpPostJSON(ctx context.Context, url string, body any) ([]byte, int, error
 	defer resp.Body.Close()
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	return b, resp.StatusCode, err
+}
+
+func copyHeader(req *http.Request, hdr http.Header) {
+	for k, vs := range hdr {
+		for _, v := range vs {
+			req.Header.Add(k, v)
+		}
+	}
 }
 
 func modelIDs(body []byte) []string {

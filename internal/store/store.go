@@ -131,13 +131,45 @@ func (s *Store) RecordRun(ctx context.Context, r Run) (int64, error) {
 	return res.LastInsertId()
 }
 
+// RunFilter narrows the log. Zero values mean "everything", so the unfiltered
+// call stays the simple one.
+type RunFilter struct {
+	Namespace string
+	Release   string
+	Action    string
+	Limit     int
+}
+
 func (s *Store) Runs(ctx context.Context, limit int) ([]Run, error) {
-	if limit <= 0 {
-		limit = 50
+	return s.RunsFiltered(ctx, RunFilter{Limit: limit})
+}
+
+// RunsFiltered lists the log newest first. Output is deliberately not selected:
+// helmfile output runs to tens of kilobytes per row, and a log view that drags
+// every diff it ever rendered into one response is a log view nobody opens.
+// One run's output comes from Run.
+func (s *Store) RunsFiltered(ctx context.Context, f RunFilter) ([]Run, error) {
+	if f.Limit <= 0 {
+		f.Limit = 50
 	}
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, namespace, release, action, plan_hash, actor, changed, error, started_at, ended_at
-		 FROM runs ORDER BY id DESC LIMIT ?`, limit)
+	q := `SELECT id, namespace, release, action, plan_hash, actor, changed, error, started_at, ended_at
+	      FROM runs WHERE 1 = 1`
+	var args []any
+	for _, c := range []struct {
+		col string
+		val string
+	}{
+		{"namespace", f.Namespace}, {"release", f.Release}, {"action", f.Action},
+	} {
+		if c.val != "" {
+			q += " AND " + c.col + " = ?"
+			args = append(args, c.val)
+		}
+	}
+	q += " ORDER BY id DESC LIMIT ?"
+	args = append(args, f.Limit)
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -154,6 +186,24 @@ func (s *Store) Runs(ctx context.Context, limit int) ([]Run, error) {
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// Run is one row with its output. The output is why the log is worth keeping --
+// a failed apply's helmfile stderr lives nowhere else -- so it is fetched per
+// row rather than never.
+func (s *Store) Run(ctx context.Context, id int64) (Run, error) {
+	var r Run
+	var changed int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, namespace, release, action, plan_hash, actor, changed, error, output, started_at, ended_at
+		 FROM runs WHERE id = ?`, id).
+		Scan(&r.ID, &r.Namespace, &r.Release, &r.Action, &r.PlanHash,
+			&r.Actor, &changed, &r.Error, &r.Output, &r.StartedAt, &r.EndedAt)
+	if err == sql.ErrNoRows {
+		return Run{}, fmt.Errorf("no run %d", id)
+	}
+	r.Changed = changed == 1
+	return r, err
 }
 
 func now() string { return time.Now().UTC().Format(time.RFC3339) }

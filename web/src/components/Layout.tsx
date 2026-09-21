@@ -20,6 +20,8 @@ export function Layout() {
           <nav className="flex gap-1 text-sm">
             <Tab to="/">Deployments</Tab>
             <Tab to="/catalog">Catalog</Tab>
+            <Tab to="/nodes">Nodes</Tab>
+            <Tab to="/runs">Operations</Tab>
           </nav>
 
           <div className="ml-auto flex items-center gap-2 text-sm">

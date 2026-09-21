@@ -1,22 +1,25 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ArrowRight, ChevronLeft, CircleCheck, TriangleAlert } from "lucide-react";
+import { ArrowRight, ChevronLeft, TriangleAlert } from "lucide-react";
 import { api, deployApi, type ApplyResult, type DiffResult, type Plan } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { DiffView } from "@/components/DiffView";
+import { Field } from "@/components/ui/input";
+import {
+  DeploySettings,
+  EMPTY,
+  formFromPlan,
+  planRequest,
+  type Form,
+} from "@/components/DeploySettings";
+import { Pipeline } from "@/components/Pipeline";
 import { ErrorState, Loading } from "@/components/States";
-import { groupByLayer } from "@/components/Provenance";
-import { subtree, toYaml } from "@/lib/yaml";
 
 export function Upgrade() {
   const { namespace = "", release = "" } = useParams();
   const [version, setVersion] = useState("");
-  const [proposed, setProposed] = useState<Plan | null>(null);
-  const [diff, setDiff] = useState<DiffResult | null>(null);
-  const [applied, setApplied] = useState<ApplyResult | null>(null);
+  const [variant, setVariant] = useState("");
 
   const current = useQuery({
     queryKey: ["release-plan", namespace, release],
@@ -25,30 +28,55 @@ export function Upgrade() {
   const catalog = useQuery({ queryKey: ["catalog"], queryFn: api.catalog });
   const cluster = useQuery({ queryKey: ["cluster"], queryFn: api.cluster });
 
-  const composeM = useMutation({
-    mutationFn: () => deployApi.plan({ fromRelease: release, namespace, version: version || undefined }),
+  const [form, setForm] = useState<Form>(EMPTY);
+  const [plan, setPlan] = useState<Plan | null>(null);
+  const [diff, setDiff] = useState<DiffResult | null>(null);
+  const [applied, setApplied] = useState<ApplyResult | null>(null);
+  const [tab, setTab] = useState("plan");
+
+  // Seed the form from what the release was deployed with, once. An upgrade
+  // whose form starts empty would silently propose dropping every setting.
+  useEffect(() => {
+    if (current.data) setForm(formFromPlan(current.data));
+  }, [current.data]);
+
+  const reset = () => {
+    setPlan(null);
+    setDiff(null);
+    setApplied(null);
+    setTab((t) => (t === "status" ? t : "plan"));
+  };
+  const update = (patch: Partial<Form>) => {
+    setForm({ ...form, ...patch });
+    reset();
+  };
+
+  const planM = useMutation({
+    mutationFn: () =>
+      deployApi.plan(
+        planRequest(form, {
+          model: current.data!.source.model,
+          version: version || undefined,
+          variant: variant || undefined,
+          // The server carries forward anything the form does not cover, so a
+          // value set once from a flag survives the upgrade instead of being
+          // dropped by a form that never knew about it.
+          fromRelease: release,
+        }),
+      ),
     onSuccess: (p) => {
-      setProposed(p);
+      setPlan(p);
       setDiff(null);
-      setApplied(null);
     },
-  });
-  const diffM = useMutation({
-    mutationFn: () => deployApi.diff({ planHash: proposed!.hash } as never),
-    onSuccess: setDiff,
-  });
-  const applyM = useMutation({
-    mutationFn: () => deployApi.apply(proposed!.hash, diff!.revision),
-    onSuccess: setApplied,
   });
 
   if (current.isPending) return <Loading what={release} />;
   if (current.error) return <ErrorState what={`the plan for ${release}`} error={current.error} />;
 
   const cur = current.data;
-  const versions =
-    catalog.data?.index.models.find((m) => m.name === cur.source.model)?.versions.map((v) => v.version) ?? [];
-  const error = composeM.error ?? diffM.error ?? applyM.error;
+  const model = catalog.data?.index.models.find((m) => m.name === cur.source.model);
+  const versions = model?.versions.map((v) => v.version) ?? [];
+  const variants = model?.versions.find((v) => v.version === (version || model.latest))?.variants ?? [];
 
   if (!cluster.data?.allowDeploy) {
     return (
@@ -71,139 +99,103 @@ export function Upgrade() {
       <div>
         <h1 className="text-xl font-semibold">Upgrade {release}</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          {cur.source.model} · {cur.source.variant} · {namespace}
+          <Badge variant="outline">{namespace}</Badge> {cur.source.model}
+          {cur.source.version && ` v${cur.source.version}`} · {cur.source.variant} · chart{" "}
+          {cur.chart.name}-{cur.chart.version}
         </p>
       </div>
 
+      {planM.error && <ErrorState what="the request" error={planM.error} />}
+
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Target model version</CardTitle>
+          <CardTitle className="text-base">Catalog target</CardTitle>
           <p className="text-sm text-muted-foreground">
-            Only the catalog layer moves. Everything you set at deploy time is carried forward
-            unchanged.
+            The model version and variant this upgrade composes against. Engine flags, probes
+            and the image move with them — that is what an upgrade is for.
           </p>
         </CardHeader>
-        <CardContent className="flex flex-wrap items-center gap-3">
-          <select
-            className="rounded-md border bg-background px-2 py-1.5 text-sm"
-            value={version}
-            onChange={(e) => {
-              setVersion(e.target.value);
-              setProposed(null);
-              setDiff(null);
-            }}
-            aria-label="target model version"
-          >
-            <option value="">latest</option>
-            {versions.map((v) => (
-              <option key={v} value={v}>
-                {v}
-              </option>
-            ))}
-          </select>
-          <Button onClick={() => composeM.mutate()} disabled={composeM.isPending}>
-            {composeM.isPending ? "Composing…" : "Compose upgrade"}
-          </Button>
+        <CardContent className="grid gap-4 sm:grid-cols-2">
+          <Field label="Model version" hint={`deployed: ${cur.source.version ?? "unpinned"}`}>
+            <Select
+              value={version}
+              onChange={(v) => {
+                setVersion(v);
+                reset();
+              }}
+              options={versions}
+              emptyLabel="latest"
+            />
+          </Field>
+          <Field label="Variant" hint={`deployed: ${cur.source.variant}`}>
+            <Select
+              value={variant}
+              onChange={(v) => {
+                setVariant(v);
+                reset();
+              }}
+              options={variants.map((v) => v.id)}
+              emptyLabel={`keep ${cur.source.variant}`}
+            />
+          </Field>
         </CardContent>
       </Card>
 
-      {error && <ErrorState what="the request" error={error} />}
+      {/* The same form as the deploy page, seeded from the release. Editing it
+          here means the upgrade moves the catalog and the settings together,
+          which is two changes in one diff -- so the diff is the thing that has
+          to be read, and the pipeline below is the same one. */}
+      <DeploySettings form={form} onChange={update} cluster={cluster.data} lockIdentity />
 
-      {proposed && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">What moves</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            <Change
-              label="Model version"
-              from={cur.source.version}
-              to={proposed.source.version}
-            />
-            <Change
-              label="Chart"
-              from={`${cur.chart.name}-${cur.chart.version}`}
-              to={`${proposed.chart.name}-${proposed.chart.version}`}
-            />
-            <Change
-              label="Entry digest"
-              from={cur.source.digest?.slice(7, 19)}
-              to={proposed.source.digest?.slice(7, 19)}
-            />
-            <Change label="Variant" from={cur.source.variant} to={proposed.source.variant} />
-            {cur.hash === proposed.hash && (
-              <p className="pt-1 text-sm text-muted-foreground">
-                Identical to what is deployed — nothing to upgrade.
-              </p>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      {proposed && (
-        <div className="grid gap-4 md:grid-cols-2">
-          <Carried title="Site settings" plan={proposed} layer="site" />
-          <Carried title="Your deploy settings" plan={proposed} layer="form" />
-        </div>
-      )}
-
-      {applied && (
-        <Card>
-          <CardContent className="flex items-start gap-3 p-4 text-sm">
-            <CircleCheck className="mt-0.5 size-4 shrink-0 text-success" />
-            <div>
-              <div className="font-medium">
-                {applied.release} upgraded to revision {applied.revision}
-              </div>
-              <p className="text-muted-foreground">
-                Not waiting: a cold load takes 20–40 minutes. Watch the pods.
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {diff && !applied && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              Diff
-              {diff.changed ? (
-                <Badge variant="warning">changes</Badge>
-              ) : (
-                <Badge variant="success">no changes</Badge>
-              )}
-              <span className="text-xs font-normal text-muted-foreground">
-                live revision {diff.revision}
-              </span>
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {diff.output.trim() ? (
-              <DiffView output={diff.output} />
-            ) : (
-              <p className="text-sm text-muted-foreground">Nothing would change.</p>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      {proposed && !applied && (
-        <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" onClick={() => diffM.mutate()} disabled={diffM.isPending}>
-            {diffM.isPending ? "Diffing…" : "Diff"}
-          </Button>
-          <Button onClick={() => applyM.mutate()} disabled={!diff || applyM.isPending}>
-            {applyM.isPending ? "Applying…" : "Approve upgrade"}
-          </Button>
-          {!diff && (
-            <span className="text-xs text-muted-foreground">
-              Review the diff before approving.
-            </span>
-          )}
-        </div>
-      )}
+      <Pipeline
+        namespace={namespace}
+        release={release}
+        plan={plan}
+        diff={diff}
+        applied={applied}
+        tab={tab}
+        onTab={setTab}
+        onCompose={() => planM.mutate()}
+        composing={planM.isPending}
+        composeLabel={planM.isPending ? "Composing…" : plan ? "Recompose upgrade" : "Compose upgrade"}
+        onDiff={setDiff}
+        onApplied={setApplied}
+      >
+        {plan && <WhatMoves current={cur} proposed={plan} />}
+      </Pipeline>
     </div>
+  );
+}
+
+// WhatMoves names the catalog change before anything else on the Plan tab. The
+// settings above are editable now, so this is also where an operator sees that
+// an upgrade they meant as a version bump is carrying a form change with it.
+function WhatMoves({ current, proposed }: { current: Plan; proposed: Plan }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">What moves</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        <Change label="Model version" from={current.source.version} to={proposed.source.version} />
+        <Change
+          label="Chart"
+          from={`${current.chart.name}-${current.chart.version}`}
+          to={`${proposed.chart.name}-${proposed.chart.version}`}
+        />
+        <Change
+          label="Entry digest"
+          from={current.source.digest?.slice(7, 19)}
+          to={proposed.source.digest?.slice(7, 19)}
+        />
+        <Change label="Variant" from={current.source.variant} to={proposed.source.variant} />
+        {current.hash === proposed.hash && (
+          <p className="pt-1 text-sm text-muted-foreground">
+            Identical to what is deployed — nothing to upgrade.
+          </p>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -224,28 +216,39 @@ function Change({ label, from, to }: { label: string; from?: string; to?: string
   );
 }
 
-function Carried({ title, plan, layer }: { title: string; plan: Plan; layer: string }) {
-  const paths = groupByLayer(plan).get(layer) ?? [];
+function Select({
+  value,
+  onChange,
+  options,
+  emptyLabel,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: string[];
+  emptyLabel: string;
+}) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">{title}</CardTitle>
-        <p className="text-xs text-muted-foreground">
-          {paths.length} values, carried forward unchanged
-        </p>
-      </CardHeader>
-      <CardContent>
-        <pre className="overflow-x-auto rounded-md border bg-muted/40 p-3 text-xs leading-relaxed">
-          {toYaml(subtree(plan.values, paths))}
-        </pre>
-      </CardContent>
-    </Card>
+    <select
+      className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+    >
+      <option value="">{emptyLabel}</option>
+      {options.map((o) => (
+        <option key={o} value={o}>
+          {o}
+        </option>
+      ))}
+    </select>
   );
 }
 
 function Back({ namespace }: { namespace: string }) {
   return (
-    <Link to="/" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+    <Link
+      to="/"
+      className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+    >
       <ChevronLeft className="size-4" /> Deployments in {namespace}
     </Link>
   );

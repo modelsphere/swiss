@@ -84,19 +84,13 @@ swiss install --plan plan.json     # release must NOT exist
 | `POST /api/install` | create |
 | `DELETE /api/releases/{ns}/{release}` | uninstall |
 | `POST /api/releases/{ns}/{release}/chat` | health check: one real inference request |
+| `GET /api/runs`, `GET /api/runs/{id}` | the operation log; output is per row, not in the list |
+| `GET /api/nodes` | the GPU inventory: type, allocatable, in use, and what holds it |
 
 **`apply` and `install` are separate verbs, deliberately.** Helm's `upgrade
 --install` is forgiving, and that forgiveness is the hazard: a name or namespace
 that does not match what is live installs a *second* release — two engines on one
 set of GPUs. Creation is a word you have to type on purpose.
-
-**The plan is content-addressed** and verifies its own hash on read, so a
-hand-edited plan is an error rather than a surprise in a cluster.
-
-**The diff carries the revision lock.** It records the live helm revision it was
-computed against, and apply asserts that nothing moved. It is required on the
-upgrade screen and optional on the deploy page; skipping it gives up the preview
-and the lock together.
 
 **Helm owns the cluster.** Three-way merge is not Swiss's to reimplement. Both
 paths materialise a plan into a temp directory — `values.yaml` plus a one-release

@@ -7,6 +7,7 @@ import {
   deployApi,
   type ChatApi,
   type ChatResult,
+  type EntrypointAuth,
   type PlanStatus,
   type ReleaseStatus as Status,
 } from "@/lib/api";
@@ -14,6 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, Input } from "@/components/ui/input";
+import { AuthFields, SentHeaders } from "@/components/EntrypointAuth";
 import { Provenance } from "@/components/Provenance";
 import { ReleaseStatus } from "@/components/ReleaseStatus";
 import { ErrorState, Loading } from "@/components/States";
@@ -66,6 +68,13 @@ export function DeploymentDetail() {
           </p>
         </div>
         <div className="flex gap-2">
+          <Link
+            to={`/runs?namespace=${encodeURIComponent(namespace)}&release=${encodeURIComponent(release)}`}
+          >
+            <Button size="sm" variant="outline">
+              History
+            </Button>
+          </Link>
           {plan.data && (
             <Link
               to={`/upgrade/${encodeURIComponent(namespace)}/${encodeURIComponent(release)}`}
@@ -184,10 +193,11 @@ function HealthCheck({
 }) {
   const [chatApi, setChatApi] = useState<ChatApi>("chat");
   const [prompt, setPrompt] = useState("Reply with the single word: ok");
+  const [auth, setAuth] = useState<EntrypointAuth>({});
   const [result, setResult] = useState<ChatResult | null>(null);
 
   const run = useMutation({
-    mutationFn: () => deployApi.chat(namespace, release, { api: chatApi, prompt }),
+    mutationFn: () => deployApi.chat(namespace, release, { api: chatApi, prompt, ...auth }),
     onSuccess: setResult,
   });
 
@@ -229,6 +239,8 @@ function HealthCheck({
               <Input value={prompt} onChange={(e) => setPrompt(e.target.value)} />
             </Field>
 
+            <AuthFields value={auth} onChange={setAuth} />
+
             <Button onClick={() => run.mutate()} disabled={run.isPending}>
               {run.isPending ? "Asking the model…" : "Send request"}
             </Button>
@@ -255,6 +267,7 @@ function ChatOutcome({ result }: { result: ChatResult }) {
         {result.status ? <Badge variant="muted">HTTP {result.status}</Badge> : null}
         <Badge variant="outline">{result.latencyMs} ms</Badge>
         {result.model && <Badge variant="muted">{result.model}</Badge>}
+        <SentHeaders names={result.sentHeaders} />
       </div>
 
       <div className="font-mono text-xs break-all text-muted-foreground">{result.url}</div>

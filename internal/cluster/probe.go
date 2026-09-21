@@ -31,14 +31,29 @@ type Release struct {
 	SwissStatus []byte
 }
 
-// Node is what a fit check needs.
+// Node is what a fit check needs, plus what a node view shows.
 type Node struct {
-	Name        string
-	GPUProduct  string // nvidia.com/gpu.product, as labelled by GFD
+	Name       string
+	GPUProduct string // nvidia.com/gpu.product, as labelled by GFD
+	// GPUs is allocatable, which is what a fit check must compare against --
+	// capacity counts GPUs the kubelet has reserved away.
 	GPUs        int
 	Labels      map[string]string
 	Taints      []string
 	Schedulable bool
+	Ready       bool
+	Kubelet     string
+}
+
+// GPUPod is one pod holding GPUs on a node. Kubernetes publishes no "allocated"
+// field, so this is summed from pod requests the way `kubectl describe node`
+// does -- and it is also the answer to the question a free-GPU count raises,
+// which is who is holding the rest.
+type GPUPod struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	GPUs      int    `json:"gpus"`
+	Node      string `json:"node,omitempty"`
 }
 
 // Pod is enough to tell loading from broken: on this workload a pod that is
@@ -64,6 +79,15 @@ type Probe interface {
 	// detected from its key set before a write, rather than after two models are
 	// fighting over one openresty key; site profiles are read from one whole.
 	ConfigMap(ctx context.Context, ref string) (map[string]string, error)
+	// Secret reads a Secret given as "ns/name". The site profile is a ConfigMap,
+	// so a credential it needs -- the entrypoint's API key -- is named there and
+	// held here. Values come back already base64-decoded.
+	Secret(ctx context.Context, ref string) (map[string]string, error)
+	// GPUAllocations is the GPU-holding pods on every node, keyed by node name.
+	// Separate from Nodes because it needs a cluster-wide pod list, a grant a
+	// cluster may withhold: a node view without it shows capacity and says the
+	// usage is unknown, rather than showing an undercount as if it were true.
+	GPUAllocations(ctx context.Context) (map[string][]GPUPod, error)
 }
 
 // ConfigMapKeys is the key set of a ConfigMap, sorted.
@@ -91,11 +115,14 @@ func SplitRef(ref string) (namespace, name string, err error) {
 
 // Fake is an in-memory Probe.
 type Fake struct {
-	PingErr error
-	Pod     []Pod
-	Rel     []Release
-	Nod     []Node
-	Maps    map[string]map[string]string
+	PingErr  error
+	Pod      []Pod
+	Rel      []Release
+	Nod      []Node
+	Maps     map[string]map[string]string
+	Secrets  map[string]map[string]string
+	Alloc    map[string][]GPUPod
+	AllocErr error
 }
 
 func (f Fake) Ping(context.Context) error                          { return f.PingErr }
@@ -104,6 +131,21 @@ func (f Fake) Releases(context.Context) ([]Release, error)         { return f.Re
 func (f Fake) Nodes(context.Context) ([]Node, error)               { return f.Nod, nil }
 func (f Fake) ConfigMap(_ context.Context, ref string) (map[string]string, error) {
 	return f.Maps[ref], nil
+}
+
+func (f Fake) GPUAllocations(context.Context) (map[string][]GPUPod, error) {
+	if f.AllocErr != nil {
+		return nil, f.AllocErr
+	}
+	return f.Alloc, nil
+}
+
+func (f Fake) Secret(_ context.Context, ref string) (map[string]string, error) {
+	s, ok := f.Secrets[ref]
+	if !ok {
+		return nil, fmt.Errorf("no secret %s", ref)
+	}
+	return s, nil
 }
 
 // Writer is the write half, kept separate so a read-only swissd can hold a

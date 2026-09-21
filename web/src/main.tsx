@@ -9,6 +9,8 @@ import { Catalog } from "@/routes/Catalog";
 import { Model } from "@/routes/Model";
 import { Deploy } from "@/routes/Deploy";
 import { Upgrade } from "@/routes/Upgrade";
+import { Runs } from "@/routes/Runs";
+import { Nodes } from "@/routes/Nodes";
 import "./index.css";
 
 const queryClient = new QueryClient({
@@ -31,6 +33,8 @@ createRoot(document.getElementById("root")!).render(
           <Route element={<Layout />}>
             <Route index element={<Deployments />} />
             <Route path="deployments/:namespace/:release" element={<DeploymentDetail />} />
+            <Route path="nodes" element={<Nodes />} />
+            <Route path="runs" element={<Runs />} />
             <Route path="catalog" element={<Catalog />} />
             <Route path="catalog/:name" element={<Model />} />
             <Route path="deploy/:name" element={<Deploy />} />

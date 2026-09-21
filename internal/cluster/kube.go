@@ -249,10 +249,55 @@ func (k *Kube) Nodes(ctx context.Context) ([]Node, error) {
 		if q, ok := n.Status.Allocatable["nvidia.com/gpu"]; ok {
 			node.GPUs = int(q.Value())
 		}
+		node.Kubelet = n.Status.NodeInfo.KubeletVersion
+		for _, c := range n.Status.Conditions {
+			if c.Type == corev1.NodeReady {
+				node.Ready = c.Status == corev1.ConditionTrue
+			}
+		}
 		for _, t := range n.Spec.Taints {
 			node.Taints = append(node.Taints, t.Key+"="+t.Value+":"+string(t.Effect))
 		}
 		out = append(out, node)
+	}
+	return out, nil
+}
+
+// GPUAllocations sums GPU requests per node from the pods actually bound to
+// them, because Kubernetes publishes capacity and allocatable but never
+// allocated -- `kubectl describe node` computes it the same way.
+//
+// Terminal pods are skipped: a Succeeded or Failed pod holds no GPU, and
+// counting one is how a node reads as full when it is empty. Limits are
+// preferred over requests only in that extended resources require them to be
+// equal, so either is the same number.
+func (k *Kube) GPUAllocations(ctx context.Context) (map[string][]GPUPod, error) {
+	pods, err := k.client.CoreV1().Pods(metav1.NamespaceAll).List(ctx, metav1.ListOptions{
+		FieldSelector: "status.phase!=Succeeded,status.phase!=Failed",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list pods for GPU allocation: %w", err)
+	}
+	out := map[string][]GPUPod{}
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		if p.Spec.NodeName == "" {
+			continue
+		}
+		gpus := 0
+		for _, c := range p.Spec.Containers {
+			if q, ok := c.Resources.Limits["nvidia.com/gpu"]; ok {
+				gpus += int(q.Value())
+			} else if q, ok := c.Resources.Requests["nvidia.com/gpu"]; ok {
+				gpus += int(q.Value())
+			}
+		}
+		if gpus == 0 {
+			continue
+		}
+		out[p.Spec.NodeName] = append(out[p.Spec.NodeName], GPUPod{
+			Namespace: p.Namespace, Name: p.Name, GPUs: gpus, Node: p.Spec.NodeName,
+		})
 	}
 	return out, nil
 }
@@ -268,6 +313,24 @@ func (k *Kube) ConfigMap(ctx context.Context, ref string) (map[string]string, er
 		return nil, err
 	}
 	return cm.Data, nil
+}
+
+// Secret reads a Secret given as "namespace/name". client-go has already
+// base64-decoded Data by the time it arrives here.
+func (k *Kube) Secret(ctx context.Context, ref string) (map[string]string, error) {
+	ns, name, err := SplitRef(ref)
+	if err != nil {
+		return nil, err
+	}
+	sec, err := k.client.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(sec.Data))
+	for k, v := range sec.Data {
+		out[k] = string(v)
+	}
+	return out, nil
 }
 
 func sortReleases(r []Release) {

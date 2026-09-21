@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/aceforeverd/swiss/internal/catalog"
+	"github.com/aceforeverd/swiss/internal/cluster"
 	"github.com/aceforeverd/swiss/internal/config"
 )
 
@@ -135,6 +136,23 @@ func (s *Server) handleReleases(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"cluster": s.cfg.Cluster.Name, "releases": rel})
 }
 
+type nodeView struct {
+	cluster.Node
+	// Used is GPUs held by pods on this node, and Free what is left. Both are
+	// omitted when the allocation read was refused, so the page can say
+	// "unknown" rather than print a zero it did not measure.
+	Used *int             `json:"gpusUsed,omitempty"`
+	Free *int             `json:"gpusFree,omitempty"`
+	Pods []cluster.GPUPod `json:"gpuPods,omitempty"`
+}
+
+// handleNodes is the GPU inventory: what each node has, what is holding it.
+//
+// Kubernetes publishes capacity and allocatable but never allocated, so usage
+// is summed from pod requests -- which needs a cluster-wide pod list. That grant
+// can be withheld, and a node view that silently undercounts is worse than one
+// that says it does not know, so the usage fields are absent rather than zero
+// when the read fails.
 func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := contextWithTimeout(r, 30*time.Second)
 	defer cancel()
@@ -143,7 +161,42 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"cluster": s.cfg.Cluster.Name, "nodes": nodes})
+
+	alloc, allocErr := s.probe.GPUAllocations(ctx)
+	if allocErr != nil {
+		s.log.WarnContext(ctx, "GPU usage unavailable", "err", allocErr)
+	}
+
+	out := make([]nodeView, 0, len(nodes))
+	var totalGPUs, usedGPUs int
+	for _, n := range nodes {
+		v := nodeView{Node: n}
+		totalGPUs += n.GPUs
+		if allocErr == nil {
+			pods := alloc[n.Name]
+			used := 0
+			for _, p := range pods {
+				used += p.GPUs
+			}
+			free := n.GPUs - used
+			if free < 0 {
+				free = 0
+			}
+			v.Used, v.Free, v.Pods = &used, &free, pods
+			usedGPUs += used
+		}
+		out = append(out, v)
+	}
+
+	body := map[string]any{
+		"cluster": s.cfg.Cluster.Name,
+		"nodes":   out,
+		"summary": map[string]any{"nodes": len(out), "gpus": totalGPUs, "gpusUsed": usedGPUs},
+	}
+	if allocErr != nil {
+		body["usageError"] = allocErr.Error()
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 type deployment struct {

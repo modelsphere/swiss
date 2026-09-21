@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/aceforeverd/swiss/internal/catalog"
@@ -162,6 +163,9 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 	if err != nil {
 		return req, err
 	}
+	// Release and namespace come from the previous plan and are not overridable.
+	// They identify the release being upgraded; changing them does not rename
+	// anything, it installs a second release beside the first.
 	out := planRequest{
 		Model:     prev.Source.Model,
 		Version:   req.Version,
@@ -170,11 +174,31 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 		Namespace: prev.Release.Namespace,
 		Overrides: prev.Overrides,
 	}
-	if len(prev.Edits) > 0 {
-		out.EditsYAML = mustYAML(prev.Edits)
-	}
 	if req.Variant != "" {
 		out.Variant = req.Variant
+	}
+
+	// A request carrying the form carries all of it. `swiss upgrade` and the
+	// version picker send no overrides and mean "move the catalog, keep every
+	// setting"; the upgrade form sends the whole form and is authoritative.
+	//
+	// The overrides merge rather than replace, so a value no form field covers
+	// -- set once from a flag or the advanced box -- survives an upgrade instead
+	// of being dropped by a form that never knew about it. Edits do replace:
+	// the form shows them, so an empty box means the operator emptied it.
+	if len(req.Overrides) == 0 {
+		if len(prev.Edits) > 0 {
+			out.EditsYAML = mustYAML(prev.Edits)
+		}
+		return out, nil
+	}
+	values.Merge(out.Overrides, req.Overrides, values.LayerForm, nil)
+	out.EditsYAML = req.EditsYAML
+	if req.ServiceID != "" {
+		out.ServiceID = req.ServiceID
+	}
+	if req.LocalPath != "" {
+		out.LocalPath = req.LocalPath
 	}
 	return out, nil
 }
@@ -516,19 +540,61 @@ func actionName(m exec.Mode) string {
 	return "apply"
 }
 
+// handleRuns serves the operation log: what was attempted, and how it ended.
+//
+// A swissd with no database serves an empty log rather than an error. Losing
+// the volume costs the history and nothing else -- the deployments view still
+// answers what is running, because that is read from the cluster.
 func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
-		writeJSON(w, http.StatusOK, map[string]any{"runs": []any{}})
+		writeJSON(w, http.StatusOK, map[string]any{"runs": []any{}, "hasStore": false})
 		return
 	}
 	ctx, cancel := contextWithTimeout(r, 15*time.Second)
 	defer cancel()
-	runs, err := s.store.Runs(ctx, 50)
+
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	runs, err := s.store.RunsFiltered(ctx, store.RunFilter{
+		Namespace: q.Get("namespace"),
+		Release:   q.Get("release"),
+		Action:    q.Get("action"),
+		Limit:     limit,
+	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"runs": runs})
+	if runs == nil {
+		runs = []store.Run{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"runs": runs, "hasStore": true})
+}
+
+// handleRun is one row with its output -- the helmfile stderr behind a failed
+// apply, which lives nowhere else once the process is gone.
+func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "no database: this swissd keeps no operation log")
+		return
+	}
+	ctx, cancel := contextWithTimeout(r, 15*time.Second)
+	defer cancel()
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "run id must be a number")
+		return
+	}
+	run, err := s.store.Run(ctx, id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, run)
 }
 
 func mustYAML(t values.Tree) string {

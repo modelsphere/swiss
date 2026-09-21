@@ -86,6 +86,48 @@ type Route struct {
 	// NginxPort is the entrypoint's port; the readiness check calls
 	// http://<nginxService>:<port>/<route>/v1/models. Defaults to 8080.
 	NginxPort int `yaml:"nginxPort,omitempty"`
+	// Auth is how swissd authenticates when it calls the entrypoint. Only the
+	// serving and health checks do; nothing else here talks to a model.
+	Auth RouteAuth `yaml:"auth,omitempty"`
+}
+
+// RouteAuth names a credential rather than holding one. The site profile is a
+// ConfigMap, so a bearer token written here would be readable by anyone who can
+// read the profile -- the Secret indirection is the whole point of the type.
+type RouteAuth struct {
+	// Header the key is sent in and the prefix before it. The defaults are the
+	// OpenAI convention: `Authorization: Bearer <key>`.
+	Header string `yaml:"header,omitempty"`
+	Prefix string `yaml:"prefix,omitempty"`
+	// SecretRef is "namespace/name" of the Secret holding the key, SecretKey
+	// the key within it. The namespace must be one swissd was granted, or the
+	// read fails the way any other unlisted namespace does.
+	SecretRef string `yaml:"secretRef,omitempty"`
+	SecretKey string `yaml:"secretKey,omitempty"`
+	// Headers are sent on every call to the entrypoint. Not a place for
+	// credentials, for the same reason as above.
+	Headers map[string]string `yaml:"headers,omitempty"`
+}
+
+// HeaderName is where the key goes, defaulted.
+func (a RouteAuth) HeaderName() string {
+	if a.Header != "" {
+		return a.Header
+	}
+	return "Authorization"
+}
+
+// KeyPrefix is what precedes the key. An explicitly empty prefix on a custom
+// header is meaningful -- `X-Api-Key: <key>` carries no scheme -- so it is only
+// defaulted when the header is too.
+func (a RouteAuth) KeyPrefix() string {
+	if a.Prefix != "" {
+		return a.Prefix
+	}
+	if a.Header == "" {
+		return "Bearer "
+	}
+	return ""
 }
 
 type Nodes struct {

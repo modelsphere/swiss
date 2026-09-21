@@ -5,6 +5,15 @@
 # ---------------------------------------------------------------------------
 # Nodes are cluster-scoped, so the fit check needs a ClusterRole no matter which
 # rbac.scope is chosen. Read-only, and node objects carry no secrets.
+#
+# rbac.nodeGPUUsage adds a cluster-wide pod LIST on top. Kubernetes publishes a
+# node's GPU capacity and allocatable but never its allocated count, so "6 of 8
+# GPUs in use" can only be summed from the pods bound to that node -- and under
+# namespaced scope that sum would silently omit every pod outside the listed
+# namespaces, which is an undercount presented as a fact. So it is one grant,
+# taken deliberately or not at all: with it off swissd reports the usage as
+# unknown rather than wrong. Pod specs are not secrets, but they are more than
+# node objects: this is a real widening on a namespaced install.
 # ---------------------------------------------------------------------------
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -16,6 +25,11 @@ rules:
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list"]
+  {{- if .Values.rbac.nodeGPUUsage }}
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

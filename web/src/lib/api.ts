@@ -109,11 +109,66 @@ export interface Entry {
   variants: Variant[];
 }
 
+export interface Run {
+  id: number;
+  namespace: string;
+  release: string;
+  action: string;
+  planHash: string;
+  actor?: string;
+  changed: boolean;
+  error?: string;
+  // Only on a single-run fetch: the list omits it, because helmfile output runs
+  // to tens of kilobytes a row.
+  output?: string;
+  startedAt: string;
+  endedAt: string;
+}
+
+export interface RunsResponse {
+  runs: Run[];
+  // False when this swissd has no database. The log is then empty rather than
+  // broken -- losing the volume costs the history and nothing else.
+  hasStore: boolean;
+}
+
+export interface RunFilter {
+  namespace?: string;
+  release?: string;
+  action?: string;
+  limit?: number;
+}
+
+// Field names are Go's here: cluster.Node predates the json tags the rest of
+// the API carries, and renaming them is a server change, not a client one.
 export interface Node {
   Name: string;
   GPUProduct: string;
+  // Allocatable, not capacity — what a fit check may actually use.
   GPUs: number;
   Schedulable: boolean;
+  Ready: boolean;
+  Kubelet?: string;
+  Taints?: string[];
+  // Absent when the cluster-wide pod list was refused: unknown, not zero.
+  gpusUsed?: number;
+  gpusFree?: number;
+  gpuPods?: GPUPod[];
+}
+
+export interface GPUPod {
+  namespace: string;
+  name: string;
+  gpus: number;
+}
+
+export interface NodesResponse {
+  cluster: string;
+  nodes: Node[];
+  summary: { nodes: number; gpus: number; gpusUsed: number };
+  // Set when GPU usage could not be computed — rbac.nodeGPUUsage is off, or
+  // the cluster-wide pod list was refused.
+  usageError?: string;
 }
 
 export class ApiError extends Error {
@@ -147,7 +202,13 @@ export const api = {
     get<{ ref: string; entry: Entry }>(
       `/api/catalog/${encodeURIComponent(name)}` + (version ? `?version=${encodeURIComponent(version)}` : ""),
     ),
-  nodes: () => get<{ cluster: string; nodes: Node[] }>("/api/nodes"),
+  nodes: () => get<NodesResponse>("/api/nodes"),
+  runs: (f: RunFilter = {}) => {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(f)) if (v) q.set(k, String(v));
+    return get<RunsResponse>("/api/runs" + (q.size ? `?${q}` : ""));
+  },
+  run: (id: number) => get<Run>(`/api/runs/${id}`),
   status: (ns: string, release: string) =>
     get<ReleaseStatus>(
       `/api/releases/${encodeURIComponent(ns)}/${encodeURIComponent(release)}/status`,
@@ -175,6 +236,9 @@ export interface Plan {
   values: Record<string, unknown>;
   provenance?: Record<string, string>;
   helmfile?: string;
+  // The form's layer as the user gave it, kept apart from values so an upgrade
+  // can seed its form from what was actually set rather than from the merge.
+  overrides?: Record<string, unknown>;
   edits?: Record<string, unknown>;
   hash: string;
 }
@@ -247,7 +311,15 @@ export interface ReleaseStatus {
 
 export type ChatApi = "chat" | "completions" | "messages";
 
-export interface ChatRequest {
+// The entrypoint may need a credential. The site profile can name one (a Secret
+// it points at), and these override it per call — which is what lets an operator
+// test a key before it is written into the cluster. Never stored by the browser.
+export interface EntrypointAuth {
+  apiKey?: string;
+  headers?: Record<string, string>;
+}
+
+export interface ChatRequest extends EntrypointAuth {
   api?: ChatApi;
   prompt?: string;
   model?: string;
@@ -264,6 +336,9 @@ export interface ChatResult {
   reply?: string;
   error?: string;
   body?: string;
+  // Header names only, never values: enough to tell "no key was sent" from
+  // "the key was wrong".
+  sentHeaders?: string[];
 }
 
 export interface UninstallResult {
@@ -281,6 +356,7 @@ export interface ProbeResult {
   models?: string[];
   error?: string;
   body?: string;
+  sentHeaders?: string[];
 }
 
 async function post<T>(path: string, body: unknown): Promise<T> {
@@ -324,10 +400,10 @@ export const deployApi = {
   apply: (planHash: string, expectRevision?: number) =>
     post<ApplyResult>("/api/apply", { planHash, expectRevision }),
   install: (planHash: string) => post<ApplyResult>("/api/install", { planHash }),
-  probe: (ns: string, release: string) =>
+  probe: (ns: string, release: string, auth: EntrypointAuth = {}) =>
     post<ProbeResult>(
       `/api/releases/${encodeURIComponent(ns)}/${encodeURIComponent(release)}/probe`,
-      {},
+      auth,
     ),
   // A real inference request. /v1/models proves the route resolves; this proves
   // the model can generate a token, which is not the same question.

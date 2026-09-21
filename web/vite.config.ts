@@ -5,8 +5,8 @@ import path from "node:path";
 import { HttpProxyAgent } from "http-proxy-agent";
 
 const egressProxy = process.env.http_proxy ?? process.env.HTTP_PROXY;
-const remote = 'http://127.0.0.1:8080';
-// const remote = 'http://172.28.44.16:32326';
+// const remote = 'http://127.0.0.1:8080';
+const remote = 'http://172.28.44.16:32326';
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
