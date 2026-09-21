@@ -4,6 +4,7 @@ import { BrowserRouter, Route, Routes } from "react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Layout } from "@/components/Layout";
 import { Deployments } from "@/routes/Deployments";
+import { DeploymentDetail } from "@/routes/DeploymentDetail";
 import { Catalog } from "@/routes/Catalog";
 import { Model } from "@/routes/Model";
 import { Deploy } from "@/routes/Deploy";
@@ -29,6 +30,7 @@ createRoot(document.getElementById("root")!).render(
         <Routes>
           <Route element={<Layout />}>
             <Route index element={<Deployments />} />
+            <Route path="deployments/:namespace/:release" element={<DeploymentDetail />} />
             <Route path="catalog" element={<Catalog />} />
             <Route path="catalog/:name" element={<Model />} />
             <Route path="deploy/:name" element={<Deploy />} />

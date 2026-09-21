@@ -220,6 +220,15 @@ export interface Pod {
   ageSeconds: number;
 }
 
+export interface PlanStatus {
+  phase: string;
+  action?: string;
+  revision?: number;
+  startedAt?: string;
+  updatedAt?: string;
+  error?: string;
+}
+
 export interface ReleaseStatus {
   release: string;
   namespace: string;
@@ -231,6 +240,37 @@ export interface ReleaseStatus {
   total: number;
   route?: string;
   warning?: string;
+  // Written beside the release on every apply. The only thing that can say an
+  // apply was started and never finished -- helm reports the last one that did.
+  planStatus?: PlanStatus;
+}
+
+export type ChatApi = "chat" | "completions" | "messages";
+
+export interface ChatRequest {
+  api?: ChatApi;
+  prompt?: string;
+  model?: string;
+  maxTokens?: number;
+}
+
+export interface ChatResult {
+  url: string;
+  api: ChatApi;
+  model?: string;
+  ok: boolean;
+  status?: number;
+  latencyMs: number;
+  reply?: string;
+  error?: string;
+  body?: string;
+}
+
+export interface UninstallResult {
+  release: string;
+  namespace: string;
+  output: string;
+  planError?: string;
 }
 
 export interface ProbeResult {
@@ -261,10 +301,27 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+async function del<T>(path: string): Promise<T> {
+  const res = await fetch(path, { method: "DELETE", headers: { Accept: "application/json" } });
+  if (!res.ok) {
+    let msg = res.statusText;
+    try {
+      msg = (await res.json()).error ?? msg;
+    } catch {
+      // Not the JSON error envelope.
+    }
+    throw new ApiError(msg, res.status);
+  }
+  return res.json() as Promise<T>;
+}
+
 export const deployApi = {
   plan: (req: PlanRequest) => post<Plan>("/api/plans", req),
   diff: (req: PlanRequest | { planHash: string }) => post<DiffResult>("/api/diff", req),
-  apply: (planHash: string, expectRevision: number) =>
+  // expectRevision is the optimistic lock a diff computed. It is left out when
+  // no diff was run, and the server reads a missing revision as asserting
+  // nothing rather than as revision zero.
+  apply: (planHash: string, expectRevision?: number) =>
     post<ApplyResult>("/api/apply", { planHash, expectRevision }),
   install: (planHash: string) => post<ApplyResult>("/api/install", { planHash }),
   probe: (ns: string, release: string) =>
@@ -272,4 +329,13 @@ export const deployApi = {
       `/api/releases/${encodeURIComponent(ns)}/${encodeURIComponent(release)}/probe`,
       {},
     ),
+  // A real inference request. /v1/models proves the route resolves; this proves
+  // the model can generate a token, which is not the same question.
+  chat: (ns: string, release: string, req: ChatRequest = {}) =>
+    post<ChatResult>(
+      `/api/releases/${encodeURIComponent(ns)}/${encodeURIComponent(release)}/chat`,
+      req,
+    ),
+  uninstall: (ns: string, release: string) =>
+    del<UninstallResult>(`/api/releases/${encodeURIComponent(ns)}/${encodeURIComponent(release)}`),
 };

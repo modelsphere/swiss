@@ -80,7 +80,12 @@ function Row({ d }: { d: Deployment }) {
   return (
     <TableRow>
       <TableCell className="font-medium">
-        {d.release}
+        <Link
+          to={`/deployments/${encodeURIComponent(d.namespace)}/${encodeURIComponent(d.release)}`}
+          className="hover:underline"
+        >
+          {d.release}
+        </Link>
         {d.drift && <div className="mt-0.5 text-xs text-muted-foreground">{d.drift}</div>}
       </TableCell>
       <TableCell className="text-muted-foreground">{d.namespace}</TableCell>
@@ -101,13 +106,11 @@ function Row({ d }: { d: Deployment }) {
         <StatusBadge status={d.status} />
       </TableCell>
       <TableCell className="text-right">
-        {d.managed && (
-          <Link to={`/upgrade/${encodeURIComponent(d.namespace)}/${encodeURIComponent(d.release)}`}>
-            <Button size="sm" variant="outline">
-              Upgrade
-            </Button>
-          </Link>
-        )}
+        <Link to={`/deployments/${encodeURIComponent(d.namespace)}/${encodeURIComponent(d.release)}`}>
+          <Button size="sm" variant="outline">
+            Details
+          </Button>
+        </Link>
       </TableCell>
     </TableRow>
   );

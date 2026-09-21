@@ -146,14 +146,21 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/releases/{namespace}/{release}/plan", s.handleReleasePlan)
 	mux.HandleFunc("GET /api/releases/{namespace}/{release}/status", s.handleStatus)
 	mux.HandleFunc("POST /api/releases/{namespace}/{release}/probe", s.handleProbe)
+	// Not behind allowDeploy: it changes nothing in the cluster. It spends a few
+	// tokens of GPU time, which is the same bargain as the /v1/models probe.
+	mux.HandleFunc("POST /api/releases/{namespace}/{release}/chat", s.handleChat)
 
 	if s.cfg.Server.AllowDeploy {
 		mux.HandleFunc("POST /api/plans", s.handlePlan)
 		mux.HandleFunc("POST /api/diff", s.handleDiff)
 		mux.HandleFunc("POST /api/apply", s.handleApply(exec.Upgrade))
 		mux.HandleFunc("POST /api/install", s.handleApply(exec.Install))
+		mux.HandleFunc("DELETE /api/releases/{namespace}/{release}", s.handleUninstall)
 	} else {
-		for _, p := range []string{"POST /api/plans", "POST /api/diff", "POST /api/apply", "POST /api/install"} {
+		for _, p := range []string{
+			"POST /api/plans", "POST /api/diff", "POST /api/apply", "POST /api/install",
+			"DELETE /api/releases/{namespace}/{release}",
+		} {
 			mux.HandleFunc(p, func(w http.ResponseWriter, _ *http.Request) {
 				writeError(w, http.StatusForbidden, "this swissd is read-only: set server.allowDeploy and grant rbac.allowDeploy")
 			})

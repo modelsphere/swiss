@@ -45,7 +45,22 @@ func Check(st State, mode Mode, p *plan.Plan) error {
 	return nil
 }
 
+// CheckUninstall refuses to remove a release that is not there.
+//
+// Unlike Check it tolerates a pending status. An apply must not step on a
+// 20-40 minute model load, but a release wedged in pending-upgrade is one of
+// the things uninstall exists to clear, and refusing here would leave `helm
+// uninstall` by hand as the only way out.
+func CheckUninstall(st State, namespace, release string) error {
+	if !st.Exists {
+		return fmt.Errorf("no release %s/%s", namespace, release)
+	}
+	return nil
+}
+
 // CheckRevision fails when the live release moved since the diff was computed.
+// Zero means no diff was run and nothing is asserted: the diff is optional, and
+// an apply without one carries no revision to check.
 func CheckRevision(st State, diffedAt int) error {
 	if diffedAt > 0 && st.Revision != diffedAt {
 		return fmt.Errorf("release moved from revision %d to %d since the diff; re-run diff", diffedAt, st.Revision)

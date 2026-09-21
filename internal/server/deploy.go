@@ -49,6 +49,10 @@ type applyRequest struct {
 	// the cluster, so two operators who diffed the same release cannot both
 	// apply. A version column in swissd's own database would have been a lock
 	// on a copy rather than on the thing being changed.
+	//
+	// Zero -- absent -- asserts nothing, which is what an apply that skipped the
+	// diff sends. The diff is optional, so the lock it carries is optional with
+	// it; the caller is giving up the concurrency check, not evading one.
 	ExpectRevision int `json:"expectRevision,omitempty"`
 }
 
@@ -184,20 +188,34 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 // the cluster -- and it would disagree exactly when an apply fails between the
 // two writes. The database is the audit log, and losing it costs the log.
 func (s *Server) currentPlan(ctx context.Context, namespace, release string) (*plan.Plan, error) {
+	rel, err := s.releaseRecord(ctx, namespace, release)
+	if err != nil {
+		return nil, err
+	}
+	if rel == nil {
+		return nil, fmt.Errorf("no release %q", release)
+	}
+	if rel.SwissPlan == nil {
+		return nil, fmt.Errorf("release %q has no plan beside it -- swiss did not deploy it", release)
+	}
+	return plan.ParseYAML(rel.SwissPlan)
+}
+
+// releaseRecord is the live release and whatever swiss recorded beside it, or
+// nil when there is no such release. Absent is not an error: callers ask about
+// releases that legitimately do not exist yet.
+func (s *Server) releaseRecord(ctx context.Context, namespace, release string) (*cluster.Release, error) {
 	releases, err := s.probe.Releases(ctx)
 	if err != nil {
 		return nil, err
 	}
 	for _, r := range releases {
-		if r.Name != release || (namespace != "" && r.Namespace != namespace) {
-			continue
+		if r.Name == release && (namespace == "" || r.Namespace == namespace) {
+			found := r
+			return &found, nil
 		}
-		if r.SwissPlan == nil {
-			return nil, fmt.Errorf("release %q has no plan beside it -- swiss did not deploy it", release)
-		}
-		return plan.ParseYAML(r.SwissPlan)
 	}
-	return nil, fmt.Errorf("no release %q", release)
+	return nil, nil
 }
 
 func (s *Server) handleReleasePlan(w http.ResponseWriter, r *http.Request) {
@@ -327,6 +345,69 @@ func (s *Server) handleApply(mode exec.Mode) http.HandlerFunc {
 	}
 }
 
+// handleUninstall removes a release and the plan recorded beside it.
+//
+// The order is deliberate and is the write-ahead in reverse. An apply records
+// the plan first so a failure cannot leave a live release with nothing beside
+// it; an uninstall removes the release first for the same reason. Dropping the
+// ConfigMap up front and then failing to uninstall would turn a release swiss
+// deployed into an `untracked` row -- the one thing that is supposed to mean
+// somebody installed by hand.
+func (s *Server) handleUninstall(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := contextWithTimeout(r, 15*time.Minute)
+	defer cancel()
+
+	ns, release := r.PathValue("namespace"), r.PathValue("release")
+	st, err := exec.Lookup(ctx, s.probe, ns, release)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	if err := exec.CheckUninstall(st, ns, release); err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	// Read the plan before the release goes, only to name it in the audit row.
+	// A release with no readable plan is still removable -- see Runner.Uninstall.
+	planHash := ""
+	if p, err := s.currentPlan(ctx, ns, release); err == nil {
+		planHash = p.Hash
+	}
+
+	// The uninstall outlives the request, like an apply: a browser navigating
+	// away must not SIGKILL helm halfway through deleting a release.
+	started := time.Now()
+	ctx, cancel = detach(ctx)
+	defer cancel()
+
+	res, uninstallErr := s.runner().Uninstall(ctx, ns, release)
+	s.recordRelease(ctx, "uninstall", ns, release, planHash, res, uninstallErr, started)
+	if uninstallErr != nil {
+		writeError(w, http.StatusInternalServerError, uninstallErr.Error())
+		return
+	}
+
+	// Best effort, and reported rather than swallowed: the release is gone
+	// either way, and a stray plan ConfigMap shows up in the deployments view
+	// as a plan with no release rather than as anything dangerous.
+	var planErr string
+	if s.writer != nil {
+		ref := ns + "/" + cluster.PlanConfigMapPrefix + release
+		if err := s.writer.DeleteConfigMap(ctx, ref); err != nil {
+			planErr = err.Error()
+			s.log.ErrorContext(ctx, "plan configmap not removed", "release", release, "err", err)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"release":   release,
+		"namespace": ns,
+		"output":    res.Output,
+		"planError": planErr,
+	})
+}
+
 const (
 	phaseApplying = "applying"
 	phaseApplied  = "applied"
@@ -405,12 +486,19 @@ func (s *Server) runner() exec.Runner {
 }
 
 func (s *Server) record(ctx context.Context, action string, p *plan.Plan, res exec.Result, err error, started time.Time) {
+	s.recordRelease(ctx, action, p.Release.Namespace, p.Release.Name, p.Hash, res, err, started)
+}
+
+// recordRelease is the audit write for operations that name a release rather
+// than a plan. Uninstall is the only one: it needs no plan to run, so it cannot
+// always supply a hash, and an empty one is honest rather than missing.
+func (s *Server) recordRelease(ctx context.Context, action, namespace, release, planHash string, res exec.Result, err error, started time.Time) {
 	if s.store == nil {
 		return
 	}
 	run := store.Run{
-		Namespace: p.Release.Namespace, Release: p.Release.Name,
-		Action: action, PlanHash: p.Hash, Changed: res.Changed, Output: res.Output,
+		Namespace: namespace, Release: release,
+		Action: action, PlanHash: planHash, Changed: res.Changed, Output: res.Output,
 		StartedAt: started.UTC().Format(time.RFC3339), EndedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 	if err != nil {

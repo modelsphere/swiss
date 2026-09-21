@@ -22,14 +22,11 @@ type planSummary struct {
 	Hash    string
 }
 
-type statusSummary struct {
-	Phase    string `yaml:"phase"`
-	Revision int    `yaml:"revision"`
-	Error    string `yaml:"error"`
-}
-
-func parseStatus(raw []byte) statusSummary {
-	var st statusSummary
+// parseStatus reads the status key written beside a release. It decodes into
+// the same type the apply path writes, so the reconciliation row and the detail
+// view cannot disagree about what a phase means.
+func parseStatus(raw []byte) planStatus {
+	var st planStatus
 	_ = yaml.Unmarshal(raw, &st)
 	return st
 }

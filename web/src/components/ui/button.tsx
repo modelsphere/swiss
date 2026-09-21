@@ -9,6 +9,9 @@ const buttonVariants = cva(
         default: "bg-primary text-primary-foreground hover:opacity-90",
         outline: "border bg-background hover:bg-muted",
         ghost: "hover:bg-muted",
+        // There is no --destructive-foreground token; the red is saturated in
+        // both themes, so white reads against it either way.
+        destructive: "bg-destructive text-white hover:opacity-90",
       },
       size: {
         default: "h-9 px-4 py-2",

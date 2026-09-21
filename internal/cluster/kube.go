@@ -311,6 +311,20 @@ func (k *Kube) PutConfigMap(ctx context.Context, ref string, data map[string]str
 	return err
 }
 
+// DeleteConfigMap removes a ConfigMap given as "namespace/name". Already gone
+// counts as removed, so an uninstall that half-failed can simply be retried.
+func (k *Kube) DeleteConfigMap(ctx context.Context, ref string) error {
+	ns, name, err := SplitRef(ref)
+	if err != nil {
+		return err
+	}
+	err = k.client.CoreV1().ConfigMaps(ns).Delete(ctx, name, metav1.DeleteOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	return err
+}
+
 // PlanRef is where a release's plan is stored.
 func (k *Kube) PlanRef(namespace, release string) string {
 	return namespace + "/" + k.SwissPlanPrefix + release

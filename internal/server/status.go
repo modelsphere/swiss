@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,7 +11,6 @@ import (
 	"time"
 
 	"github.com/aceforeverd/swiss/internal/cluster"
-	"github.com/aceforeverd/swiss/internal/exec"
 	"github.com/aceforeverd/swiss/internal/plan"
 	"github.com/aceforeverd/swiss/internal/values"
 )
@@ -26,6 +26,10 @@ type releaseStatus struct {
 	Total      int           `json:"total"`
 	Route      string        `json:"route,omitempty"`
 	Warning    string        `json:"warning,omitempty"`
+	// Plan is the status key written beside the release on every apply. It is
+	// the only thing that can say an apply was started and never finished --
+	// helm's own status describes the last apply that returned.
+	Plan *planStatus `json:"planStatus,omitempty"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -33,15 +37,18 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	ns, release := r.PathValue("namespace"), r.PathValue("release")
-	st, err := exec.Lookup(ctx, s.probe, ns, release)
+	rel, err := s.releaseRecord(ctx, ns, release)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 
-	out := releaseStatus{
-		Release: release, Namespace: ns,
-		Exists: st.Exists, Revision: st.Revision, HelmStatus: st.Status,
+	out := releaseStatus{Release: release, Namespace: ns}
+	if rel != nil {
+		out.Exists, out.Revision, out.HelmStatus = true, rel.Revision, rel.Status
+		if st := parseStatus(rel.SwissStatus); st.Phase != "" {
+			out.Plan = &st
+		}
 	}
 
 	// The chart labels engine pods app=<release>-<engine>; without a stored plan
@@ -90,32 +97,12 @@ func (s *Server) handleProbe(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	prof, err := s.Profile(ctx)
+	base, err := s.entrypoint(ctx, p)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeError(w, http.StatusPreconditionFailed, err.Error())
 		return
 	}
-	if prof.Route.NginxService == "" {
-		writeError(w, http.StatusPreconditionFailed,
-			"site profile names no route.nginxService, so there is no entrypoint to ask")
-		return
-	}
-	svcNS, svcName, err := cluster.SplitRef(prof.Route.NginxService)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	route := routeOf(p)
-	if route == "" {
-		writeError(w, http.StatusPreconditionFailed, "this release publishes no route")
-		return
-	}
-
-	port := prof.Route.NginxPort
-	if port == 0 {
-		port = 8080
-	}
-	url := fmt.Sprintf("http://%s.%s.svc:%d/%s/v1/models", svcName, svcNS, port, route)
+	url := base + "/v1/models"
 
 	res := probeResult{URL: url}
 	started := time.Now()
@@ -133,6 +120,189 @@ func (s *Server) handleProbe(w http.ResponseWriter, r *http.Request) {
 		res.Body = snippet(body)
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+type chatRequest struct {
+	// API selects the shape of the request: "chat" (/v1/chat/completions),
+	// "completions" (/v1/completions) or "messages" (/v1/messages).
+	API    string `json:"api,omitempty"`
+	Prompt string `json:"prompt,omitempty"`
+	// Model overrides the served name taken from the plan, for the case where
+	// the engine is serving under a name the plan does not predict.
+	Model     string `json:"model,omitempty"`
+	MaxTokens int    `json:"maxTokens,omitempty"`
+}
+
+type chatResult struct {
+	URL       string `json:"url"`
+	API       string `json:"api"`
+	Model     string `json:"model,omitempty"`
+	OK        bool   `json:"ok"`
+	Status    int    `json:"status,omitempty"`
+	LatencyMS int64  `json:"latencyMs"`
+	Reply     string `json:"reply,omitempty"`
+	Error     string `json:"error,omitempty"`
+	Body      string `json:"body,omitempty"`
+}
+
+// handleChat sends a real inference request through the entrypoint.
+//
+// /v1/models, which handleProbe calls, proves the route resolves and the engine
+// answers. It does not prove the model can generate a token: weights can be
+// half-loaded, a tensor-parallel peer can be missing, and the model list still
+// comes back. This is the check that costs a few tokens and actually answers
+// the question, so it is manual rather than polled.
+func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := contextWithTimeout(r, 2*time.Minute)
+	defer cancel()
+
+	var req chatRequest
+	// An empty body is a valid request: it means "just check it answers".
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if req.Prompt == "" {
+		req.Prompt = "Reply with the single word: ok"
+	}
+	if req.MaxTokens <= 0 {
+		req.MaxTokens = 32
+	}
+	if req.API == "" {
+		req.API = "chat"
+	}
+
+	ns, release := r.PathValue("namespace"), r.PathValue("release")
+	p, err := s.currentPlan(ctx, ns, release)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	base, err := s.entrypoint(ctx, p)
+	if err != nil {
+		writeError(w, http.StatusPreconditionFailed, err.Error())
+		return
+	}
+
+	model := req.Model
+	if model == "" {
+		model = servedName(p)
+	}
+
+	path, body, err := chatBody(req.API, model, req.Prompt, req.MaxTokens)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	res := chatResult{URL: base + path, API: req.API, Model: model}
+	started := time.Now()
+	raw, code, err := httpPostJSON(ctx, res.URL, body)
+	res.LatencyMS = time.Since(started).Milliseconds()
+	res.Status = code
+	if err != nil {
+		res.Error = err.Error()
+		writeJSON(w, http.StatusOK, res)
+		return
+	}
+	res.Reply = replyText(req.API, raw)
+	// A 200 carrying no text is a failure worth reporting as one: the engine
+	// answered and generated nothing.
+	res.OK = code == http.StatusOK && res.Reply != ""
+	if !res.OK {
+		res.Body = snippet(raw)
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// entrypoint is the openresty base URL for a release's route, the same address
+// handleProbe asks. Both go through the entrypoint rather than the pod: a ready
+// pod behind an unpublished route serves nobody.
+func (s *Server) entrypoint(ctx context.Context, p *plan.Plan) (string, error) {
+	prof, err := s.Profile(ctx)
+	if err != nil {
+		return "", err
+	}
+	if prof.Route.NginxService == "" {
+		return "", fmt.Errorf("site profile names no route.nginxService, so there is no entrypoint to ask")
+	}
+	svcNS, svcName, err := cluster.SplitRef(prof.Route.NginxService)
+	if err != nil {
+		return "", err
+	}
+	route := routeOf(p)
+	if route == "" {
+		return "", fmt.Errorf("this release publishes no route")
+	}
+	port := prof.Route.NginxPort
+	if port == 0 {
+		port = 8080
+	}
+	return fmt.Sprintf("http://%s.%s.svc:%d/%s", svcName, svcNS, port, route), nil
+}
+
+func chatBody(api, model, prompt string, maxTokens int) (string, any, error) {
+	messages := []map[string]string{{"role": "user", "content": prompt}}
+	switch api {
+	case "chat":
+		return "/v1/chat/completions", map[string]any{
+			"model": model, "messages": messages, "max_tokens": maxTokens, "stream": false,
+		}, nil
+	case "completions":
+		return "/v1/completions", map[string]any{
+			"model": model, "prompt": prompt, "max_tokens": maxTokens, "stream": false,
+		}, nil
+	case "messages":
+		return "/v1/messages", map[string]any{
+			"model": model, "messages": messages, "max_tokens": maxTokens,
+		}, nil
+	}
+	return "", nil, fmt.Errorf("unknown api %q: want chat, completions or messages", api)
+}
+
+// replyText pulls the generated text out of whichever response shape came back.
+// Decoded leniently: the point is to show the operator what the model said, and
+// a field an engine spells differently should not read as a failed check.
+func replyText(api string, raw []byte) string {
+	var doc struct {
+		Choices []struct {
+			Text    string `json:"text"`
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return ""
+	}
+	if api == "messages" {
+		for _, c := range doc.Content {
+			if c.Text != "" {
+				return strings.TrimSpace(c.Text)
+			}
+		}
+		return ""
+	}
+	for _, c := range doc.Choices {
+		if c.Message.Content != "" {
+			return strings.TrimSpace(c.Message.Content)
+		}
+		if c.Text != "" {
+			return strings.TrimSpace(c.Text)
+		}
+	}
+	return ""
+}
+
+// servedName is the name the engine answers to, which is model.name after the
+// catalog's servedName projection -- not the catalog entry's own name.
+func servedName(p *plan.Plan) string {
+	if v, ok := values.Get(p.Values, "model.name"); ok {
+		if s, _ := v.(string); s != "" {
+			return s
+		}
+	}
+	return p.Source.Model
 }
 
 func routeOf(p *plan.Plan) string {
@@ -155,6 +325,28 @@ func httpGet(ctx context.Context, url string) ([]byte, int, error) {
 		return nil, 0, err
 	}
 	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	return b, resp.StatusCode, err
+}
+
+// httpPostJSON is the chat check's transport. The timeout is generous because
+// the first request against a freshly loaded model pays for a cold cache, and a
+// check that times out at five seconds would report a healthy model as broken.
+func httpPostJSON(ctx context.Context, url string, body any) ([]byte, int, error) {
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, 0, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(buf))
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{Timeout: 110 * time.Second}).Do(req)
 	if err != nil {
 		return nil, 0, err
 	}

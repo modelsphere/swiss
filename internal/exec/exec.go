@@ -144,6 +144,28 @@ func (r Runner) Apply(ctx context.Context, p *plan.Plan) (Result, error) {
 	return Result{Output: out, Changed: err == nil}, err
 }
 
+// Uninstall removes a release with helm directly, rather than through a
+// materialised workspace like every other verb here.
+//
+// An uninstall needs no values: it names a release and a namespace and nothing
+// else. Routing it through a plan would mean a release whose plan is missing or
+// unreadable -- the untracked row, the one most likely to need cleaning up --
+// could not be removed at all.
+func (r Runner) Uninstall(ctx context.Context, namespace, release string) (Result, error) {
+	out, err := r.runHelm(ctx, "uninstall", release, "--namespace", namespace)
+	return Result{Output: out, Changed: err == nil}, err
+}
+
+func (r Runner) runHelm(ctx context.Context, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, r.bin("helm"), args...)
+	var buf bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &buf, &buf
+	if err := cmd.Run(); err != nil {
+		return buf.String(), fmt.Errorf("helm %s: %w\n%s", strings.Join(args, " "), err, buf.String())
+	}
+	return buf.String(), nil
+}
+
 func (r Runner) run(ctx context.Context, ws Workspace, args ...string) (string, int, error) {
 	full := append([]string{"--file", ws.Helmfile, "--helm-binary", r.bin("helm")}, args...)
 	cmd := exec.CommandContext(ctx, r.bin("helmfile"), full...)

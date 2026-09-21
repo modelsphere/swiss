@@ -6,7 +6,6 @@ import {
   api,
   deployApi,
   type ApplyResult,
-  type ClusterInfo,
   type DiffResult,
   type Plan,
   type PlanRequest,
@@ -18,7 +17,7 @@ import { Field, Input } from "@/components/ui/input";
 import { Toggle } from "@/components/ui/toggle";
 import { DiffView } from "@/components/DiffView";
 import { Provenance } from "@/components/Provenance";
-import { ErrorState, Loading } from "@/components/States";
+import { Empty, ErrorState, Loading } from "@/components/States";
 import { Tabs } from "@/components/ui/tabs";
 import { ReleaseStatus } from "@/components/ReleaseStatus";
 
@@ -81,12 +80,16 @@ export function Deploy() {
   const [applied, setApplied] = useState<ApplyResult | null>(null);
   const [tab, setTab] = useState("plan");
 
-  // A diff is bound to the plan it was computed from. Touching the form
-  // invalidates it, so apply is never reachable from a diff nobody saw.
+  // A diff is bound to the plan it was computed from, so touching the form
+  // invalidates both. The form sits above the tabs and stays editable there, so
+  // an edit also walks the pipeline back rather than leaving a diff or an apply
+  // pane open over a plan that no longer exists. Status is live cluster state
+  // and belongs to no plan, so it survives.
   const reset = () => {
     setPlan(null);
     setDiff(null);
     setApplied(null);
+    setTab((t) => (t === "status" ? t : "plan"));
   };
   const setArea = (k: keyof Form) => (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setForm({ ...form, [k]: e.target.value });
@@ -113,13 +116,26 @@ export function Deploy() {
     mutationFn: () => deployApi.diff({ planHash: plan!.hash } as never),
     onSuccess: setDiff,
   });
-  const install = diff ? !diff.exists : false;
+
+  // Whether the release is already there is a question about the cluster, not
+  // about the diff. A diff answers it as a side effect; asking directly is what
+  // lets the diff stay optional. Same query key as the Status tab, so the two
+  // share one answer.
+  const live = useQuery({
+    queryKey: ["status", plan?.release.namespace ?? "", plan?.release.name ?? ""],
+    queryFn: () => api.status(plan!.release.namespace, plan!.release.name),
+    enabled: plan !== null,
+  });
+  const exists = diff?.exists ?? live.data?.exists;
+  const install = exists === false;
 
   const applyM = useMutation({
     mutationFn: () =>
-      diff!.exists
-        ? deployApi.apply(plan!.hash, diff!.revision)
-        : deployApi.install(plan!.hash),
+      install
+        ? deployApi.install(plan!.hash)
+        : // expectRevision is the optimistic lock, and it exists only when a
+          // diff computed it. Applying without one asserts nothing.
+          deployApi.apply(plan!.hash, diff?.revision),
     onSuccess: (r) => {
       setApplied(r);
       setTab("status");
@@ -171,25 +187,12 @@ export function Deploy() {
         </p>
       </div>
 
-      <Tabs
-        tabs={[
-          { id: "plan", label: "Plan" },
-          { id: "diff", label: "Diff", disabled: !plan, hint: "compose a plan first" },
-          { id: "install", label: install ? "Install" : "Apply", disabled: !diff, hint: "diff first" },
-          { id: "status", label: "Status", disabled: !applied && !diff?.exists, hint: "nothing deployed yet" },
-        ]}
-        active={tab}
-        onSelect={setTab}
-      />
-
       {error && <ErrorState what="the request" error={error} />}
 
-      {/* The settings follow the operator through diff, apply and status. The
-          Plan tab shows the form itself, so it needs no second copy. */}
-      {tab !== "plan" && <FormSummary form={form} release={release} cluster={cluster.data} />}
-
-      {tab === "plan" && (
-        <div className="space-y-5">
+      {/* The settings are the page. Plan, diff and apply are what is done with
+          them, so they sit below as tabs rather than holding the form inside
+          one of them -- the operator never has to leave a pane to see or
+          change what is being deployed. */}
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Deploy settings</CardTitle>
@@ -281,49 +284,70 @@ export function Deploy() {
         </div>
       </details>
 
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Plan editor</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Any values key, applied after every layer — scheduling and resources the fields
+            above do not cover, and catalog or site keys the form refuses. It is the one input
+            exempt from layer ownership, so nothing here is checked against the layer that owns
+            it. Everything it sets is shown as its own <span className="font-medium">edit</span>{" "}
+            layer in the composed plan, so it is never invisible.
+          </p>
+        </CardHeader>
+        <CardContent>
+          <textarea
+            value={form.edits}
+            onChange={setArea("edits")}
+            spellCheck={false}
+            rows={10}
+            placeholder={EDITS_PLACEHOLDER}
+            className="w-full rounded-md border bg-background px-3 py-2 font-mono text-xs"
+          />
+        </CardContent>
+      </Card>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Button onClick={() => planM.mutate()} disabled={!form.serviceId || planM.isPending}>
+          {planM.isPending ? "Composing…" : plan ? "Recompose plan" : "Compose plan"}
+        </Button>
+        {plan && <span className="font-mono text-xs text-muted-foreground">{plan.hash}</span>}
+      </div>
+
+      <Tabs
+        tabs={[
+          { id: "plan", label: "Plan" },
+          { id: "diff", label: "Diff", disabled: !plan, hint: "compose a plan first" },
+          {
+            id: "apply",
+            label: install ? "Install" : "Apply",
+            disabled: !plan,
+            hint: "compose a plan first",
+          },
+          {
+            id: "status",
+            label: "Status",
+            disabled: !applied && !exists,
+            hint: "nothing deployed yet",
+          },
+        ]}
+        active={tab}
+        onSelect={setTab}
+      />
+
+      {tab === "plan" &&
+        (plan ? (
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Plan editor</CardTitle>
-              <p className="text-sm text-muted-foreground">
-                Any values key, applied after every layer — scheduling and resources the
-                fields above do not cover, and catalog or site keys the form refuses. It is
-                the one input exempt from layer ownership, so nothing here is checked against
-                the layer that owns it. Everything it sets is shown as its own{" "}
-                <span className="font-medium">edit</span> layer in the composed plan below, so
-                it is never invisible.
-              </p>
+              <CardTitle className="text-base">Composed plan</CardTitle>
             </CardHeader>
             <CardContent>
-              <textarea
-                value={form.edits}
-                onChange={setArea("edits")}
-                spellCheck={false}
-                rows={10}
-                placeholder={EDITS_PLACEHOLDER}
-                className="w-full rounded-md border bg-background px-3 py-2 font-mono text-xs"
-              />
+              <Provenance plan={plan} />
             </CardContent>
           </Card>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <Button onClick={() => planM.mutate()} disabled={!form.serviceId || planM.isPending}>
-              {planM.isPending ? "Composing…" : "Compose plan"}
-            </Button>
-            {plan && <span className="font-mono text-xs text-muted-foreground">{plan.hash}</span>}
-          </div>
-
-          {plan && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Composed plan</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <Provenance plan={plan} />
-              </CardContent>
-            </Card>
-          )}
-        </div>
-      )}
+        ) : (
+          <Empty>Compose a plan to see every layer that went into it.</Empty>
+        ))}
 
       {tab === "diff" && plan && (
         <div className="space-y-4">
@@ -338,7 +362,7 @@ export function Deploy() {
             )}
           </div>
 
-          {diff && (
+          {diff ? (
             <Card>
               <CardHeader>
                 <CardTitle className="flex flex-wrap items-center gap-2 text-base">
@@ -358,11 +382,16 @@ export function Deploy() {
                 )}
               </CardContent>
             </Card>
+          ) : (
+            <Empty>
+              Optional, and the only thing that shows what this plan does to the live release.
+              Running it also pins the apply to the revision it saw.
+            </Empty>
           )}
         </div>
       )}
 
-      {tab === "install" && plan && diff && (
+      {tab === "apply" && plan && (
         <div className="space-y-4">
           <Card>
             <CardHeader>
@@ -370,7 +399,9 @@ export function Deploy() {
               <p className="text-sm text-muted-foreground">
                 {install
                   ? "The release does not exist; this creates it."
-                  : `Upgrading the live release, asserting it is still at revision ${diff.revision}.`}
+                  : diff
+                    ? `Upgrading the live release, asserting it is still at revision ${diff.revision}.`
+                    : "Upgrading the live release."}
               </p>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -384,7 +415,31 @@ export function Deploy() {
                 <dt className="text-muted-foreground">Plan</dt>
                 <dd className="font-mono text-xs break-all">{plan.hash}</dd>
               </dl>
-              <Button onClick={() => applyM.mutate()} disabled={applyM.isPending || !!applied}>
+
+              {/* Skipping the diff is allowed, not silent. Both things it buys
+                  are lost at once, and the second one is the easy one to miss. */}
+              {!install && !diff && (
+                <div className="flex items-start gap-2 text-sm text-warning">
+                  <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+                  <p>
+                    No diff was run. Nothing has shown what this changes, and nothing asserts
+                    the release has not moved since — if someone else applied in the meantime,
+                    this overwrites them with no signal.
+                  </p>
+                </div>
+              )}
+
+              {live.error && (
+                <p className="text-sm text-warning">
+                  Could not tell whether {plan.release.name} is already installed:{" "}
+                  {live.error instanceof Error ? live.error.message : String(live.error)}
+                </p>
+              )}
+
+              <Button
+                onClick={() => applyM.mutate()}
+                disabled={applyM.isPending || !!applied || exists === undefined}
+              >
                 {applyM.isPending ? "Submitting…" : install ? "Install" : "Approve and apply"}
               </Button>
             </CardContent>
@@ -401,78 +456,6 @@ export function Deploy() {
         />
       )}
     </div>
-  );
-}
-
-// FormSummary keeps the deploy settings in front of the operator on every tab.
-// Read-only on purpose: a diff is bound to the plan it was computed from, so an
-// editable copy here would either invalidate the diff the apply button is gated
-// on, or -- worse -- not invalidate it and approve something else.
-function FormSummary({
-  form,
-  release,
-  cluster,
-}: {
-  form: Form;
-  release: string;
-  cluster?: ClusterInfo;
-}) {
-  const on = effective(form);
-  const features: [string, boolean][] = [
-    ["CART", form.cart],
-    ["ModelRoute", on.modelRoute],
-    ["SLO", form.slo],
-    ["ServiceMonitor", form.serviceMonitor],
-    ["Scaler", on.scaler],
-  ];
-
-  return (
-    <Card>
-      <CardContent className="space-y-3 p-4">
-        <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-            Deploy settings
-          </span>
-          <span className="text-xs text-muted-foreground">edit them on the Plan tab</span>
-        </div>
-
-        <dl className="grid gap-x-4 gap-y-1 text-sm sm:grid-cols-[9rem_1fr]">
-          <Summary label="Service ID" value={form.serviceId} />
-          <Summary label="Release" value={release} />
-          <Summary label="Namespace" value={form.namespace || cluster?.namespace} />
-          <Summary label="Route" value={on.modelRoute ? form.route || form.serviceId : ""} />
-          <Summary label="Replicas" value={form.replicaCount} />
-          <Summary
-            label="Scaler"
-            value={on.scaler ? `${form.minReplicas || "?"} – ${form.maxReplicas || "?"}` : ""}
-          />
-          <Summary label="Model path" value={form.localPath} />
-          <Summary label="Priority class" value={form.priorityClassName} />
-          <Summary label="Scheduler" value={form.schedulerName} />
-        </dl>
-
-        <div className="flex flex-wrap gap-1">
-          {features.map(([label, enabled]) => (
-            <Badge key={label} variant={enabled ? "success" : "muted"}>
-              {label} {enabled ? "on" : "off"}
-            </Badge>
-          ))}
-          {form.edits.trim() && <Badge variant="warning">plan edits</Badge>}
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-// An unset field is left out rather than rendered as a dash: the list is read at
-// a glance, and nine "—" rows bury the three settings that were actually made.
-function Summary({ label, value }: { label: string; value?: string }) {
-  if (!value?.trim()) return null;
-  return (
-    <>
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className="break-all">{value}</dd>
-    </>
   );
 }
 
@@ -528,8 +511,8 @@ const num = (v: string) => (v.trim() === "" ? undefined : Number(v));
 
 // Two features are switched on by being filled in rather than by their toggle:
 // naming a route turns routing on, and typing a scaling bound turns the scaler
-// on. Derived in one place so the toggle, the summary and the request cannot
-// disagree about what this deploy is asking for.
+// on. Derived in one place so the toggle and the request cannot disagree about
+// what this deploy is asking for.
 function effective(f: Form) {
   return {
     modelRoute: f.modelRoute || f.route.trim() !== "",

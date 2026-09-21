@@ -19,13 +19,22 @@ import (
 	"github.com/aceforeverd/swiss/internal/values"
 )
 
-type fakeWriter struct{ written map[string]map[string]string }
+type fakeWriter struct {
+	written map[string]map[string]string
+	deleted []string
+}
 
 func (f *fakeWriter) PutConfigMap(_ context.Context, ref string, data map[string]string) error {
 	if f.written == nil {
 		f.written = map[string]map[string]string{}
 	}
 	f.written[ref] = data
+	return nil
+}
+
+func (f *fakeWriter) DeleteConfigMap(_ context.Context, ref string) error {
+	f.deleted = append(f.deleted, ref)
+	delete(f.written, ref)
 	return nil
 }
 
@@ -237,6 +246,10 @@ func TestApplyRefusesWhenThePlanCannotBeRecorded(t *testing.T) {
 type failingWriter struct{}
 
 func (failingWriter) PutConfigMap(context.Context, string, map[string]string) error {
+	return errors.New("forbidden")
+}
+
+func (failingWriter) DeleteConfigMap(context.Context, string) error {
 	return errors.New("forbidden")
 }
 
