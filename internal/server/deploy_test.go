@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aceforeverd/swiss/internal/cluster"
 	"github.com/aceforeverd/swiss/internal/plan"
@@ -237,6 +238,32 @@ type failingWriter struct{}
 
 func (failingWriter) PutConfigMap(context.Context, string, map[string]string) error {
 	return errors.New("forbidden")
+}
+
+// A closed browser tab must not reach the cluster. helmfile runs under
+// exec.CommandContext, so an apply on the request's context is killed
+// mid-upgrade when the client goes away -- and a half-applied helm upgrade
+// leaves the release pending-upgrade, which nothing but a hand rollback clears.
+func TestApplyOutlivesTheRequest(t *testing.T) {
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if cancelled.Err() == nil {
+		t.Fatal("the parent should be cancelled")
+	}
+
+	ctx, done := detach(cancelled)
+	defer done()
+
+	if err := ctx.Err(); err != nil {
+		t.Fatalf("the apply must survive the request: %v", err)
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		t.Fatal("detaching must not mean running forever")
+	}
+	if d := time.Until(deadline); d <= 0 || d > applyBudget {
+		t.Fatalf("deadline %s is not within the apply budget %s", d, applyBudget)
+	}
 }
 
 func TestRunsAreRecorded(t *testing.T) {

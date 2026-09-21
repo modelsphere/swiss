@@ -604,6 +604,26 @@ release gets genuinely stuck), and preflight failures are hard errors with no
 bypass flag. A bypass added before anyone has hit a false positive becomes the
 thing people use instead of fixing the rule.
 
+### The apply outlives the request
+
+Preconditions run on the caller's context; everything from the write-ahead
+onward does not. helmfile runs under `exec.CommandContext`, so while the apply
+held the request's context, a browser navigating away sent SIGKILL to helm
+mid-upgrade — and a half-applied upgrade leaves the release in
+`pending-upgrade`, precisely the state the refusal above will not touch. A
+client disconnect must not be able to wedge a release that only a hand
+`helm rollback` can clear.
+
+The bookkeeping after the apply is detached for the same reason. On a cancelled
+context the audit row is dropped and `status.yaml` is stranded on `applying`,
+which the reconciliation view reports as "an apply was started and never
+completed" — about an apply that finished.
+
+This is decoupling from the *client*, not making apply asynchronous. The handler
+still waits for helmfile, which returns as soon as the upgrade is accepted
+because `wait: false`. What it no longer does is treat a closed socket as a
+reason to kill a cluster operation already in flight.
+
 ## Two paths, and where state lives
 
 Swiss has a CLI path with a git repo beside it and a server path with none. They

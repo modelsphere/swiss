@@ -2,7 +2,15 @@ import { useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ChevronLeft, CircleCheck, TriangleAlert } from "lucide-react";
-import { api, deployApi, type ApplyResult, type DiffResult, type Plan, type PlanRequest } from "@/lib/api";
+import {
+  api,
+  deployApi,
+  type ApplyResult,
+  type ClusterInfo,
+  type DiffResult,
+  type Plan,
+  type PlanRequest,
+} from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -18,7 +26,6 @@ interface Form {
   edits: string;
   priorityClassName: string;
   schedulerName: string;
-  advanced: string;
   cart: boolean;
   modelRoute: boolean;
   slo: boolean;
@@ -37,7 +44,6 @@ const EMPTY: Form = {
   edits: "",
   priorityClassName: "",
   schedulerName: "",
-  advanced: "",
   cart: true,
   modelRoute: false,
   slo: false,
@@ -178,6 +184,10 @@ export function Deploy() {
 
       {error && <ErrorState what="the request" error={error} />}
 
+      {/* The settings follow the operator through diff, apply and status. The
+          Plan tab shows the form itself, so it needs no second copy. */}
+      {tab !== "plan" && <FormSummary form={form} release={release} cluster={cluster.data} />}
+
       {tab === "plan" && (
         <div className="space-y-5">
       <Card>
@@ -239,7 +249,7 @@ export function Deploy() {
           <Toggle
             label="ModelRoute"
             hint="publish to openresty and the monitor"
-            checked={form.modelRoute || !!form.route.trim()}
+            checked={effective(form).modelRoute}
             onChange={toggle("modelRoute")}
           />
           <Toggle
@@ -259,29 +269,14 @@ export function Deploy() {
 
       <details className="rounded-lg border">
         <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
-          Advanced — scheduling, resources, rollout
+          Advanced — scheduling
         </summary>
-        <div className="space-y-4 border-t p-4">
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Priority class" hint="priorityClassName">
-              <Input value={form.priorityClassName} onChange={set("priorityClassName")} />
-            </Field>
-            <Field label="Scheduler" hint="schedulerName, e.g. volcano">
-              <Input value={form.schedulerName} onChange={set("schedulerName")} />
-            </Field>
-          </div>
-          <Field
-            label="Extra values (YAML)"
-            hint="merged into this deploy's layer; catalog and site keys are still refused"
-          >
-            <textarea
-              value={form.advanced}
-              onChange={setArea("advanced")}
-              spellCheck={false}
-              rows={10}
-              placeholder={ADVANCED_PLACEHOLDER}
-              className="w-full rounded-md border bg-background px-3 py-2 font-mono text-xs"
-            />
+        <div className="grid gap-4 border-t p-4 sm:grid-cols-2">
+          <Field label="Priority class" hint="priorityClassName">
+            <Input value={form.priorityClassName} onChange={set("priorityClassName")} />
+          </Field>
+          <Field label="Scheduler" hint="schedulerName, e.g. volcano">
+            <Input value={form.schedulerName} onChange={set("schedulerName")} />
           </Field>
         </div>
       </details>
@@ -290,10 +285,12 @@ export function Deploy() {
             <CardHeader>
               <CardTitle className="text-base">Plan editor</CardTitle>
               <p className="text-sm text-muted-foreground">
-                Applied after every layer, and the only input exempt from layer ownership —
-                it can set a catalog or site key the form refuses. Shown as its own{" "}
-                <span className="font-medium">edit</span> layer in the composed plan, so it is
-                never invisible.
+                Any values key, applied after every layer — scheduling and resources the
+                fields above do not cover, and catalog or site keys the form refuses. It is
+                the one input exempt from layer ownership, so nothing here is checked against
+                the layer that owns it. Everything it sets is shown as its own{" "}
+                <span className="font-medium">edit</span> layer in the composed plan below, so
+                it is never invisible.
               </p>
             </CardHeader>
             <CardContent>
@@ -301,8 +298,8 @@ export function Deploy() {
                 value={form.edits}
                 onChange={setArea("edits")}
                 spellCheck={false}
-                rows={8}
-                placeholder={"# last word, any key\nextraArgs:\n  - --tp-size=4"}
+                rows={10}
+                placeholder={EDITS_PLACEHOLDER}
                 className="w-full rounded-md border bg-background px-3 py-2 font-mono text-xs"
               />
             </CardContent>
@@ -407,6 +404,78 @@ export function Deploy() {
   );
 }
 
+// FormSummary keeps the deploy settings in front of the operator on every tab.
+// Read-only on purpose: a diff is bound to the plan it was computed from, so an
+// editable copy here would either invalidate the diff the apply button is gated
+// on, or -- worse -- not invalidate it and approve something else.
+function FormSummary({
+  form,
+  release,
+  cluster,
+}: {
+  form: Form;
+  release: string;
+  cluster?: ClusterInfo;
+}) {
+  const on = effective(form);
+  const features: [string, boolean][] = [
+    ["CART", form.cart],
+    ["ModelRoute", on.modelRoute],
+    ["SLO", form.slo],
+    ["ServiceMonitor", form.serviceMonitor],
+    ["Scaler", on.scaler],
+  ];
+
+  return (
+    <Card>
+      <CardContent className="space-y-3 p-4">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+            Deploy settings
+          </span>
+          <span className="text-xs text-muted-foreground">edit them on the Plan tab</span>
+        </div>
+
+        <dl className="grid gap-x-4 gap-y-1 text-sm sm:grid-cols-[9rem_1fr]">
+          <Summary label="Service ID" value={form.serviceId} />
+          <Summary label="Release" value={release} />
+          <Summary label="Namespace" value={form.namespace || cluster?.namespace} />
+          <Summary label="Route" value={on.modelRoute ? form.route || form.serviceId : ""} />
+          <Summary label="Replicas" value={form.replicaCount} />
+          <Summary
+            label="Scaler"
+            value={on.scaler ? `${form.minReplicas || "?"} – ${form.maxReplicas || "?"}` : ""}
+          />
+          <Summary label="Model path" value={form.localPath} />
+          <Summary label="Priority class" value={form.priorityClassName} />
+          <Summary label="Scheduler" value={form.schedulerName} />
+        </dl>
+
+        <div className="flex flex-wrap gap-1">
+          {features.map(([label, enabled]) => (
+            <Badge key={label} variant={enabled ? "success" : "muted"}>
+              {label} {enabled ? "on" : "off"}
+            </Badge>
+          ))}
+          {form.edits.trim() && <Badge variant="warning">plan edits</Badge>}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// An unset field is left out rather than rendered as a dash: the list is read at
+// a glance, and nine "—" rows bury the three settings that were actually made.
+function Summary({ label, value }: { label: string; value?: string }) {
+  if (!value?.trim()) return null;
+  return (
+    <>
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="break-all">{value}</dd>
+    </>
+  );
+}
+
 function Applied({ result }: { result: ApplyResult }) {
   return (
     <Card>
@@ -442,24 +511,35 @@ function Back({ name }: { name: string }) {
   );
 }
 
-const ADVANCED_PLACEHOLDER = `nodeSelector:
+const EDITS_PLACEHOLDER = `# last word, any key
+nodeSelector:
   nvidia.com/gpu.product: NVIDIA-B300-SXM6-AC
 tolerations:
   - key: gpu
     operator: Exists
     effect: NoSchedule
-affinity:
-  nodeAffinity:
-    requiredDuringSchedulingIgnoredDuringExecution: {}
 resources:
   limits:
     rdma/hca_shared: "1"
-strategy:
-  type: Recreate`;
+extraArgs:
+  - --tp-size=4`;
+
+const num = (v: string) => (v.trim() === "" ? undefined : Number(v));
+
+// Two features are switched on by being filled in rather than by their toggle:
+// naming a route turns routing on, and typing a scaling bound turns the scaler
+// on. Derived in one place so the toggle, the summary and the request cannot
+// disagree about what this deploy is asking for.
+function effective(f: Form) {
+  return {
+    modelRoute: f.modelRoute || f.route.trim() !== "",
+    scaler: num(f.minReplicas) !== undefined || num(f.maxReplicas) !== undefined,
+  };
+}
 
 function request(model: string, version: string, variant: string, f: Form): PlanRequest {
   const overrides: Record<string, unknown> = {};
-  const num = (v: string) => (v.trim() === "" ? undefined : Number(v));
+  const on = effective(f);
 
   if (num(f.replicaCount) !== undefined) overrides.replicaCount = num(f.replicaCount);
 
@@ -471,13 +551,13 @@ function request(model: string, version: string, variant: string, f: Form): Plan
 
   const route = f.route.trim();
   overrides.modelRoute = route
-    ? { enabled: true, nginx: { route } }
-    : { enabled: f.modelRoute };
+    ? { enabled: on.modelRoute, nginx: { route } }
+    : { enabled: on.modelRoute };
 
-  const scaler: Record<string, unknown> = {};
+  const scaler: Record<string, unknown> = { enabled: on.scaler };
   if (num(f.minReplicas) !== undefined) scaler.minReplicas = num(f.minReplicas);
   if (num(f.maxReplicas) !== undefined) scaler.maxReplicas = num(f.maxReplicas);
-  overrides.scaler = { ...scaler, enabled: Object.keys(scaler).length > 0 };
+  overrides.scaler = scaler;
 
   if (f.priorityClassName.trim()) overrides.priorityClassName = f.priorityClassName.trim();
   if (f.schedulerName.trim()) overrides.schedulerName = f.schedulerName.trim();
@@ -485,7 +565,6 @@ function request(model: string, version: string, variant: string, f: Form): Plan
   return {
     model,
     version: version || undefined,
-      overridesYAML: f.advanced.trim() || undefined,
     editsYAML: f.edits.trim() || undefined,
     variant: variant || undefined,
     release: f.release.trim() || undefined,

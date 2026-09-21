@@ -289,6 +289,10 @@ func (s *Server) handleApply(mode exec.Mode) http.HandlerFunc {
 			return
 		}
 
+		// Everything past the write-ahead outlives the request.
+		ctx, cancel = detach(ctx)
+		defer cancel()
+
 		res, applyErr := s.runner().Apply(ctx, p)
 		s.record(ctx, actionName(mode), p, res, applyErr, started)
 
@@ -328,6 +332,26 @@ const (
 	phaseApplied  = "applied"
 	phaseFailed   = "failed"
 )
+
+// applyBudget bounds the cluster-changing half of an apply, which runs detached
+// from the request. It is a deadlock guard, not a rollout timeout: helmDefaults
+// set wait: false, so helmfile returns once the upgrade is accepted rather than
+// once 40 minutes of weights have loaded.
+const applyBudget = 15 * time.Minute
+
+// detach is the context the cluster-changing half of an apply runs under: the
+// caller's values, none of the caller's cancellation, and a deadline of its own.
+//
+// helmfile runs under exec.CommandContext, so while this was the request's
+// context a browser navigating away SIGKILLed helm mid-upgrade -- leaving the
+// release in pending-upgrade, which Check then refuses until someone runs
+// `helm rollback` by hand. A client disconnect must not be able to wedge a
+// release. The bookkeeping after the apply is detached for the same reason: a
+// cancelled context there drops the audit row and strands status.yaml on
+// "applying", describing an apply that in fact finished.
+func detach(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(parent), applyBudget)
+}
 
 type planStatus struct {
 	Phase     string `yaml:"phase" json:"phase"`

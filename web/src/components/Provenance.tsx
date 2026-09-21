@@ -2,13 +2,17 @@ import { Badge } from "@/components/ui/badge";
 import type { Plan } from "@/lib/api";
 import { subtree, toYaml } from "@/lib/yaml";
 
-const LAYERS = ["catalog", "site", "derived", "form"] as const;
+// In merge order, and `edit` last because that is when it is applied. Leaving it
+// out of this list is how the one input exempt from ownership becomes the one
+// input nobody can see -- the opposite of why it is labelled at all.
+const LAYERS = ["catalog", "site", "derived", "form", "edit"] as const;
 
 const TONE = {
   catalog: "muted",
   site: "outline",
   derived: "warning",
   form: "success",
+  edit: "destructive",
 } as const;
 
 const WHAT = {
@@ -16,6 +20,7 @@ const WHAT = {
   site: "from this cluster's profile",
   derived: "computed from the variant and the site",
   form: "what this deploy set",
+  edit: "typed into the plan editor; exempt from layer ownership",
 } as const;
 
 export function Provenance({ plan }: { plan: Plan }) {
