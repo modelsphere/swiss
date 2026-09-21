@@ -350,7 +350,9 @@ export interface ReleaseStatus {
   planStatus?: PlanStatus;
 }
 
-export type ChatApi = "chat" | "completions" | "messages";
+// The wire format a check speaks. The values are the server's; the labels the
+// page shows them under name the protocol, not the verb.
+export type InferenceApi = "chat" | "completions" | "messages";
 
 // The entrypoint may need a credential. The site profile can name one (a Secret
 // it points at), and these override it per call — which is what lets an operator
@@ -361,7 +363,7 @@ export interface EntrypointAuth {
 }
 
 export interface ChatRequest extends EntrypointAuth {
-  api?: ChatApi;
+  api?: InferenceApi;
   prompt?: string;
   model?: string;
   maxTokens?: number;
@@ -369,12 +371,16 @@ export interface ChatRequest extends EntrypointAuth {
 
 export interface ChatResult {
   url: string;
-  api: ChatApi;
+  api: InferenceApi;
   model?: string;
   ok: boolean;
   status?: number;
   latencyMs: number;
   reply?: string;
+  // Where a reasoning model puts its output, and all there is of it when the
+  // token budget ran out before the answer.
+  reasoning?: string;
+  finishReason?: string;
   error?: string;
   body?: string;
   // Header names only, never values: enough to tell "no key was sent" from

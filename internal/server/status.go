@@ -152,16 +152,20 @@ type chatRequest struct {
 }
 
 type chatResult struct {
-	URL         string   `json:"url"`
-	API         string   `json:"api"`
-	Model       string   `json:"model,omitempty"`
-	OK          bool     `json:"ok"`
-	Status      int      `json:"status,omitempty"`
-	LatencyMS   int64    `json:"latencyMs"`
-	Reply       string   `json:"reply,omitempty"`
-	Error       string   `json:"error,omitempty"`
-	Body        string   `json:"body,omitempty"`
-	SentHeaders []string `json:"sentHeaders,omitempty"`
+	URL       string `json:"url"`
+	API       string `json:"api"`
+	Model     string `json:"model,omitempty"`
+	OK        bool   `json:"ok"`
+	Status    int    `json:"status,omitempty"`
+	LatencyMS int64  `json:"latencyMs"`
+	Reply     string `json:"reply,omitempty"`
+	// Reasoning is the thinking channel, which is where a reasoning model puts
+	// everything it produced when the token budget ran out before the answer.
+	Reasoning    string   `json:"reasoning,omitempty"`
+	FinishReason string   `json:"finishReason,omitempty"`
+	Error        string   `json:"error,omitempty"`
+	Body         string   `json:"body,omitempty"`
+	SentHeaders  []string `json:"sentHeaders,omitempty"`
 }
 
 // handleChat sends a real inference request through the entrypoint.
@@ -221,10 +225,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, res)
 		return
 	}
-	res.Reply = replyText(req.API, raw)
-	// A 200 carrying no text is a failure worth reporting as one: the engine
-	// answered and generated nothing.
-	res.OK = code == http.StatusOK && res.Reply != ""
+	out := parseReply(req.API, raw)
+	res.Reply, res.Reasoning, res.FinishReason = out.text, out.reasoning, out.finish
+	// A 200 carrying nothing generated is a failure worth reporting as one. Text
+	// that never left the thinking channel still came from a model that ran.
+	res.OK = code == http.StatusOK && (res.Reply != "" || res.Reasoning != "")
 	if !res.OK {
 		res.Body = snippet(raw)
 	}
@@ -254,7 +259,7 @@ func (s *Server) entrypoint(ctx context.Context, p *plan.Plan, auth entrypointAu
 	if port == 0 {
 		port = 8080
 	}
-	hdr, err := s.entrypointHeaders(ctx, prof.Route.Auth, auth)
+	hdr, err := s.entrypointHeaders(ctx, prof.Route.Auth, svcNS, auth)
 	if err != nil {
 		return "", nil, err
 	}
@@ -267,7 +272,8 @@ func (s *Server) entrypoint(ctx context.Context, p *plan.Plan, auth entrypointAu
 // The profile is a ConfigMap, so it names a Secret rather than holding the key.
 // A request-supplied key wins outright -- that is what makes it possible to test
 // a credential before writing it into the cluster.
-func (s *Server) entrypointHeaders(ctx context.Context, cfg site.RouteAuth, req entrypointAuth) (http.Header, error) {
+// entrypointNS is the namespace a bare route.auth.secretRef is read from.
+func (s *Server) entrypointHeaders(ctx context.Context, cfg site.RouteAuth, entrypointNS string, req entrypointAuth) (http.Header, error) {
 	hdr := http.Header{}
 	for k, v := range cfg.Headers {
 		hdr.Set(k, v)
@@ -278,16 +284,17 @@ func (s *Server) entrypointHeaders(ctx context.Context, cfg site.RouteAuth, req 
 
 	key := req.APIKey
 	if key == "" && cfg.SecretRef != "" {
-		data, err := s.probe.Secret(ctx, cfg.SecretRef)
+		ref := cfg.SecretReference(entrypointNS)
+		data, err := s.probe.Secret(ctx, ref)
 		if err != nil {
-			return nil, fmt.Errorf("route.auth.secretRef %s: %w", cfg.SecretRef, err)
+			return nil, fmt.Errorf("route.auth.secretRef %s: %w", ref, err)
 		}
 		name := cfg.SecretKey
 		if name == "" {
 			name = "apiKey"
 		}
 		if key = data[name]; key == "" {
-			return nil, fmt.Errorf("secret %s has no key %q", cfg.SecretRef, name)
+			return nil, fmt.Errorf("secret %s has no key %q", ref, name)
 		}
 	}
 	if key != "" {
@@ -325,41 +332,91 @@ func chatBody(api, model, prompt string, maxTokens int) (string, any, error) {
 	return "", nil, fmt.Errorf("unknown api %q: want chat, completions or messages", api)
 }
 
-// replyText pulls the generated text out of whichever response shape came back.
+// reply is what a check can report: the answer, the thinking channel it may
+// have arrived in instead, and why generation stopped.
+type reply struct {
+	text      string
+	reasoning string
+	finish    string
+}
+
+// parseReply pulls the generated text out of whichever response shape came
+// back. Both chat APIs put a reasoning model's output in a separate channel and
+// leave the answer empty when the budget runs out mid-thought, so a check that
+// reads only the answer reports a working model as broken.
+//
 // Decoded leniently: the point is to show the operator what the model said, and
 // a field an engine spells differently should not read as a failed check.
-func replyText(api string, raw []byte) string {
+func parseReply(api string, raw []byte) reply {
 	var doc struct {
 		Choices []struct {
-			Text    string `json:"text"`
-			Message struct {
-				Content string `json:"content"`
+			Text         string `json:"text"`
+			FinishReason string `json:"finish_reason"`
+			Message      struct {
+				Content json.RawMessage `json:"content"`
+				// sglang and vllm spell the thinking channel differently.
+				ReasoningContent string `json:"reasoning_content"`
+				Reasoning        string `json:"reasoning"`
 			} `json:"message"`
 		} `json:"choices"`
-		Content []struct {
-			Text string `json:"text"`
-		} `json:"content"`
+		Content    json.RawMessage `json:"content"`
+		StopReason string          `json:"stop_reason"`
 	}
-	if err := json.Unmarshal(raw, &doc); err != nil {
-		return ""
-	}
+	_ = json.Unmarshal(raw, &doc)
+
 	if api == "messages" {
-		for _, c := range doc.Content {
-			if c.Text != "" {
-				return strings.TrimSpace(c.Text)
-			}
-		}
-		return ""
+		text, thinking := contentText(doc.Content)
+		return reply{text: text, reasoning: thinking, finish: doc.StopReason}
 	}
 	for _, c := range doc.Choices {
-		if c.Message.Content != "" {
-			return strings.TrimSpace(c.Message.Content)
+		text, thinking := contentText(c.Message.Content)
+		if text == "" {
+			text = strings.TrimSpace(c.Text)
 		}
-		if c.Text != "" {
-			return strings.TrimSpace(c.Text)
+		if thinking == "" {
+			thinking = strings.TrimSpace(c.Message.ReasoningContent)
+		}
+		if thinking == "" {
+			thinking = strings.TrimSpace(c.Message.Reasoning)
+		}
+		r := reply{text: text, reasoning: thinking, finish: c.FinishReason}
+		if r != (reply{}) {
+			return r
 		}
 	}
-	return ""
+	return reply{}
+}
+
+// contentText reads a content field that is a string in one engine and a list
+// of typed blocks in the next, keeping thinking blocks out of the answer.
+func contentText(raw json.RawMessage) (text, thinking string) {
+	if len(raw) == 0 {
+		return "", ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return strings.TrimSpace(s), ""
+	}
+	var blocks []struct {
+		Type     string `json:"type"`
+		Text     string `json:"text"`
+		Thinking string `json:"thinking"`
+	}
+	if json.Unmarshal(raw, &blocks) != nil {
+		return "", ""
+	}
+	var body, thought []string
+	for _, b := range blocks {
+		switch {
+		case b.Thinking != "":
+			thought = append(thought, b.Thinking)
+		case b.Type == "thinking" || b.Type == "reasoning":
+			thought = append(thought, b.Text)
+		case b.Text != "":
+			body = append(body, b.Text)
+		}
+	}
+	return strings.TrimSpace(strings.Join(body, "")), strings.TrimSpace(strings.Join(thought, ""))
 }
 
 // servedName is the name the engine answers to, which is model.name after the

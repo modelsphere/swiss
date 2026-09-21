@@ -5,8 +5,8 @@ import { ChevronLeft, CircleCheck, CircleX, TriangleAlert } from "lucide-react";
 import {
   api,
   deployApi,
-  type ChatApi,
   type ChatResult,
+  type InferenceApi,
   type EntrypointAuth,
   type PlanStatus,
   type ReleaseStatus as Status,
@@ -173,10 +173,12 @@ function InstallStatus({ status }: { status: Status }) {
   );
 }
 
-const APIS: { id: ChatApi; label: string; path: string }[] = [
-  { id: "chat", label: "Chat", path: "/v1/chat/completions" },
-  { id: "completions", label: "Completions", path: "/v1/completions" },
-  { id: "messages", label: "Messages", path: "/v1/messages" },
+// Named by protocol: "Chat" and "Messages" are the same word to an operator
+// deciding which one their gateway accepts.
+const API_FORMATS: { id: InferenceApi; label: string; path: string }[] = [
+  { id: "chat", label: "OpenAI Chat Completions", path: "/v1/chat/completions" },
+  { id: "completions", label: "OpenAI Completions (legacy)", path: "/v1/completions" },
+  { id: "messages", label: "Anthropic Messages", path: "/v1/messages" },
 ];
 
 // HealthCheck sends a real inference request. The pod readiness above and the
@@ -191,13 +193,17 @@ function HealthCheck({
   release: string;
   hasPlan: boolean;
 }) {
-  const [chatApi, setChatApi] = useState<ChatApi>("chat");
+  const [format, setFormat] = useState<InferenceApi>("chat");
   const [prompt, setPrompt] = useState("Reply with the single word: ok");
+  // Room for a reasoning model to finish thinking before it answers; on a
+  // tighter budget every such model stops mid-thought and looks broken.
+  const [maxTokens, setMaxTokens] = useState(256);
   const [auth, setAuth] = useState<EntrypointAuth>({});
   const [result, setResult] = useState<ChatResult | null>(null);
 
   const run = useMutation({
-    mutationFn: () => deployApi.chat(namespace, release, { api: chatApi, prompt, ...auth }),
+    mutationFn: () =>
+      deployApi.chat(namespace, release, { api: format, prompt, maxTokens, ...auth }),
     onSuccess: setResult,
   });
 
@@ -219,25 +225,35 @@ function HealthCheck({
         ) : (
           <>
             <div className="flex flex-wrap gap-1">
-              {APIS.map((a) => (
+              {API_FORMATS.map((a) => (
                 <button
                   key={a.id}
-                  onClick={() => setChatApi(a.id)}
-                  title={a.path}
+                  onClick={() => setFormat(a.id)}
                   className={
-                    chatApi === a.id
-                      ? "rounded-md border border-foreground px-3 py-1 text-sm font-medium"
-                      : "rounded-md border px-3 py-1 text-sm text-muted-foreground hover:text-foreground"
+                    format === a.id
+                      ? "rounded-md border border-foreground px-3 py-1 text-left"
+                      : "rounded-md border px-3 py-1 text-left text-muted-foreground hover:text-foreground"
                   }
                 >
-                  {a.label}
+                  <span className="block text-sm font-medium">{a.label}</span>
+                  <span className="block font-mono text-xs opacity-70">{a.path}</span>
                 </button>
               ))}
             </div>
 
-            <Field label="Prompt">
-              <Input value={prompt} onChange={(e) => setPrompt(e.target.value)} />
-            </Field>
+            <div className="grid gap-3 sm:grid-cols-[1fr_8rem]">
+              <Field label="Prompt">
+                <Input value={prompt} onChange={(e) => setPrompt(e.target.value)} />
+              </Field>
+              <Field label="Max tokens">
+                <Input
+                  type="number"
+                  min={1}
+                  value={maxTokens}
+                  onChange={(e) => setMaxTokens(Number(e.target.value) || 1)}
+                />
+              </Field>
+            </div>
 
             <AuthFields value={auth} onChange={setAuth} />
 
@@ -254,6 +270,15 @@ function HealthCheck({
   );
 }
 
+// A reasoning model that spent the budget thinking generated tokens, so the
+// check passes -- but it is not an answer, and saying so is the difference
+// between "raise the budget" and "the model is broken".
+function outcomeText(result: ChatResult): string {
+  if (!result.ok) return "No usable answer";
+  if (!result.reply) return "Reasoning only, no answer";
+  return "The model answered";
+}
+
 function ChatOutcome({ result }: { result: ChatResult }) {
   return (
     <div className="space-y-2 rounded-lg border p-3">
@@ -263,9 +288,10 @@ function ChatOutcome({ result }: { result: ChatResult }) {
         ) : (
           <CircleX className="size-4 shrink-0 text-destructive" />
         )}
-        <span className="font-medium">{result.ok ? "The model answered" : "No usable answer"}</span>
+        <span className="font-medium">{outcomeText(result)}</span>
         {result.status ? <Badge variant="muted">HTTP {result.status}</Badge> : null}
         <Badge variant="outline">{result.latencyMs} ms</Badge>
+        {result.finishReason && <Badge variant="muted">stopped: {result.finishReason}</Badge>}
         {result.model && <Badge variant="muted">{result.model}</Badge>}
         <SentHeaders names={result.sentHeaders} />
       </div>
@@ -276,6 +302,16 @@ function ChatOutcome({ result }: { result: ChatResult }) {
         <pre className="overflow-x-auto rounded-md bg-muted p-3 text-xs whitespace-pre-wrap">
           {result.reply}
         </pre>
+      )}
+      {result.reasoning && (
+        <details className="rounded-md border">
+          <summary className="cursor-pointer px-3 py-2 text-xs text-muted-foreground">
+            Reasoning ({result.reasoning.length} chars)
+          </summary>
+          <pre className="overflow-x-auto border-t p-3 text-xs whitespace-pre-wrap text-muted-foreground">
+            {result.reasoning}
+          </pre>
+        </details>
       )}
       {result.error && <p className="text-sm text-destructive">{result.error}</p>}
       {result.body && (

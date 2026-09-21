@@ -41,17 +41,67 @@ func TestChatBodyPerAPI(t *testing.T) {
 	}
 }
 
-func TestReplyTextPerAPI(t *testing.T) {
+func TestParseReplyPerAPI(t *testing.T) {
 	for _, tc := range []struct{ api, raw, want string }{
 		{"chat", `{"choices":[{"message":{"content":" ok "}}]}`, "ok"},
 		{"completions", `{"choices":[{"text":"ok"}]}`, "ok"},
-		{"messages", `{"content":[{"text":"ok"}]}`, "ok"},
+		{"messages", `{"content":[{"type":"text","text":"ok"}]}`, "ok"},
+		// Both chat APIs may send the text as blocks rather than a string.
+		{"chat", `{"choices":[{"message":{"content":[{"type":"text","text":"ok"}]}}]}`, "ok"},
 		{"chat", `{"choices":[]}`, ""},
 		{"chat", `not json`, ""},
 	} {
-		if got := replyText(tc.api, []byte(tc.raw)); got != tc.want {
-			t.Errorf("%s %s: got %q, want %q", tc.api, tc.raw, got, tc.want)
+		if got := parseReply(tc.api, []byte(tc.raw)).text; got != tc.want {
+			t.Errorf("%s %s: text %q, want %q", tc.api, tc.raw, got, tc.want)
 		}
+	}
+}
+
+// A reasoning model answers in a second channel, and with a small token budget
+// that channel is all there is. Reading only the answer field reports a model
+// that generated hundreds of tokens as one that generated none.
+func TestParseReplyKeepsTheThinkingChannelSeparate(t *testing.T) {
+	for _, tc := range []struct{ name, api, raw, text, reasoning string }{
+		{
+			name: "sglang reasoning_content",
+			api:  "chat",
+			raw:  `{"choices":[{"message":{"content":"","reasoning_content":"the user wants"},"finish_reason":"length"}]}`,
+			text: "", reasoning: "the user wants",
+		},
+		{
+			name: "vllm reasoning",
+			api:  "chat",
+			raw:  `{"choices":[{"message":{"content":null,"reasoning":"hmm"}}]}`,
+			text: "", reasoning: "hmm",
+		},
+		{
+			name: "thinking blocks precede the answer",
+			api:  "messages",
+			raw:  `{"content":[{"type":"thinking","thinking":"hmm"},{"type":"text","text":"ok"}],"stop_reason":"end_turn"}`,
+			text: "ok", reasoning: "hmm",
+		},
+		{
+			name: "budget spent thinking",
+			api:  "messages",
+			raw:  `{"content":[{"type":"thinking","thinking":"hmm"}],"stop_reason":"max_tokens"}`,
+			text: "", reasoning: "hmm",
+		},
+	} {
+		got := parseReply(tc.api, []byte(tc.raw))
+		if got.text != tc.text || got.reasoning != tc.reasoning {
+			t.Errorf("%s: got text %q reasoning %q, want %q / %q", tc.name, got.text, got.reasoning, tc.text, tc.reasoning)
+		}
+	}
+}
+
+// Why generation stopped is the difference between a broken model and one that
+// ran out of budget, so it has to reach the page.
+func TestParseReplyCarriesTheStopReason(t *testing.T) {
+	if got := parseReply("chat", []byte(`{"choices":[{"message":{"content":"ok"},"finish_reason":"length"}]}`)).finish; got != "length" {
+		t.Errorf("chat finish = %q", got)
+	}
+	if got := parseReply("messages", []byte(`{"content":[{"text":"ok"}],"stop_reason":"max_tokens"}`)).finish; got != "max_tokens" {
+		t.Errorf("messages finish = %q", got)
 	}
 }
 

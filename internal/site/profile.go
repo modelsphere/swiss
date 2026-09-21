@@ -100,8 +100,9 @@ type RouteAuth struct {
 	Header string `yaml:"header,omitempty" json:"header,omitempty"`
 	Prefix string `yaml:"prefix,omitempty" json:"prefix,omitempty"`
 	// SecretRef is "namespace/name" of the Secret holding the key, SecretKey
-	// the key within it. The namespace must be one swissd was granted, or the
-	// read fails the way any other unlisted namespace does.
+	// the key within it. A bare name is read from the entrypoint's own
+	// namespace. The namespace must be one swissd was granted, or the read
+	// fails the way any other unlisted namespace does.
 	SecretRef string `yaml:"secretRef,omitempty" json:"secretRef,omitempty"`
 	SecretKey string `yaml:"secretKey,omitempty" json:"secretKey,omitempty"`
 	// Headers are sent on every call to the entrypoint. Not a place for
@@ -115,6 +116,16 @@ func (a RouteAuth) HeaderName() string {
 		return a.Header
 	}
 	return "Authorization"
+}
+
+// SecretReference is SecretRef as "namespace/name", qualifying a bare name with
+// ns. A profile names the entrypoint's Secret beside the entrypoint itself, and
+// an operator writing one name there is not describing a different namespace.
+func (a RouteAuth) SecretReference(ns string) string {
+	if a.SecretRef == "" || ns == "" || strings.Contains(a.SecretRef, "/") {
+		return a.SecretRef
+	}
+	return ns + "/" + a.SecretRef
 }
 
 // KeyPrefix is what precedes the key. An explicitly empty prefix on a custom

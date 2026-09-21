@@ -41,3 +41,16 @@ func TestUnknownPlaceholderIsAnError(t *testing.T) {
 		t.Fatal("expected an error")
 	}
 }
+
+func TestSecretReferenceQualifiesABareName(t *testing.T) {
+	a := RouteAuth{SecretRef: "llm-openresty"}
+	if got := a.SecretReference("llm-route"); got != "llm-route/llm-openresty" {
+		t.Errorf("bare name: %q", got)
+	}
+	if got := (RouteAuth{SecretRef: "other/key"}).SecretReference("llm-route"); got != "other/key" {
+		t.Errorf("an explicit namespace must win: %q", got)
+	}
+	if got := (RouteAuth{}).SecretReference("llm-route"); got != "" {
+		t.Errorf("no ref stays no ref: %q", got)
+	}
+}

@@ -10,7 +10,7 @@ import (
 
 func headersFor(t *testing.T, s *Server, cfg site.RouteAuth, req entrypointAuth) http.Header {
 	t.Helper()
-	h, err := s.entrypointHeaders(context.Background(), cfg, req)
+	h, err := s.entrypointHeaders(context.Background(), cfg, "swiss", req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestRequestHeadersOverrideProfileHeaders(t *testing.T) {
 func TestMissingSecretIsAnError(t *testing.T) {
 	s := New(testConfig("prod-b300"), liveProbe(), discardLogger(), "test")
 	if _, err := s.entrypointHeaders(context.Background(),
-		site.RouteAuth{SecretRef: "swiss/absent"}, entrypointAuth{}); err == nil {
+		site.RouteAuth{SecretRef: "swiss/absent"}, "swiss", entrypointAuth{}); err == nil {
 		t.Error("a missing secret must fail the check, not send no key")
 	}
 
@@ -92,7 +92,7 @@ func TestMissingSecretIsAnError(t *testing.T) {
 	probe.Secrets = map[string]map[string]string{"swiss/e": {"other": "x"}}
 	s2 := New(testConfig("prod-b300"), probe, discardLogger(), "test")
 	if _, err := s2.entrypointHeaders(context.Background(),
-		site.RouteAuth{SecretRef: "swiss/e"}, entrypointAuth{}); err == nil {
+		site.RouteAuth{SecretRef: "swiss/e"}, "swiss", entrypointAuth{}); err == nil {
 		t.Error("a secret without the named key must fail")
 	}
 }
@@ -122,5 +122,23 @@ func TestSentHeaderNamesCarryNoValues(t *testing.T) {
 		if n == "Bearer sk-secret" || n == "sk-secret" {
 			t.Fatal("a header value reached the result")
 		}
+	}
+}
+
+// A profile that names the Secret without a namespace means the one the
+// entrypoint runs in. Refusing it fails every check on a profile that is not
+// wrong, only terse.
+func TestBareSecretRefReadsTheEntrypointNamespace(t *testing.T) {
+	probe := liveProbe()
+	probe.Secrets = map[string]map[string]string{"llm-route/llm-openresty": {"apiKey": "sk-live"}}
+	s := New(testConfig("prod-b300"), probe, discardLogger(), "test")
+
+	h, err := s.entrypointHeaders(context.Background(),
+		site.RouteAuth{SecretRef: "llm-openresty"}, "llm-route", entrypointAuth{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := h.Get("Authorization"); got != "Bearer sk-live" {
+		t.Fatalf("Authorization = %q", got)
 	}
 }
