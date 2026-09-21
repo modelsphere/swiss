@@ -16,6 +16,13 @@ metadata:
     {{- include "swiss.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  {{- if .Values.updateStrategy }}
+  strategy:
+    {{- toYaml .Values.updateStrategy | nindent 4 }}
+  {{- else if and .Values.config.allowDeploy (or .Values.persistence.enabled .Values.persistence.existingClaim) }}
+  strategy:
+    type: Recreate
+  {{- end }}
   selector:
     matchLabels:
       {{- include "swiss.selectorLabels" . | nindent 6 }}

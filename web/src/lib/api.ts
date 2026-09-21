@@ -141,6 +141,43 @@ export interface RunFilter {
 
 // Field names are Go's here: cluster.Node predates the json tags the rest of
 // the API carries, and renaming them is a server change, not a client one.
+export interface RouteAuth {
+  header?: string;
+  prefix?: string;
+  // Names, never the credential: the key lives in the Secret these point at.
+  secretRef?: string;
+  secretKey?: string;
+  headers?: Record<string, string>;
+}
+
+export interface SiteProfile {
+  name: string;
+  namespace?: string;
+  chartRepo?: string;
+  chartPath?: string;
+  registry?: { mirror?: string };
+  model: { pathTemplate: string; overrides?: Record<string, string> };
+  cache?: { enabled?: boolean; hostPath?: string };
+  scaler?: { serverAddress?: string; serverHeaders?: Record<string, string> };
+  route?: {
+    nginxConfigMap?: string;
+    nginxService?: string;
+    nginxSelector?: string;
+    monitorConfigMap?: string;
+    nginxPort?: number;
+    auth?: RouteAuth;
+  };
+  nodes?: { gpusPerNode?: number };
+  createNamespace?: boolean;
+  extra?: Record<string, unknown>;
+}
+
+export interface ProfileResponse {
+  source: string;
+  cluster: string;
+  profile: SiteProfile;
+}
+
 export interface Node {
   Name: string;
   GPUProduct: string;
@@ -203,6 +240,7 @@ export const api = {
       `/api/catalog/${encodeURIComponent(name)}` + (version ? `?version=${encodeURIComponent(version)}` : ""),
     ),
   nodes: () => get<NodesResponse>("/api/nodes"),
+  profile: () => get<ProfileResponse>("/api/profile"),
   runs: (f: RunFilter = {}) => {
     const q = new URLSearchParams();
     for (const [k, v] of Object.entries(f)) if (v) q.set(k, String(v));

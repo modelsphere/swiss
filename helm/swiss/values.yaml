@@ -236,6 +236,8 @@ persistence:
   storageClass: ""
   existingClaim: ""
 
+updateStrategy: {}
+
 # /healthz is liveness: the process is up. /readyz gates on reaching the cluster
 # and nothing else -- the catalog is fetched lazily, so an unreachable one must
 # not take this pod out of the Service.

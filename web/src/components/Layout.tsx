@@ -22,6 +22,7 @@ export function Layout() {
             <Tab to="/catalog">Catalog</Tab>
             <Tab to="/nodes">Nodes</Tab>
             <Tab to="/runs">Operations</Tab>
+            <Tab to="/profile">Profile</Tab>
           </nav>
 
           <div className="ml-auto flex items-center gap-2 text-sm">

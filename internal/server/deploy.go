@@ -135,6 +135,16 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 			return nil, err
 		}
 	}
+	// The scaler owns the replica count, so a fixed count cannot ride along
+	// beside it: helm renders both and the scaler wins at a time nobody chose.
+	// Enforced here rather than in the form, so an upgrade carrying an older
+	// plan forward cannot resurrect one either.
+	if v, ok := values.Get(overrides, "scaler.enabled"); ok {
+		if on, _ := v.(bool); on {
+			delete(overrides, "replicaCount")
+		}
+	}
+
 	var edits values.Tree
 	if req.EditsYAML != "" {
 		if err := yaml.Unmarshal([]byte(req.EditsYAML), &edits); err != nil {

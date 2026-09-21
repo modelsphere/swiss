@@ -19,6 +19,7 @@ export interface Form {
   namespace: string;
   serviceId: string;
   localPath: string;
+  scaler: boolean;
   replicaCount: string;
   minReplicas: string;
   maxReplicas: string;
@@ -37,6 +38,7 @@ export const EMPTY: Form = {
   namespace: "",
   serviceId: "",
   localPath: "",
+  scaler: false,
   replicaCount: "",
   minReplicas: "",
   maxReplicas: "",
@@ -111,18 +113,46 @@ export function DeploySettings({
           <Field label="Route" hint="openresty path; empty uses the service ID">
             <Input value={form.route} onChange={set("route")} placeholder={form.serviceId} />
           </Field>
-          <Field label="Replicas" hint="fixed count; leave empty when the scaler owns it">
-            <Input value={form.replicaCount} onChange={set("replicaCount")} inputMode="numeric" />
-          </Field>
           <Field label="Model path" hint="overrides the site's path template">
             <Input value={form.localPath} onChange={set("localPath")} />
           </Field>
-          <Field label="Scaler min" hint="filling either turns the scaler on">
-            <Input value={form.minReplicas} onChange={set("minReplicas")} inputMode="numeric" />
-          </Field>
-          <Field label="Scaler max">
-            <Input value={form.maxReplicas} onChange={set("maxReplicas")} inputMode="numeric" />
-          </Field>
+        </CardContent>
+
+        <CardContent className="space-y-4 border-t pt-4">
+          <Toggle
+            label="Autoscale"
+            hint="an LLMScaler owns the replica count; off means a fixed number"
+            checked={form.scaler}
+            onChange={toggle("scaler")}
+          />
+          <div className="grid gap-4 sm:grid-cols-2">
+            {form.scaler ? (
+              <>
+                <Field label="Min replicas" hint="the floor the scaler will not go below">
+                  <Input
+                    value={form.minReplicas}
+                    onChange={set("minReplicas")}
+                    inputMode="numeric"
+                  />
+                </Field>
+                <Field label="Max replicas" hint={bounds(form)}>
+                  <Input
+                    value={form.maxReplicas}
+                    onChange={set("maxReplicas")}
+                    inputMode="numeric"
+                  />
+                </Field>
+              </>
+            ) : (
+              <Field label="Replicas" hint="fixed count; empty leaves the chart's default">
+                <Input
+                  value={form.replicaCount}
+                  onChange={set("replicaCount")}
+                  inputMode="numeric"
+                />
+              </Field>
+            )}
+          </div>
         </CardContent>
       </Card>
 
@@ -216,15 +246,17 @@ extraArgs:
 
 const num = (v: string) => (v.trim() === "" ? undefined : Number(v));
 
-// Two features are switched on by being filled in rather than by their toggle:
-// naming a route turns routing on, and typing a scaling bound turns the scaler
-// on. Derived in one place so the toggle and the request cannot disagree about
-// what this deploy is asking for.
+// Naming a route turns routing on, so the toggle and the request cannot
+// disagree about what this deploy is asking for.
 export function effective(f: Form) {
-  return {
-    modelRoute: f.modelRoute || f.route.trim() !== "",
-    scaler: num(f.minReplicas) !== undefined || num(f.maxReplicas) !== undefined,
-  };
+  return { modelRoute: f.modelRoute || f.route.trim() !== "" };
+}
+
+function bounds(f: Form): string {
+  const min = num(f.minReplicas);
+  const max = num(f.maxReplicas);
+  if (min !== undefined && max !== undefined && max < min) return `below the min of ${min}`;
+  return "the ceiling; empty leaves it to the chart";
 }
 
 export function planRequest(
@@ -234,7 +266,18 @@ export function planRequest(
   const overrides: Record<string, unknown> = {};
   const on = effective(f);
 
-  if (num(f.replicaCount) !== undefined) overrides.replicaCount = num(f.replicaCount);
+  // replicaCount and the scaler bounds are the same decision, so only the one
+  // that applies is sent: a fixed count under a live scaler is two answers to
+  // one question, and the scaler wins at a time nobody chose.
+  if (f.scaler) {
+    const scaler: Record<string, unknown> = { enabled: true };
+    if (num(f.minReplicas) !== undefined) scaler.minReplicas = num(f.minReplicas);
+    if (num(f.maxReplicas) !== undefined) scaler.maxReplicas = num(f.maxReplicas);
+    overrides.scaler = scaler;
+  } else {
+    overrides.scaler = { enabled: false };
+    if (num(f.replicaCount) !== undefined) overrides.replicaCount = num(f.replicaCount);
+  }
 
   // Every flag is sent explicitly. Leaving one out would hand the decision to a
   // chart default, which is the thing this is here to avoid.
@@ -246,11 +289,6 @@ export function planRequest(
   overrides.modelRoute = route
     ? { enabled: on.modelRoute, nginx: { route } }
     : { enabled: on.modelRoute };
-
-  const scaler: Record<string, unknown> = { enabled: on.scaler };
-  if (num(f.minReplicas) !== undefined) scaler.minReplicas = num(f.minReplicas);
-  if (num(f.maxReplicas) !== undefined) scaler.maxReplicas = num(f.maxReplicas);
-  overrides.scaler = scaler;
 
   if (f.priorityClassName.trim()) overrides.priorityClassName = f.priorityClassName.trim();
   if (f.schedulerName.trim()) overrides.schedulerName = f.schedulerName.trim();
@@ -298,6 +336,7 @@ export function formFromPlan(plan: Plan): Form {
     namespace: plan.release.namespace,
     serviceId: str("serviceId"),
     localPath: str("model.localPath"),
+    scaler: bool("scaler.enabled"),
     replicaCount: str("replicaCount"),
     minReplicas: str("scaler.minReplicas"),
     maxReplicas: str("scaler.maxReplicas"),

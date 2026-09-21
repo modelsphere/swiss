@@ -15,40 +15,40 @@ import (
 )
 
 type Profile struct {
-	Name string `yaml:"name"`
+	Name string `yaml:"name" json:"name"`
 
 	// Namespace a release lands in unless the deploy overrides it.
-	Namespace string `yaml:"namespace,omitempty"`
+	Namespace string `yaml:"namespace,omitempty" json:"namespace,omitempty"`
 
 	// ChartRepo is where charts are pulled from -- the registry the catalog
 	// deliberately does not name. Empty means a local chart path, which is fine
 	// for the CLI and not for a server.
-	ChartRepo string `yaml:"chartRepo,omitempty"`
-	ChartPath string `yaml:"chartPath,omitempty"`
+	ChartRepo string `yaml:"chartRepo,omitempty" json:"chartRepo,omitempty"`
+	ChartPath string `yaml:"chartPath,omitempty" json:"chartPath,omitempty"`
 
 	// Registry rewrites engine image repositories to a mirror. The catalog pins
 	// which build (image.tag); this says where it is pulled from.
-	Registry Registry `yaml:"registry,omitempty"`
+	Registry Registry `yaml:"registry,omitempty" json:"registry,omitempty"`
 
-	Model  ModelPaths `yaml:"model"`
-	Cache  Cache      `yaml:"cache,omitempty"`
-	Scaler Scaler     `yaml:"scaler,omitempty"`
-	Route  Route      `yaml:"route,omitempty"`
-	Nodes  Nodes      `yaml:"nodes,omitempty"`
+	Model  ModelPaths `yaml:"model" json:"model"`
+	Cache  Cache      `yaml:"cache,omitempty" json:"cache,omitempty"`
+	Scaler Scaler     `yaml:"scaler,omitempty" json:"scaler,omitempty"`
+	Route  Route      `yaml:"route,omitempty" json:"route,omitempty"`
+	Nodes  Nodes      `yaml:"nodes,omitempty" json:"nodes,omitempty"`
 
 	// CreateNamespace passes --create-namespace. Off by default: under helm v4
 	// that applies the Namespace object server-side, so it needs patch on
 	// namespaces even when the namespace already exists -- a cluster-scoped
 	// privilege swissd has no other reason to hold, for namespaces an admin
 	// already created for it.
-	CreateNamespace bool        `yaml:"createNamespace,omitempty"`
-	Extra           values.Tree `yaml:"extra,omitempty"`
+	CreateNamespace bool        `yaml:"createNamespace,omitempty" json:"createNamespace,omitempty"`
+	Extra           values.Tree `yaml:"extra,omitempty" json:"extra,omitempty"`
 }
 
 type Registry struct {
 	// Mirror replaces the registry host/org of an image repository. "" disables
 	// the rewrite and the catalog's repository is used as-is.
-	Mirror string `yaml:"mirror,omitempty"`
+	Mirror string `yaml:"mirror,omitempty" json:"mirror,omitempty"`
 }
 
 type ModelPaths struct {
@@ -56,39 +56,39 @@ type ModelPaths struct {
 	// {{hf}} is the full repo id, {{org}} and {{name}} its halves, {{model}} the
 	// catalog entry name. A template rather than a per-model table: a site that
 	// has to add a row here for every model in a public catalog will not keep up.
-	PathTemplate string `yaml:"pathTemplate"`
+	PathTemplate string `yaml:"pathTemplate" json:"pathTemplate"`
 	// Overrides, keyed by catalog model name, for weights that do not sit where
 	// the template says. Real layouts are not uniform; a template with no escape
 	// hatch just means the first irregular model cannot be deployed at all.
-	Overrides map[string]string `yaml:"overrides,omitempty"`
+	Overrides map[string]string `yaml:"overrides,omitempty" json:"overrides,omitempty"`
 }
 
 type Cache struct {
-	Enabled  bool   `yaml:"enabled,omitempty"`
-	HostPath string `yaml:"hostPath,omitempty"`
+	Enabled  bool   `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	HostPath string `yaml:"hostPath,omitempty" json:"hostPath,omitempty"`
 }
 
 type Scaler struct {
 	// ServerAddress is the decision server or the Prometheus query API,
 	// depending on which provider a deploy selects.
-	ServerAddress string            `yaml:"serverAddress,omitempty"`
-	ServerHeaders map[string]string `yaml:"serverHeaders,omitempty"`
+	ServerAddress string            `yaml:"serverAddress,omitempty" json:"serverAddress,omitempty"`
+	ServerHeaders map[string]string `yaml:"serverHeaders,omitempty" json:"serverHeaders,omitempty"`
 }
 
 type Route struct {
 	// NginxConfigMap is the shared openresty ConfigMap ("ns/name") every model
 	// on one entrypoint writes a key into. The route-collision preflight is
 	// scoped to this value.
-	NginxConfigMap   string `yaml:"nginxConfigMap,omitempty"`
-	NginxService     string `yaml:"nginxService,omitempty"`
-	NginxSelector    string `yaml:"nginxSelector,omitempty"`
-	MonitorConfigMap string `yaml:"monitorConfigMap,omitempty"`
+	NginxConfigMap   string `yaml:"nginxConfigMap,omitempty" json:"nginxConfigMap,omitempty"`
+	NginxService     string `yaml:"nginxService,omitempty" json:"nginxService,omitempty"`
+	NginxSelector    string `yaml:"nginxSelector,omitempty" json:"nginxSelector,omitempty"`
+	MonitorConfigMap string `yaml:"monitorConfigMap,omitempty" json:"monitorConfigMap,omitempty"`
 	// NginxPort is the entrypoint's port; the readiness check calls
 	// http://<nginxService>:<port>/<route>/v1/models. Defaults to 8080.
-	NginxPort int `yaml:"nginxPort,omitempty"`
+	NginxPort int `yaml:"nginxPort,omitempty" json:"nginxPort,omitempty"`
 	// Auth is how swissd authenticates when it calls the entrypoint. Only the
 	// serving and health checks do; nothing else here talks to a model.
-	Auth RouteAuth `yaml:"auth,omitempty"`
+	Auth RouteAuth `yaml:"auth,omitempty" json:"auth,omitempty"`
 }
 
 // RouteAuth names a credential rather than holding one. The site profile is a
@@ -97,16 +97,16 @@ type Route struct {
 type RouteAuth struct {
 	// Header the key is sent in and the prefix before it. The defaults are the
 	// OpenAI convention: `Authorization: Bearer <key>`.
-	Header string `yaml:"header,omitempty"`
-	Prefix string `yaml:"prefix,omitempty"`
+	Header string `yaml:"header,omitempty" json:"header,omitempty"`
+	Prefix string `yaml:"prefix,omitempty" json:"prefix,omitempty"`
 	// SecretRef is "namespace/name" of the Secret holding the key, SecretKey
 	// the key within it. The namespace must be one swissd was granted, or the
 	// read fails the way any other unlisted namespace does.
-	SecretRef string `yaml:"secretRef,omitempty"`
-	SecretKey string `yaml:"secretKey,omitempty"`
+	SecretRef string `yaml:"secretRef,omitempty" json:"secretRef,omitempty"`
+	SecretKey string `yaml:"secretKey,omitempty" json:"secretKey,omitempty"`
 	// Headers are sent on every call to the entrypoint. Not a place for
 	// credentials, for the same reason as above.
-	Headers map[string]string `yaml:"headers,omitempty"`
+	Headers map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
 }
 
 // HeaderName is where the key goes, defaulted.
@@ -133,7 +133,7 @@ func (a RouteAuth) KeyPrefix() string {
 type Nodes struct {
 	// GPUsPerNode is what a full GPU node has, used to derive
 	// cache.maxSlotsPerNode. 0 leaves that value to the chart's default.
-	GPUsPerNode int `yaml:"gpusPerNode,omitempty"`
+	GPUsPerNode int `yaml:"gpusPerNode,omitempty" json:"gpusPerNode,omitempty"`
 }
 
 // Load reads a profile file.

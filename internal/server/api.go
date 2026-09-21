@@ -136,6 +136,23 @@ func (s *Server) handleReleases(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"cluster": s.cfg.Cluster.Name, "releases": rel})
 }
 
+// handleProfile serves the site profile as parsed, not as stored: what swissd
+// is actually composing against, after defaults.
+func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := contextWithTimeout(r, 15*time.Second)
+	defer cancel()
+	p, err := s.Profile(ctx)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"source":  s.cfg.Cluster.Profile.Ref(),
+		"cluster": s.cfg.Cluster.Name,
+		"profile": p,
+	})
+}
+
 type nodeView struct {
 	cluster.Node
 	// Used is GPUs held by pods on this node, and Free what is left. Both are

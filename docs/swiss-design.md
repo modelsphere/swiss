@@ -86,6 +86,7 @@ swiss install --plan plan.json     # release must NOT exist
 | `POST /api/releases/{ns}/{release}/chat` | health check: one real inference request |
 | `GET /api/runs`, `GET /api/runs/{id}` | the operation log; output is per row, not in the list |
 | `GET /api/nodes` | the GPU inventory: type, allocatable, in use, and what holds it |
+| `GET /api/profile` | the site profile as parsed, after defaults |
 
 **`apply` and `install` are separate verbs, deliberately.** Helm's `upgrade
 --install` is forgiving, and that forgiveness is the hazard: a name or namespace
