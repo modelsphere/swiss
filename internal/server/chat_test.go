@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"testing"
@@ -123,6 +124,64 @@ func TestChatNeedsAnEntrypoint(t *testing.T) {
 	}
 	if msg, _ := out["error"].(string); !strings.Contains(msg, "nginxService") {
 		t.Errorf("the refusal should name what is missing: %q", msg)
+	}
+}
+
+// A check reports the request it made, so "swissd cannot reach it" can be told
+// from "the request was wrong" by running the same line from a debug pod. The
+// key is a shell variable in it: a result never carries the value of a header.
+func TestCheckReportsTheCurlItSent(t *testing.T) {
+	p, _ := livePlan(t, planRequest{
+		Model: "modelforge", Release: "r", ServiceID: "r",
+		Overrides: values.Tree{
+			"modelRoute": values.Tree{"enabled": true, "nginx": values.Tree{"route": "glm-53"}},
+		},
+	})
+	probe := liveProbe()
+	probe.Secrets = map[string]map[string]string{"swiss/entrypoint": {"apiKey": "sk-must-not-appear"}}
+	probe.Maps["swiss/site-profile"] = map[string]string{
+		"profile.yaml": profileYAML +
+			"route:\n  nginxService: infra/openresty\n  auth:\n    secretRef: swiss/entrypoint\n",
+	}
+	s := New(testConfig("prod-b300"), probe, discardLogger(), "test")
+
+	ep, err := s.entrypoint(context.Background(), p, entrypointAuth{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ep.url("/v1/models"); got != "http://openresty.infra.svc:8080/glm-53/v1/models" {
+		t.Fatalf("url = %q", got)
+	}
+
+	get := ep.curl(http.MethodGet, ep.url("/v1/models"), nil)
+	for _, want := range []string{
+		"curl -sS",
+		// Double quotes: single ones would send the variable name itself.
+		`-H "Authorization: Bearer $SWISS_API_KEY"`,
+		"'http://openresty.infra.svc:8080/glm-53/v1/models'",
+	} {
+		if !strings.Contains(get, want) {
+			t.Errorf("curl %q is missing %q", get, want)
+		}
+	}
+	if strings.Contains(get, "-X") {
+		t.Errorf("a GET needs no method: %q", get)
+	}
+
+	post := ep.curl(http.MethodPost, ep.url("/v1/chat/completions"), map[string]any{"model": "kimi"})
+	for _, want := range []string{
+		"-X POST",
+		"-H 'Content-Type: application/json'",
+		`-d '{"model":"kimi"}'`,
+	} {
+		if !strings.Contains(post, want) {
+			t.Errorf("curl %q is missing %q", post, want)
+		}
+	}
+	for _, line := range []string{get, post} {
+		if strings.Contains(line, "sk-must-not-appear") {
+			t.Fatalf("the key reached the rendered request: %s", line)
+		}
 	}
 }
 

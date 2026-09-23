@@ -118,11 +118,11 @@ func Compose(in Input) (*plan.Plan, error) {
 // goes first, so everything after it can override what it set -- and what a
 // reader needs to see is which values that happened to, which is plan.Shadowed.
 //
-// Three fields are projected on top rather than copied, because each has a
-// first-class spelling on the variant: model.name comes from servedName,
-// model.gpus from requires.gpus, and image.tag from the variant image. The
-// projection is applied after the merge and so wins over the same key in
-// values, which is what stops two spellings of one fact from drifting.
+// Some fields are projected on top rather than copied, because each has a
+// first-class spelling on the variant: model.name from servedName, model.gpus
+// from requires.gpus, and the image from the variant image. The projection is
+// applied after the merge and so wins over the same key in values, which is
+// what stops two spellings of one fact from drifting.
 func catalogLayer(e catalog.Entry, v catalog.Variant) (values.Tree, error) {
 	out := values.Tree{}
 	values.Merge(out, v.Values, values.LayerCatalog, nil)
@@ -134,6 +134,9 @@ func catalogLayer(e catalog.Entry, v catalog.Variant) (values.Tree, error) {
 		return nil, err
 	}
 	if v.Image != nil {
+		if err := values.Set(out, "image.repository", v.Image.Repository); err != nil {
+			return nil, err
+		}
 		if err := values.Set(out, "image.tag", v.Image.Tag); err != nil {
 			return nil, err
 		}
@@ -150,7 +153,9 @@ func catalogLayer(e catalog.Entry, v catalog.Variant) (values.Tree, error) {
 func siteLayer(p site.Profile, e catalog.Entry, v catalog.Variant) (values.Tree, error) {
 	out := values.Tree{}
 
-	if v.Image != nil {
+	// Only when there is a rewrite: restating the catalog's own repository as a
+	// site value would hide it behind a layer that decided nothing.
+	if v.Image != nil && p.Registry.Mirror != "" {
 		if err := values.Set(out, "image.repository", p.MirrorImage(v.Image.Repository)); err != nil {
 			return nil, err
 		}

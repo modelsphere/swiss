@@ -179,17 +179,3 @@ variants:
       extraArgs: [--tp-size=2, --mamba-radix-cache-strategy=extra_buffer, ...]
       startupProbe: { periodSeconds: 15, failureThreshold: 80 }
 ```
-
-Bundling them is not tidiness. A form that lets someone pick `--tp-size=8` and a
-2-GPU node independently will be used to do exactly that, and it fails forty
-minutes later as an OOM. The same applies to the image: engine flags are renamed
-between releases and argparse *exits* on an unknown one, so a tag bump without a
-flag change is a CrashLoopBackOff that never loads the model.
-
-Three fields are projected rather than copied, because the chart schema refuses a
-second spelling of each: `model.name` from `servedName`, `model.gpus` from
-`requires.gpus`, `image.tag` from the variant's image.
-
-The catalog is validated at load, every time — it is fetched from a repo this
-cluster does not control. `apiVersion: catalog.swiss/v1` is a version marker in a
-document, **not** a Kubernetes CRD; nothing is registered with an API server.

@@ -113,6 +113,9 @@ type probeResult struct {
 	// SentHeaders names the headers the call carried, values omitted. Enough to
 	// tell "the key was not sent" from "the key was wrong"; never the key.
 	SentHeaders []string `json:"sentHeaders,omitempty"`
+	// Curl is the request swissd sent, as a runnable line. The credential is a
+	// shell variable in it, never the key.
+	Curl string `json:"curl,omitempty"`
 }
 
 // handleProbe asks the entrypoint whether the model is actually servable.
@@ -134,16 +137,20 @@ func (s *Server) handleProbe(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	base, hdr, err := s.entrypoint(ctx, p, auth)
+	ep, err := s.entrypoint(ctx, p, auth)
 	if err != nil {
 		writeError(w, http.StatusPreconditionFailed, err.Error())
 		return
 	}
-	url := base + "/v1/models"
+	url := ep.url("/v1/models")
 
-	res := probeResult{URL: url, SentHeaders: sentHeaderNames(hdr)}
+	res := probeResult{
+		URL:         url,
+		SentHeaders: sentHeaderNames(ep.header),
+		Curl:        ep.curl(http.MethodGet, url, nil),
+	}
 	started := time.Now()
-	body, code, err := httpGet(ctx, url, hdr)
+	body, code, err := httpGet(ctx, url, ep.header)
 	res.LatencyMS = time.Since(started).Milliseconds()
 	res.Status = code
 	if err != nil {
@@ -186,6 +193,7 @@ type chatResult struct {
 	Error        string   `json:"error,omitempty"`
 	Body         string   `json:"body,omitempty"`
 	SentHeaders  []string `json:"sentHeaders,omitempty"`
+	Curl         string   `json:"curl,omitempty"`
 }
 
 // handleChat sends a real inference request through the entrypoint.
@@ -218,7 +226,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	base, hdr, err := s.entrypoint(ctx, p, req.entrypointAuth)
+	ep, err := s.entrypoint(ctx, p, req.entrypointAuth)
 	if err != nil {
 		writeError(w, http.StatusPreconditionFailed, err.Error())
 		return
@@ -235,9 +243,13 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res := chatResult{URL: base + path, API: req.API, Model: model, SentHeaders: sentHeaderNames(hdr)}
+	res := chatResult{
+		URL: ep.url(path), API: req.API, Model: model,
+		SentHeaders: sentHeaderNames(ep.header),
+	}
+	res.Curl = ep.curl(http.MethodPost, res.URL, body)
 	started := time.Now()
-	raw, code, err := httpPostJSON(ctx, res.URL, body, hdr)
+	raw, code, err := httpPostJSON(ctx, res.URL, body, ep.header)
 	res.LatencyMS = time.Since(started).Milliseconds()
 	res.Status = code
 	if err != nil {
@@ -256,24 +268,82 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
+// call is the request a check makes: where it goes, what it carries, and which
+// header holds the credential -- so the request can be shown without it.
+type call struct {
+	base   string
+	header http.Header
+	secret string // header name carrying the key, "" when none is sent
+	shown  string // what that header prints as instead of the key
+}
+
+func (c call) url(path string) string { return c.base + path }
+
+// curl is the request the server sent, as a line that can be run from a debug
+// pod. The key is a shell variable rather than the value: a result names the
+// headers it sent and never their values, and this is a result.
+func (c call) curl(method, url string, body any) string {
+	b := &strings.Builder{}
+	b.WriteString("curl -sS")
+	if method != http.MethodGet {
+		fmt.Fprintf(b, " -X %s", method)
+	}
+	hdr := c.header.Clone()
+	if hdr == nil {
+		hdr = http.Header{}
+	}
+	if body != nil {
+		hdr.Set("Content-Type", "application/json")
+	}
+	for _, name := range sentHeaderNames(hdr) {
+		if c.secret != "" && name == http.CanonicalHeaderKey(c.secret) {
+			// Double-quoted so the shell expands the variable. Inside single
+			// quotes it would send the variable name itself, which looks like
+			// it works and does not.
+			fmt.Fprintf(b, " -H %s", shellExpand(name+": "+c.shown))
+			continue
+		}
+		fmt.Fprintf(b, " -H %s", shellQuote(name+": "+hdr.Get(name)))
+	}
+	if body != nil {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			return ""
+		}
+		fmt.Fprintf(b, " -d %s", shellQuote(string(raw)))
+	}
+	fmt.Fprintf(b, " %s", shellQuote(url))
+	return b.String()
+}
+
+// apiKeyVar is the shell variable the credential is left as.
+const apiKeyVar = "$SWISS_API_KEY"
+
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// shellExpand quotes a value the shell must still expand a variable inside.
+func shellExpand(s string) string {
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`, "`", "\\`").Replace(s) + `"`
+}
+
 // entrypoint is the openresty base URL for a release's route and the headers to
 // call it with. Both checks go through the entrypoint rather than the pod: a
 // ready pod behind an unpublished route serves nobody.
-func (s *Server) entrypoint(ctx context.Context, p *plan.Plan, auth entrypointAuth) (string, http.Header, error) {
+func (s *Server) entrypoint(ctx context.Context, p *plan.Plan, auth entrypointAuth) (call, error) {
 	prof, err := s.Profile(ctx)
 	if err != nil {
-		return "", nil, err
+		return call{}, err
 	}
 	if prof.Route.NginxService == "" {
-		return "", nil, fmt.Errorf("site profile names no route.nginxService, so there is no entrypoint to ask")
+		return call{}, fmt.Errorf("site profile names no route.nginxService, so there is no entrypoint to ask")
 	}
 	svcNS, svcName, err := cluster.SplitRef(prof.Route.NginxService)
 	if err != nil {
-		return "", nil, err
+		return call{}, err
 	}
 	route := routeOf(p)
 	if route == "" {
-		return "", nil, fmt.Errorf("this release publishes no route")
+		return call{}, fmt.Errorf("this release publishes no route")
 	}
 	port := prof.Route.NginxPort
 	if port == 0 {
@@ -281,9 +351,15 @@ func (s *Server) entrypoint(ctx context.Context, p *plan.Plan, auth entrypointAu
 	}
 	hdr, err := s.entrypointHeaders(ctx, prof.Route.Auth, auth)
 	if err != nil {
-		return "", nil, err
+		return call{}, err
 	}
-	return fmt.Sprintf("http://%s.%s.svc:%d/%s", svcName, svcNS, port, route), hdr, nil
+	c := call{base: fmt.Sprintf("http://%s.%s.svc:%d/%s", svcName, svcNS, port, route), header: hdr}
+	// Whatever ended up under the auth header name is treated as the
+	// credential, including one the profile set statically.
+	if name := prof.Route.Auth.HeaderName(); hdr.Get(name) != "" {
+		c.secret, c.shown = name, prof.Route.Auth.KeyPrefix()+apiKeyVar
+	}
+	return c, nil
 }
 
 // entrypointHeaders resolves what the checks send: the site profile's static

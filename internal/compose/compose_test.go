@@ -76,6 +76,51 @@ func TestComposeRecordsProvenancePerLayer(t *testing.T) {
 	}
 }
 
+// A site that mirrors nothing writes no repository at all: the catalog's is
+// already there, and a site layer restating it would make the plan say the site
+// chose a registry it never named.
+func TestNoMirrorLeavesTheCatalogImageAlone(t *testing.T) {
+	in := testInput()
+	in.Profile.Registry.Mirror = ""
+	p, err := Compose(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := values.Get(p.Values(), "image.repository"); got != "lmsysorg/sglang" {
+		t.Errorf("image.repository = %#v, want the catalog's", got)
+	}
+	if p.LayerOf("image.repository") != values.LayerCatalog {
+		t.Errorf("provenance = %q, want the catalog", p.LayerOf("image.repository"))
+	}
+	if _, ok := values.Get(p.LayerValues()[values.LayerSite], "image.repository"); ok {
+		t.Error("the site document must not restate the repository it did not rewrite")
+	}
+}
+
+// The mirror is an override like any other: visible in the plan as the site
+// shadowing the catalog, rather than the catalog's value never being there.
+func TestMirrorShadowsTheCatalogRepository(t *testing.T) {
+	p, err := Compose(testInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.LayerOf("image.repository") != values.LayerSite {
+		t.Errorf("provenance = %q, want the site", p.LayerOf("image.repository"))
+	}
+	var found bool
+	for _, s := range p.Shadowed() {
+		if s.Path == "image.repository" {
+			found = true
+			if s.By != values.LayerSite || len(s.Under) != 1 || s.Under[0] != values.LayerCatalog {
+				t.Errorf("unexpected shadow: %+v", s)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("the rewrite must show as a shadowed value: %+v", p.Shadowed())
+	}
+}
+
 // The chart's own comment: 1 slot for an 8-GPU model, 4 for a 2-GPU one.
 func TestDerivedMaxSlotsFollowsTheChartsRule(t *testing.T) {
 	for gpus, want := range map[int]int{8: 1, 2: 4, 1: 8} {
@@ -350,11 +395,14 @@ func TestLayerValuesSplitByProvenance(t *testing.T) {
 	if _, ok := values.Get(layers[values.LayerCatalog], "extraArgs"); !ok {
 		t.Error("extraArgs belongs to the catalog document")
 	}
-	if _, ok := values.Get(layers[values.LayerSite], "image.repository"); !ok {
-		t.Error("image.repository belongs to the site document")
+	// The catalog's repository is carried as the catalog wrote it, and the
+	// site's mirror overrides it in merge order rather than replacing it out of
+	// sight -- which is what makes the rewrite readable as a shadowed value.
+	if got, _ := values.Get(layers[values.LayerCatalog], "image.repository"); got != "lmsysorg/sglang" {
+		t.Errorf("the catalog document must carry its own repository, got %#v", got)
 	}
-	if _, ok := values.Get(layers[values.LayerCatalog], "image.repository"); ok {
-		t.Error("a site value leaked into the catalog document")
+	if got, _ := values.Get(layers[values.LayerSite], "image.repository"); got != "harbor.4pd.io/hardcore-tech/sglang" {
+		t.Errorf("the site document must carry the mirror, got %#v", got)
 	}
 	files := p.ValuesFiles()
 	if len(files) < 2 || files[0] != "catalog.yaml" {

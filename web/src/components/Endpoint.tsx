@@ -163,7 +163,7 @@ function ServingCheck({ namespace, release }: { namespace: string; release: stri
             <span className="text-xs text-muted-foreground">{probe.latencyMs} ms</span>
             <SentHeaders names={probe.sentHeaders} />
           </div>
-          <div className="font-mono text-xs break-all text-muted-foreground">{probe.url}</div>
+          <Sent url={probe.url} curl={probe.curl} />
           {probe.models?.length ? (
             <div className="flex flex-wrap gap-1">
               {probe.models.map((m) => (
@@ -300,7 +300,7 @@ function ChatOutcome({ result }: { result: ChatResult }) {
         <SentHeaders names={result.sentHeaders} />
       </div>
 
-      <div className="font-mono text-xs break-all text-muted-foreground">{result.url}</div>
+      <Sent url={result.url} curl={result.curl} />
 
       {result.reply && (
         <pre className="overflow-x-auto rounded-md bg-muted p-3 text-xs whitespace-pre-wrap">
@@ -324,6 +324,33 @@ function ChatOutcome({ result }: { result: ChatResult }) {
         </pre>
       )}
     </div>
+  );
+}
+
+// What swissd sent, rendered by swissd rather than rebuilt here: a check that
+// fails is usually asking whether the entrypoint is unreachable or the request
+// was wrong, and only the sender can answer that. The key is a shell variable
+// in it, so this is runnable and carries no credential.
+function Sent({ url, curl }: { url: string; curl?: string }) {
+  if (!curl) return <div className="font-mono text-xs break-all text-muted-foreground">{url}</div>;
+  return (
+    <details className="rounded-md border">
+      <summary className="flex cursor-pointer flex-wrap items-center gap-2 px-3 py-2">
+        <span className="text-xs text-muted-foreground">Request sent</span>
+        <span className="min-w-0 font-mono text-xs break-all text-muted-foreground">{url}</span>
+      </summary>
+      <div className="space-y-1.5 border-t p-3">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs text-muted-foreground">
+            Runnable from a debug pod once {KEY} is exported.
+          </span>
+          <CopyButton value={curl} />
+        </div>
+        <Code lang="sh" className="whitespace-pre-wrap">
+          {curl}
+        </Code>
+      </div>
+    </details>
   );
 }
 

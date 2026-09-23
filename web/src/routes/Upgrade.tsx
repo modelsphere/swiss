@@ -10,6 +10,7 @@ import {
   DeploySettings,
   EMPTY,
   formFromPlan,
+  imageOf,
   planRequest,
   type Form,
 } from "@/components/DeploySettings";
@@ -208,7 +209,12 @@ export function Upgrade() {
         cluster={cluster.data}
         supportedGPUs={variants.find((v) => v.id === (variant || cur.source.variant))?.requires.gpuProduct}
         clusterGPUs={nodes.data?.nodes.map((n) => n.GPUProduct)}
-        localPathPlaceholder={entry.data?.localPath ?? entry.data?.pathTemplate}
+        localPathDefault={entry.data?.localPath}
+        localPathPlaceholder={entry.data?.pathTemplate}
+        image={imageOf(
+          entry.data?.entry.variants.find((v) => v.id === (variant || cur.source.variant)),
+          entry.data?.imageRepository,
+        )}
         lockIdentity
         readOnly={rollbackTo > 0}
       />

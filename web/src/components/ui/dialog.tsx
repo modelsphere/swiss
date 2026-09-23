@@ -30,13 +30,18 @@ export function Dialog({
   children: React.ReactNode;
 }) {
   const panel = useRef<HTMLDivElement>(null);
+  // Read through a ref, so this runs on open and close and not on every render
+  // of the caller: callers pass a fresh arrow function each time, and re-running
+  // it moved focus back to the panel after every keystroke in the footer.
+  const close = useRef(onClose);
+  close.current = onClose;
 
   // Escape closes, and focus moves into the panel so the tab order starts here
   // rather than back at the page behind it.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") close.current();
     };
     document.addEventListener("keydown", onKey);
     const previous = document.activeElement as HTMLElement | null;
@@ -49,7 +54,7 @@ export function Dialog({
       document.body.style.overflow = overflow;
       previous?.focus?.();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 

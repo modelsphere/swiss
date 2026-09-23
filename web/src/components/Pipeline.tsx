@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
-import { Field, Input } from "@/components/ui/input";
+import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Tabs } from "@/components/ui/tabs";
 import { DiffView } from "@/components/DiffView";
@@ -395,77 +395,76 @@ function Action({
     );
   }
 
+  // One line of guidance at a time, under the row rather than beside the
+  // button: three sentences competing for the space next to it is what made
+  // this wrap into a paragraph.
+  const guidance = !dryRunDone
+    ? `Nothing is written. This shows what would change${
+        install ? " when the release is created" : ", and pins the revision"
+      }.`
+    : canApply && diff
+      ? diff.exists
+        ? `Asserting the release is still at revision ${diff.revision}.`
+        : "The release does not exist; this creates it."
+      : "";
+
   return (
-    <div className="space-y-3">
-      {/* Optional, and deliberately not validated: a note nobody can skip is a
-          note that reads "n/a". It sits with the button because that is where
-          the decision is made. */}
-      <Field label="Note" hint="why — recorded in the log and beside the release">
+    <div className="space-y-2">
+      {/* The note, the one install-time choice and the button on one row: the
+          note is optional and deliberately not validated -- a note nobody can
+          skip is a note that reads "n/a" -- and it belongs beside the button
+          because that is where the decision is made. */}
+      <div className="flex flex-wrap items-center gap-3">
         <Input
           value={note}
           onChange={(e) => onNote(e.target.value)}
-          placeholder={rollbackTo ? "what went wrong with what is running" : "optional"}
-          className="max-w-xl"
+          aria-label="note"
+          placeholder={
+            rollbackTo
+              ? "note — what went wrong with what is running"
+              : "note — why, for the log and the release"
+          }
+          className="min-w-48 flex-1 sm:max-w-md"
         />
-      </Field>
 
-      {install && !rollbackTo && (
-        <div className="flex items-start gap-2">
-          <Switch
-            checked={createNamespace}
-            onChange={onCreateNamespace}
-            label="Create the namespace"
-          />
-          <span className="text-sm">
-            Create the namespace
-            <span className="block text-xs text-muted-foreground">
-              if it does not exist yet — needs swissd to hold namespaces create
-            </span>
+        {install && !rollbackTo && (
+          <span className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Switch
+              checked={createNamespace}
+              onChange={onCreateNamespace}
+              label="create the namespace if it does not exist"
+            />
+            create the namespace
           </span>
+        )}
+
+        <div className="ml-auto">
+          {!dryRunDone ? (
+            <Button onClick={onDryRun} disabled={diffPending}>
+              {diffPending ? "Running…" : known ? `${actionLabel} (dry run)` : "Dry run"}
+            </Button>
+          ) : (
+            <Button
+              variant={rollbackTo ? "destructive" : "default"}
+              onClick={onApply}
+              disabled={!canApply || applyPending}
+            >
+              {applyPending ? "Submitting…" : actionLabel}
+            </Button>
+          )}
         </div>
-      )}
-
-      <div className="flex flex-wrap items-center gap-3">
-        {!dryRunDone ? (
-          <Button onClick={onDryRun} disabled={diffPending}>
-            {diffPending ? "Running…" : known ? `${actionLabel} (dry run)` : "Dry run"}
-          </Button>
-        ) : (
-          <Button
-            variant={rollbackTo ? "destructive" : "default"}
-            onClick={onApply}
-            disabled={!canApply || applyPending}
-          >
-            {applyPending ? "Submitting…" : actionLabel}
-          </Button>
-        )}
-
-        {!dryRunDone && (
-          <span className="text-sm text-muted-foreground">
-            Nothing is written. This shows what would change
-            {install ? " when the release is created" : ", and pins the revision"}.
-          </span>
-        )}
-
-        {nothingToDo && (
-          <span className="flex items-start gap-2 text-sm text-warning">
-            <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-            <span>
-              {rollbackTo
-                ? `Revision ${rollbackTo} matches what is running — nothing to roll back to.`
-                : "Nothing would change, so there is nothing to apply. Recompose after editing the settings above."}
-            </span>
-          </span>
-        )}
-
-        {canApply && diff && (
-          <span className="text-sm text-muted-foreground">
-            {diff.exists
-              ? `Asserting the release is still at revision ${diff.revision}.`
-              : "The release does not exist; this creates it."}
-          </span>
-        )}
       </div>
+
+      {nothingToDo ? (
+        <p className="flex items-start gap-2 text-xs text-warning">
+          <TriangleAlert className="mt-px size-3.5 shrink-0" />
+          {rollbackTo
+            ? `Revision ${rollbackTo} matches what is running — nothing to roll back to.`
+            : "Nothing would change, so there is nothing to apply. Recompose after editing the settings above."}
+        </p>
+      ) : (
+        guidance && <p className="text-xs text-muted-foreground">{guidance}</p>
+      )}
     </div>
   );
 }

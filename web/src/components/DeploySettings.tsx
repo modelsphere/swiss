@@ -1,4 +1,6 @@
-import type { ClusterInfo, Plan, PlanRequest } from "@/lib/api";
+import { useState } from "react";
+import type { ClusterInfo, Plan, PlanRequest, Variant } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -30,6 +32,10 @@ export interface Form {
   scaler: boolean;
   replicaCount: string;
   route: string;
+  // image is a repository for this deploy alone. Empty is the site's answer,
+  // which is the mirror when one is configured -- the switch beside the field
+  // is a view of this one value, so the two cannot name different registries.
+  image: string;
 }
 
 export const EMPTY: Form = {
@@ -48,6 +54,7 @@ export const EMPTY: Form = {
   scaler: false,
   replicaCount: "",
   route: "",
+  image: "",
 };
 
 export function DeploySettings({
@@ -55,7 +62,9 @@ export function DeploySettings({
   onChange,
   cluster,
   serviceIdPlaceholder,
+  localPathDefault,
   localPathPlaceholder,
+  image,
   supportedGPUs,
   clusterGPUs,
   // Upgrade locks the namespace: it names the helm release being upgraded, and
@@ -70,7 +79,15 @@ export function DeploySettings({
   onChange: (patch: Partial<Form>) => void;
   cluster?: ClusterInfo;
   serviceIdPlaceholder?: string;
+  // What the site's template resolves to for this model, and the template
+  // itself for when it does not resolve. Only the first is a value Tab can fill
+  // a field with.
+  localPathDefault?: string;
   localPathPlaceholder?: string;
+  // The engine image the catalog pins, and what the site's mirror rewrites it
+  // to. Equal when this site mirrors nothing, which is when there is no rewrite
+  // to offer a choice about.
+  image?: { catalog: string; site: string };
   lockIdentity?: boolean;
   readOnly?: boolean;
   // Products the chosen variant declares, and those a node in this cluster
@@ -123,10 +140,11 @@ export function DeploySettings({
                 : "names the helm release, the route, the scaler and the SLO"
             }
           >
-            <Input
+            <Suggest
               value={form.serviceId}
-              onChange={set("serviceId")}
+              onChange={(v) => onChange({ serviceId: v })}
               disabled={lockIdentity}
+              suggestion={serviceIdPlaceholder}
               placeholder={serviceIdPlaceholder}
             />
           </Row>
@@ -150,18 +168,49 @@ export function DeploySettings({
               <PathInput
                 value={form.route}
                 onChange={(v) => onChange({ route: v })}
+                suggestion={form.serviceId}
                 placeholder={form.serviceId || "the service ID"}
               />
             )}
           </Row>
 
           <Row label="Model path" note="overrides the site's path template">
-            <Input
+            <Suggest
               value={form.localPath}
-              onChange={set("localPath")}
-              placeholder={localPathPlaceholder}
+              onChange={(v) => onChange({ localPath: v })}
+              suggestion={localPathDefault}
+              placeholder={localPathDefault ?? localPathPlaceholder}
             />
           </Row>
+
+          {/* The site rewrites the catalog's image to its own registry, which
+              is right until the one deploy that has to pull the original. The
+              switch is that escape hatch: off fills the field with the
+              catalog's repository, on empties it again. An empty field is the
+              site's answer, and the placeholder is that answer rather than a
+              description of it. */}
+          {image && (
+            <Row
+              label="Image"
+              note="where the engine image is pulled from; the catalog pins the tag"
+              toggle={
+                image.site !== image.catalog ? (
+                  <Switch
+                    checked={!form.image.trim()}
+                    onChange={(v) => onChange({ image: v ? "" : image.catalog })}
+                    label="use the site's registry mirror"
+                  />
+                ) : undefined
+              }
+            >
+              <Suggest
+                value={form.image}
+                onChange={(v) => onChange({ image: v })}
+                suggestion={image.site}
+                placeholder={image.site}
+              />
+            </Row>
+          )}
 
           <Row
             label="Autoscale"
@@ -186,10 +235,11 @@ export function DeploySettings({
             label="Namespace"
             note={lockIdentity ? "moving a release between namespaces installs a second one" : undefined}
           >
-            <Input
+            <Suggest
               value={form.namespace}
-              onChange={set("namespace")}
+              onChange={(v) => onChange({ namespace: v })}
               disabled={lockIdentity}
+              suggestion={cluster?.namespace}
               placeholder={cluster?.namespace ?? "the site profile's"}
             />
           </Row>
@@ -237,16 +287,18 @@ export function DeploySettings({
             />
           </Row>
           <Row label="Priority class">
-            <Input
+            <Suggest
               value={form.priorityClassName}
-              onChange={set("priorityClassName")}
+              onChange={(v) => onChange({ priorityClassName: v })}
+              suggestion={cluster?.priorityClassName}
               placeholder={cluster?.priorityClassName ?? "the chart's default"}
             />
           </Row>
           <Row label="Scheduler">
-            <Input
+            <Suggest
               value={form.schedulerName}
-              onChange={set("schedulerName")}
+              onChange={(v) => onChange({ schedulerName: v })}
+              suggestion={cluster?.schedulerName}
               placeholder={cluster?.schedulerName ?? "the chart's default"}
             />
           </Row>
@@ -361,26 +413,95 @@ function gpuOptions(supported?: string[], present?: string[]): string[] {
   return (both.length ? both : supported).slice().sort();
 }
 
+// Tab fills an empty field with the default it is showing, the way a shell
+// completes: the field is no longer empty afterwards, so the next Tab moves on.
+function accept(
+  e: React.KeyboardEvent,
+  suggestion: string | undefined,
+  onChange: (v: string) => void,
+) {
+  if (e.key !== "Tab" || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || !suggestion) return;
+  e.preventDefault();
+  onChange(suggestion);
+}
+
+function useSuggestion(value: string, suggestion?: string, disabled?: boolean) {
+  const [focused, setFocused] = useState(false);
+  const offer = !value && !disabled ? suggestion : undefined;
+  return {
+    offer,
+    hint: !!offer && focused,
+    focus: { onFocus: () => setFocused(true), onBlur: () => setFocused(false) },
+  };
+}
+
+function TabHint() {
+  return (
+    <kbd className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border px-1 py-px text-[10px] leading-none text-muted-foreground">
+      tab
+    </kbd>
+  );
+}
+
+function Suggest({
+  value,
+  onChange,
+  suggestion,
+  placeholder,
+  disabled,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  suggestion?: string;
+  placeholder?: string;
+  disabled?: boolean;
+}) {
+  const s = useSuggestion(value, suggestion, disabled);
+  return (
+    <div className="relative min-w-0 flex-1">
+      <Input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => accept(e, s.offer, onChange)}
+        disabled={disabled}
+        placeholder={placeholder}
+        className={cn(s.hint && "pr-11")}
+        {...s.focus}
+      />
+      {s.hint && <TabHint />}
+    </div>
+  );
+}
+
 // The slash is drawn, never stored: the chart wants the path without it, and a
 // leading one typed or pasted here is stripped rather than sent.
 function PathInput({
   value,
   onChange,
+  suggestion,
   placeholder,
 }: {
   value: string;
   onChange: (v: string) => void;
+  suggestion?: string;
   placeholder?: string;
 }) {
+  const s = useSuggestion(value, suggestion);
   return (
-    <div className="flex h-9 min-w-0 flex-1 items-center rounded-md border bg-background pl-3 focus-within:outline-2 focus-within:outline-offset-1">
+    <div className="relative flex h-9 min-w-0 flex-1 items-center rounded-md border bg-background pl-3 focus-within:outline-2 focus-within:outline-offset-1">
       <span className="select-none text-sm text-muted-foreground">/</span>
       <input
-        className="h-full min-w-0 flex-1 bg-transparent px-1 text-sm outline-none placeholder:text-muted-foreground"
+        className={cn(
+          "h-full min-w-0 flex-1 bg-transparent px-1 text-sm outline-none placeholder:text-muted-foreground",
+          s.hint && "pr-11",
+        )}
         value={value}
         onChange={(e) => onChange(e.target.value.replace(/^\/+/, ""))}
+        onKeyDown={(e) => accept(e, s.offer, onChange)}
         placeholder={placeholder}
+        {...s.focus}
       />
+      {s.hint && <TabHint />}
     </div>
   );
 }
@@ -544,6 +665,18 @@ extraArgs:
 
 const num = (v: string) => (v.trim() === "" ? undefined : Number(v));
 
+// imageOf pairs the repository the catalog pins with the one the site mirrors
+// it to. Undefined when the variant carries no image: there is then nothing to
+// show and nothing to choose between.
+export function imageOf(
+  variant?: Variant,
+  mirrored?: Record<string, string>,
+): { catalog: string; site: string } | undefined {
+  const repo = variant?.image?.repository;
+  if (!repo) return undefined;
+  return { catalog: repo, site: mirrored?.[variant.id] ?? repo };
+}
+
 // Naming a route turns routing on, so the toggle and the request cannot
 // disagree about what this deploy is asking for.
 export function effective(f: Form) {
@@ -588,6 +721,10 @@ export function planRequest(
       return out;
     });
   if (tolerations.length) overrides.tolerations = tolerations;
+
+  // Only the repository: the tag and digest are the catalog's, and a form that
+  // wrote the whole image section would drop them.
+  if (f.image.trim()) overrides.image = { repository: f.image.trim() };
 
   if (f.priorityClassName.trim()) overrides.priorityClassName = f.priorityClassName.trim();
   if (f.schedulerName.trim()) overrides.schedulerName = f.schedulerName.trim();
@@ -644,6 +781,7 @@ export function formFromPlan(plan: Plan): Form {
     tolerations: tolerationsOf(o),
     replicaCount: str("replicaCount"),
     route: str("modelRoute.nginx.route"),
+    image: str("image.repository"),
     cart: bool("cart.enabled", true),
     modelRoute: bool("modelRoute.enabled"),
     slo: bool("sloRequirement.enabled"),

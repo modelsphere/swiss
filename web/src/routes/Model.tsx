@@ -122,7 +122,7 @@ function VariantCard({
 }) {
   const fit = fitness(v, nodes);
   return (
-    <Card>
+    <Card className="flex h-full flex-col">
       <CardHeader>
         <CardTitle className="flex flex-wrap items-center gap-2 text-base">
           {v.id}
@@ -131,7 +131,7 @@ function VariantCard({
         </CardTitle>
         {v.description && <p className="text-sm text-muted-foreground">{v.description}</p>}
       </CardHeader>
-      <CardContent className="space-y-2 text-sm">
+      <CardContent className="flex flex-1 flex-col gap-2 text-sm">
         <div className="text-muted-foreground">
           {gpuCount(v.requires)}
           {" · "}
@@ -152,7 +152,7 @@ function VariantCard({
             <Badge variant="outline">any {vendorLabel(v.requires.vendor)}</Badge>
           )}
         </div>
-        <div className="flex flex-wrap items-center gap-2 pt-1">
+        <div className="mt-auto flex flex-wrap items-center gap-2 pt-2">
           {fit && <Badge variant={fit.ok ? "success" : "warning"}>{fit.text}</Badge>}
           <Link
             to={

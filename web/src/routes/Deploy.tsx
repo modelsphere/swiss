@@ -5,7 +5,7 @@ import { ChevronLeft, TriangleAlert } from "lucide-react";
 import { api, deployApi, type ApplyResult, type DiffResult, type Plan } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import { DeploySettings, EMPTY, planRequest, type Form } from "@/components/DeploySettings";
+import { DeploySettings, EMPTY, imageOf, planRequest, type Form } from "@/components/DeploySettings";
 import { Pipeline } from "@/components/Pipeline";
 import { ErrorState, Loading } from "@/components/States";
 
@@ -101,7 +101,9 @@ export function Deploy() {
         onChange={update}
         cluster={cluster.data}
         serviceIdPlaceholder={name}
-        localPathPlaceholder={model.data.localPath ?? model.data.pathTemplate}
+        localPathDefault={model.data.localPath}
+        localPathPlaceholder={model.data.pathTemplate}
+        image={imageOf(variant, model.data.imageRepository)}
         supportedGPUs={variant?.requires.gpuProduct}
         clusterGPUs={nodes.data?.nodes.map((n) => n.GPUProduct)}
       />

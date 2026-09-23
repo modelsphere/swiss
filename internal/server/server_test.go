@@ -121,6 +121,29 @@ func TestCatalogModelEndpointFetchesTheEntry(t *testing.T) {
 	}
 }
 
+// The form offers the mirror rewrite as a choice, so the endpoint has to say
+// what it produces -- the rule stays here rather than being reimplemented by
+// whoever renders the choice.
+func TestCatalogModelEndpointResolvesTheMirroredImage(t *testing.T) {
+	probe := fakeProbe()
+	probe.Maps["swiss/site-profile"] = map[string]string{
+		"profile.yaml": profileYAML + "registry:\n  mirror: registry.internal/mirror\n",
+	}
+	srv := testServer(t, probe)
+
+	code, body := get(t, srv, "/api/catalog/modelforge")
+	if code != 200 {
+		t.Fatalf("status %d: %v", code, body)
+	}
+	images, ok := body["imageRepository"].(map[string]any)
+	if !ok {
+		t.Fatalf("no imageRepository: %v", body)
+	}
+	if images["sglang-tp2"] != "registry.internal/mirror/sglang" {
+		t.Fatalf("mirror not applied: %v", images)
+	}
+}
+
 // A helm release with no plan beside it is not swiss's to report. swissd can
 // see it -- helm's storage cannot be queried for a subset -- and leaves it out.
 func TestDeploymentsOmitUntrackedReleases(t *testing.T) {

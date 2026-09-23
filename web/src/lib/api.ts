@@ -297,7 +297,15 @@ export const api = {
   model: (name: string, version?: string) =>
     // localPath is what the site's template resolves to for this model, so a
     // form can show the real default rather than describe the template.
-    get<{ ref: string; entry: Entry; localPath?: string; pathTemplate?: string }>(
+    // imageRepository is each variant's image after the site's mirror rewrite,
+    // by variant id, so the form can offer that rewrite as a choice.
+    get<{
+      ref: string;
+      entry: Entry;
+      localPath?: string;
+      pathTemplate?: string;
+      imageRepository?: Record<string, string>;
+    }>(
       `/api/catalog/${encodeURIComponent(name)}` + (version ? `?version=${encodeURIComponent(version)}` : ""),
     ),
   nodes: () => get<NodesResponse>("/api/nodes"),
@@ -481,6 +489,9 @@ export interface ChatResult {
   // Header names only, never values: enough to tell "no key was sent" from
   // "the key was wrong".
   sentHeaders?: string[];
+  // The request the server made, as a runnable line. The key is a shell
+  // variable in it, never the value.
+  curl?: string;
 }
 
 export interface Revision {
@@ -530,6 +541,7 @@ export interface ProbeResult {
   error?: string;
   body?: string;
   sentHeaders?: string[];
+  curl?: string;
 }
 
 async function post<T>(path: string, body: unknown): Promise<T> {

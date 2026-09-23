@@ -148,6 +148,18 @@ func (s *Server) handleCatalogModel(w http.ResponseWriter, r *http.Request) {
 		if path, err := prof.LocalPath(e.Source.HF, e.Name); err == nil {
 			out["localPath"] = path
 		}
+		// The repository each variant's image is pulled from after the site's
+		// mirror rewrite, by variant id. Resolved here so the rule has one
+		// implementation and a form can offer the rewrite as a choice.
+		images := map[string]string{}
+		for _, v := range e.Variants {
+			if v.Image != nil {
+				images[v.ID] = prof.MirrorImage(v.Image.Repository)
+			}
+		}
+		if len(images) > 0 {
+			out["imageRepository"] = images
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }

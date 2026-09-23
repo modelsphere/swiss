@@ -420,6 +420,29 @@ func TestServiceIDAndLocalPathAreFirstClassFormFields(t *testing.T) {
 	}
 }
 
+// The site mirrors the catalog's image; a deploy that must pull the original
+// says so in the form layer, and the tag the catalog pins survives it.
+func TestFormMayOverrideTheImageRepository(t *testing.T) {
+	srv, _ := deployServer(t, true)
+	code, body := post(t, srv, "/api/plans", map[string]any{
+		"model": "modelforge", "release": "r", "serviceId": "r",
+		"overrides": map[string]any{"image": map[string]any{"repository": "docker.io/lmsysorg/sglang"}},
+	})
+	if code != 200 {
+		t.Fatalf("status %d: %v", code, body)
+	}
+	image := planValues(body)["image"].(map[string]any)
+	if image["repository"] != "docker.io/lmsysorg/sglang" {
+		t.Errorf("repository = %v", image["repository"])
+	}
+	if image["tag"] == nil || image["tag"] == "" {
+		t.Errorf("the catalog still pins the tag: %v", image)
+	}
+	if layerOf(body, "image.repository") != "form" {
+		t.Errorf("the override belongs to the form layer, got %q", layerOf(body, "image.repository"))
+	}
+}
+
 func TestLocalPathFallsBackToTheSiteTemplate(t *testing.T) {
 	srv, _ := deployServer(t, true)
 	_, body := post(t, srv, "/api/plans", map[string]any{"model": "kimi-k2.5"})
