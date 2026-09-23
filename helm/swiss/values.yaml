@@ -114,8 +114,7 @@ auth:
   # plain-http port-forward. always | never override it.
   cookieSecure: auto
 
-  # No login at all. Everything swissd serves -- including the deploy button,
-  # when allowDeploy is on -- is then open to anyone who can reach the Service.
+  # No login at all.
   disabled: false
 
 # ---------------------------------------------------------------------------
@@ -159,21 +158,6 @@ rbac:
   # It is configmaps create/update in swissd's own namespace. RBAC cannot scope
   # a create to one name.
   manageProfile: true
-
-  # Lets an install create the namespace it deploys into, when the operator asks
-  # for it (`swiss install --create-namespace`, the toggle on the install
-  # dialog, or createNamespace in the site profile).
-  #
-  # Namespaces are cluster-scoped, so this is a ClusterRole on namespaces --
-  # get, create and patch, because helm v4 applies the Namespace object
-  # server-side and a server-side apply is a PATCH. It grants nothing inside a
-  # namespace: a namespace swissd creates this way is one it has no rights in
-  # unless scope is cluster or the namespace is listed below.
-  #
-  # Off means installs land only in namespaces an admin already made, which is
-  # what the list below describes. Turn it on for a swissd that is expected to
-  # stand up new namespaces on its own.
-  createNamespace: false
 
   # Namespaces holding model releases. Used when scope is namespaced.
   namespaces: []
@@ -247,21 +231,6 @@ logLevel: info
 # Scratch space for helm caches and the per-operation workspace.
 tmpSizeLimit: 1Gi
 
-# Where the database lives when config.allowDeploy is on.
-#
-# REQUIRED for deploys, not optional.
-#
-#   run          every diff, apply and install -- not cluster state, nothing can
-#                rebuild it
-#   deployment   release -> current plan, read by apply and upgrade
-#   plan         immutable, keyed by hash; rollback history lives here
-#
-# An emptyDir loses all of it on restart, so the chart refuses allowDeploy
-# without a volume. Upgrades survive that loss anyway -- the whole plan is
-# written beside every release and swissd falls back to reading it -- but the
-# log and the history do not, and nothing can rebuild them.
-#
-# ReadWriteOnce and one replica: sqlite is a single writer.
 persistence:
   enabled: true
   size: 10Gi

@@ -46,7 +46,7 @@ subjects:
     name: {{ $sa }}
     namespace: {{ .Release.Namespace }}
 ---
-{{- if and .Values.rbac.createNamespace .Values.config.allowDeploy }}
+{{- if .Values.config.allowDeploy }}
 # Namespaces are cluster-scoped, so an install that creates one needs a
 # ClusterRole whichever rbac.scope is in use. patch as well as create: helm v4
 # applies the Namespace object server-side, and that is a PATCH.
