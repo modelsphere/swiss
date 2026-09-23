@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleCheck, TriangleAlert } from "lucide-react";
 import { api, deployApi, type ApplyResult, type DiffResult, type Plan } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog } from "@/components/ui/dialog";
 import { Field, Input } from "@/components/ui/input";
 import { Tabs } from "@/components/ui/tabs";
 import { DiffView } from "@/components/DiffView";
@@ -12,14 +13,19 @@ import { Provenance } from "@/components/Provenance";
 import { ReleaseStatus } from "@/components/ReleaseStatus";
 import { Empty, ErrorState } from "@/components/States";
 
-// Pipeline is compose -> diff -> apply -> status, shared by Deploy, Upgrade and
-// rollback.
+// Pipeline is compose -> dry run -> apply -> status, shared by Deploy, Upgrade
+// and rollback.
 //
 // The pages differ in what they compose from -- a catalog model, a release's
 // stored plan, or an archived revision that is not composed at all -- and in
-// nothing after that. Three copies of this would be three answers to "is a diff
-// required", which is exactly the question an operator must not have to ask per
-// page.
+// nothing after that. Three copies of this would be three answers to "is a dry
+// run required", which is exactly the question an operator must not have to ask
+// per page.
+//
+// The page keeps one button, Compose. Everything a composed plan can be done
+// with happens in the dialog it opens, which is what makes the dry run
+// unskippable: the apply button is reached by going through it, rather than
+// sitting beside it with a warning attached.
 export function Pipeline({
   namespace,
   release,
@@ -52,7 +58,7 @@ export function Pipeline({
   onApplied: (a: ApplyResult) => void;
   // Set when this is a rollback: the revision whose archived plan is being
   // re-applied. There is nothing to compose -- the plan came out of the
-  // cluster exactly as it ran -- so the first step is the diff.
+  // cluster exactly as it ran -- so the button opens the dialog directly.
   rollbackTo?: number;
   // Rendered on the Plan tab above the composed plan: what moves, on upgrade.
   children?: React.ReactNode;
@@ -60,7 +66,30 @@ export function Pipeline({
   // Why, in the operator's own words. Recorded with the run and written beside
   // the release: the diff says what moved, and nothing but this says why.
   const [note, setNote] = useState("");
+  const [open, setOpen] = useState(false);
+  // Set when the compose button is clicked, so the dialog opens on the plan
+  // that click produced rather than on whatever was lying around. Composing is
+  // a round trip, so this cannot be done in the click handler.
+  const [opening, setOpening] = useState(false);
   const qc = useQueryClient();
+
+  useEffect(() => {
+    if (opening && plan && !composing) {
+      setOpening(false);
+      setOpen(true);
+    }
+  }, [opening, plan, composing]);
+
+  // Editing the form drops the plan, and so does starting a compose. Whatever
+  // is on screen describes something that no longer exists, so it closes
+  // rather than going stale in place -- which is also what stops a recompose
+  // from flashing the dialog open over the plan it is replacing.
+  //
+  // `opening` deliberately survives this: it is the pending intent to open,
+  // and the plan is null for the whole round trip it is waiting on.
+  useEffect(() => {
+    if (!plan) setOpen(false);
+  }, [plan]);
 
   const diffM = useMutation({
     mutationFn: () =>
@@ -72,7 +101,8 @@ export function Pipeline({
 
   // Whether the release is already there is a question about the cluster, not
   // about the diff. A diff answers it as a side effect; asking directly is what
-  // lets the diff stay optional. Same query key as the Status tab.
+  // lets the dialog name the action before the dry run has run. Same query key
+  // as the Status tab.
   const live = useQuery({
     queryKey: ["status", plan?.release.namespace ?? namespace, plan?.release.name ?? release],
     queryFn: () =>
@@ -87,8 +117,7 @@ export function Pipeline({
       rollbackTo
         ? // A rollback must assert a revision -- it runs when something is
           // already wrong, which is when a second operator is most likely to be
-          // acting on the same release. The diff's when there is one, else the
-          // revision this page last read.
+          // acting on the same release.
           deployApi.rollback(
             namespace,
             release,
@@ -98,8 +127,8 @@ export function Pipeline({
           )
         : install
           ? deployApi.install(plan!.hash, note.trim())
-          : // expectRevision is the optimistic lock, and it exists only when a
-            // diff computed it. Applying without one asserts nothing.
+          : // expectRevision is the optimistic lock the dry run computed. It
+            // always exists here: nothing reaches this call without one.
             deployApi.apply(plan!.hash, diff?.revision, note.trim()),
     onSuccess: (r) => {
       onApplied(r);
@@ -122,144 +151,138 @@ export function Pipeline({
   });
 
   const error = diffM.error ?? applyM.error;
+  // Install and Apply are different words for different things, and which one
+  // this is depends on whether the release exists. Until that query answers,
+  // the honest label is neither -- the dry run is safe to run either way, and
+  // by the time it returns `exists` is known from the diff itself.
+  const known = exists !== undefined;
   const actionLabel = rollbackTo ? "Roll back" : install ? "Install" : "Apply";
 
-  // The diff is optional everywhere in this pipeline except here. An upgrade
-  // recomposes and may legitimately land on the same values; a rollback that
-  // changes nothing is not a no-op worth recording but a mistake about which
-  // revision is running, and applying it forward would write a new revision
-  // with nothing in it. So for a rollback the diff is required, and its answer
-  // is the gate.
-  const undiffedRollback = !!rollbackTo && !diff;
-  const emptyRollback = !!rollbackTo && !!diff && !diff.changed;
+  // The two halves of one button. A dry run is the diff, and it is the only way
+  // to reach the apply -- so the apply cannot be clicked without one, and the
+  // lock the diff computed is always the one the apply asserts.
+  //
+  // An empty diff stops here on purpose, for every flow rather than just
+  // rollback. Applying a plan that changes nothing writes a revision with
+  // nothing in it: harmless on an upgrade, and on a rollback a sign that the
+  // revision being restored is already the one running.
+  const dryRunDone = !!diff;
+  const nothingToDo = dryRunDone && !diff.changed;
+  const canApply = dryRunDone && diff.changed && !applied && exists !== undefined;
 
   return (
     <>
-      {/* The pipeline is the button row, left to right: compose, diff, apply.
-          The tabs below are what each step produced, not where its action
-          lives -- a diff button reachable only by opening the diff tab makes
-          the step feel required, which it is not. */}
-      <div className="space-y-2">
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Nothing to compose on a rollback: the plan is the archive, and
-              recomposing it is what an upgrade does. */}
-          {!rollbackTo && (
-            <Button onClick={onCompose} disabled={composeDisabled || composing}>
-              {composing
-                ? "Composing…"
-                : (composeLabel ?? (plan ? "Recompose plan" : "Compose plan"))}
-            </Button>
-          )}
-          <Button
-            variant="outline"
-            onClick={() => {
-              onTab("diff");
-              diffM.mutate();
-            }}
-            disabled={!plan || diffM.isPending}
-          >
-            {diffM.isPending ? "Diffing…" : diff ? "Diff again" : "Diff"}
-          </Button>
-
-          {/* Everything left of this reads the cluster; the button right of it
-              changes it. */}
-          <span className="mx-1 h-6 w-px shrink-0 bg-border" aria-hidden />
-
-          <Button
-            variant={rollbackTo ? "destructive" : "default"}
-            onClick={() => applyM.mutate()}
-            disabled={
-              !plan ||
-              applyM.isPending ||
-              !!applied ||
-              exists === undefined ||
-              undiffedRollback ||
-              emptyRollback
+      {/* One button. Everything a plan can be done with is behind it, which is
+          what keeps the dry run on the path rather than beside it. */}
+      <div className="flex flex-wrap items-center gap-3">
+        <Button
+          onClick={() => {
+            if (rollbackTo) {
+              setOpen(true);
+              return;
             }
+            setOpening(true);
+            onCompose();
+          }}
+          disabled={composeDisabled || composing}
+        >
+          {composing
+            ? "Composing…"
+            : rollbackTo
+              ? `Review rollback to revision ${rollbackTo}`
+              : (composeLabel ?? (plan ? "Recompose plan" : "Compose plan"))}
+        </Button>
+
+        {/* Closing the dialog keeps the plan and the dry run, so this comes
+            back to them rather than recomposing. Not shown on a rollback: the
+            button beside it already opens the same dialog. */}
+        {plan && !open && !rollbackTo && (
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            className="text-sm text-muted-foreground underline hover:text-foreground"
           >
-            {applyM.isPending ? "Submitting…" : actionLabel}
-          </Button>
+            reopen
+          </button>
+        )}
+        {plan && <span className="font-mono text-xs text-muted-foreground">{plan.hash}</span>}
+      </div>
 
-          {plan && <span className="font-mono text-xs text-muted-foreground">{plan.hash}</span>}
-        </div>
-
-        {/* Optional, and deliberately not validated: a note nobody can skip is
-            a note that reads "n/a". It sits with the button rather than on the
-            apply tab, because that is where the decision is made. */}
-        {plan && !applied && (
-          <Field label="Note" hint="why — recorded in the log and beside the release">
-            <Input
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              placeholder={rollbackTo ? "what went wrong with what is running" : "optional"}
-              className="max-w-xl"
+      <Dialog
+        open={open && !!plan}
+        onClose={() => setOpen(false)}
+        title={
+          rollbackTo
+            ? `Roll back ${plan?.release.name ?? release} to revision ${rollbackTo}`
+            : `${known ? actionLabel : "Review"} ${plan?.release.name ?? release}`
+        }
+        subtitle={
+          plan && (
+            <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <Badge variant="outline">{plan.release.namespace}</Badge>
+              <span>
+                {plan.source.model}
+                {plan.source.version && ` v${plan.source.version}`} · {plan.source.variant} ·
+                chart {plan.chart.name}-{plan.chart.version}
+              </span>
+              <span className="font-mono text-xs break-all">{plan.hash}</span>
+            </span>
+          )
+        }
+        footer={
+          plan && (
+            <Action
+              actionLabel={actionLabel}
+              known={known}
+              rollbackTo={rollbackTo}
+              install={install}
+              diff={diff}
+              applied={applied}
+              note={note}
+              onNote={setNote}
+              diffPending={diffM.isPending}
+              applyPending={applyM.isPending}
+              dryRunDone={dryRunDone}
+              nothingToDo={nothingToDo}
+              canApply={canApply}
+              onDryRun={() => {
+                onTab("diff");
+                diffM.mutate();
+              }}
+              onApply={() => applyM.mutate()}
             />
-          </Field>
-        )}
+          )
+        }
+      >
+        {applied && <Applied result={applied} />}
 
-        {/* Both of these sit with the button rather than on the apply tab. The
-            warning guards a click that is now reachable from anywhere, so
-            hiding it behind a tab nobody has to open would be worse than not
-            showing it at all. */}
-        {plan && !install && !diff && (
-          <p className="flex items-start gap-2 text-sm text-warning">
-            <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-            <span>
-              {rollbackTo
-                ? `Diff first: nothing has shown what going back to revision ${rollbackTo} would change, and a rollback that changes nothing is a new revision with nothing in it. Roll back stays disabled until the diff has run.`
-                : "No diff was run. Nothing has shown what this changes, and nothing asserts the release has not moved since — if someone else applied in the meantime, this overwrites them with no signal."}
-            </span>
-          </p>
-        )}
+        <Tabs
+          tabs={[
+            { id: "plan", label: "Plan" },
+            { id: "diff", label: "Dry run" },
+            {
+              id: "status",
+              label: "Status",
+              disabled: !applied && !exists,
+              hint: "nothing deployed yet",
+            },
+          ]}
+          active={tab}
+          onSelect={onTab}
+        />
 
-        {/* The diff came back empty: that revision is what is already running,
-            whatever the revision numbers suggest. */}
-        {emptyRollback && (
-          <p className="flex items-start gap-2 text-sm text-warning">
-            <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-            <span>
-              Revision {rollbackTo} matches what is running — nothing to roll back to. Going
-              forward with it would record a revision that changed nothing.
-            </span>
-          </p>
-        )}
+        {error && <ErrorState what="the request" error={error} />}
+
         {plan && live.error && (
           <p className="text-sm text-warning">
             Could not tell whether {plan.release.name} is already installed:{" "}
             {live.error instanceof Error ? live.error.message : String(live.error)}
           </p>
         )}
-      </div>
 
-      {applied && <Applied result={applied} />}
-
-      <Tabs
-        tabs={[
-          { id: "plan", label: "Plan" },
-          { id: "diff", label: "Diff", disabled: !plan, hint: "compose a plan first" },
-          {
-            id: "apply",
-            label: actionLabel,
-            disabled: !plan,
-            hint: "compose a plan first",
-          },
-          {
-            id: "status",
-            label: "Status",
-            disabled: !applied && !exists,
-            hint: "nothing deployed yet",
-          },
-        ]}
-        active={tab}
-        onSelect={onTab}
-      />
-
-      {error && <ErrorState what="the request" error={error} />}
-
-      {tab === "plan" && (
-        <div className="space-y-4">
-          {children}
-          {plan ? (
+        {tab === "plan" && plan && (
+          <div className="space-y-4">
+            {children}
             <Card>
               <CardHeader>
                 <CardTitle className="text-base">Composed plan</CardTitle>
@@ -268,96 +291,158 @@ export function Pipeline({
                 <Provenance plan={plan} />
               </CardContent>
             </Card>
-          ) : (
-            <Empty>Compose a plan to see every layer that went into it.</Empty>
-          )}
-        </div>
-      )}
+          </div>
+        )}
 
-      {tab === "diff" && plan && (
-        <div className="space-y-4">
-          {diffM.isPending ? (
-            <Empty>Diffing against the live release…</Empty>
-          ) : diff ? (
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex flex-wrap items-center gap-2 text-base">
-                  Diff
-                  {diff.changed ? (
-                    <Badge variant="warning">changes</Badge>
+        {tab === "diff" && plan && (
+          <div className="space-y-4">
+            {diffM.isPending ? (
+              <Empty>Running the dry run against the live release…</Empty>
+            ) : diff ? (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+                    Dry run
+                    {diff.changed ? (
+                      <Badge variant="warning">changes</Badge>
+                    ) : (
+                      <Badge variant="success">no changes</Badge>
+                    )}
+                    <span className="text-xs font-normal text-muted-foreground">
+                      {diff.exists
+                        ? `against live revision ${diff.revision}`
+                        : "release does not exist yet"}
+                    </span>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {diff.output.trim() ? (
+                    <DiffView output={diff.output} />
                   ) : (
-                    <Badge variant="success">no changes</Badge>
+                    <p className="text-sm text-muted-foreground">Nothing would change.</p>
                   )}
-                  <span className="text-xs font-normal text-muted-foreground">
-                    {diff.exists
-                      ? `against live revision ${diff.revision}`
-                      : "release does not exist yet"}
-                  </span>
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                {diff.output.trim() ? (
-                  <DiffView output={diff.output} />
-                ) : (
-                  <p className="text-sm text-muted-foreground">Nothing would change.</p>
-                )}
-              </CardContent>
-            </Card>
-          ) : (
-            <Empty>
-              {rollbackTo
-                ? `Required before a rollback: it is what shows that revision ${rollbackTo} is not already what is running, and it pins the rollback to the revision it saw.`
-                : "Optional, and the only thing that shows what this plan does to the live release. Running it also pins the apply to the revision it saw."}
-            </Empty>
-          )}
-        </div>
-      )}
+                </CardContent>
+              </Card>
+            ) : (
+              <Empty>
+                The dry run is what shows what this does to the live release, and it is what
+                pins the {actionLabel.toLowerCase()} to the revision it saw. Nothing is written
+                until it has run.
+              </Empty>
+            )}
+          </div>
+        )}
 
-      {tab === "apply" && plan && (
-        <div className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">{actionLabel}</CardTitle>
-              <p className="text-sm text-muted-foreground">
-                {rollbackTo
-                  ? `Re-applying revision ${rollbackTo} as a new revision, with the image, chart and engine flags it had — not whatever the catalog says that version is today. Asserting the release is still at revision ${diff?.revision ?? "—"}.`
-                  : install
-                    ? "The release does not exist; this creates it."
-                    : diff
-                      ? `Upgrading the live release, asserting it is still at revision ${diff.revision}.`
-                      : "Upgrading the live release."}
-              </p>
-            </CardHeader>
-            <CardContent>
-              <dl className="grid gap-x-4 gap-y-1 text-sm sm:grid-cols-[10rem_1fr]">
-                <dt className="text-muted-foreground">Release</dt>
-                <dd>
-                  {plan.release.namespace}/{plan.release.name}
-                </dd>
-                <dt className="text-muted-foreground">Chart</dt>
-                <dd>
-                  {plan.chart.name}-{plan.chart.version}
-                </dd>
-                <dt className="text-muted-foreground">Model</dt>
-                <dd>
-                  {plan.source.model} v{plan.source.version}
-                </dd>
-                <dt className="text-muted-foreground">Plan</dt>
-                <dd className="font-mono text-xs break-all">{plan.hash}</dd>
-              </dl>
-            </CardContent>
-          </Card>
-
-        </div>
-      )}
-
-      {tab === "status" && (
-        <ReleaseStatus
-          namespace={plan?.release.namespace ?? namespace}
-          release={plan?.release.name ?? release}
-        />
-      )}
+        {tab === "status" && (
+          <ReleaseStatus
+            namespace={plan?.release.namespace ?? namespace}
+            release={plan?.release.name ?? release}
+          />
+        )}
+      </Dialog>
     </>
+  );
+}
+
+// Action is the footer: the note, then the one button that is a dry run until
+// it has run and the thing itself afterwards.
+function Action({
+  actionLabel,
+  known,
+  rollbackTo,
+  install,
+  diff,
+  applied,
+  note,
+  onNote,
+  diffPending,
+  applyPending,
+  dryRunDone,
+  nothingToDo,
+  canApply,
+  onDryRun,
+  onApply,
+}: {
+  actionLabel: string;
+  known: boolean;
+  rollbackTo?: number;
+  install: boolean;
+  diff: DiffResult | null;
+  applied: ApplyResult | null;
+  note: string;
+  onNote: (v: string) => void;
+  diffPending: boolean;
+  applyPending: boolean;
+  dryRunDone: boolean;
+  nothingToDo: boolean;
+  canApply: boolean;
+  onDryRun: () => void;
+  onApply: () => void;
+}) {
+  if (applied) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Submitted at revision {applied.revision}. Close this to get back to the release.
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* Optional, and deliberately not validated: a note nobody can skip is a
+          note that reads "n/a". It sits with the button because that is where
+          the decision is made. */}
+      <Field label="Note" hint="why — recorded in the log and beside the release">
+        <Input
+          value={note}
+          onChange={(e) => onNote(e.target.value)}
+          placeholder={rollbackTo ? "what went wrong with what is running" : "optional"}
+          className="max-w-xl"
+        />
+      </Field>
+
+      <div className="flex flex-wrap items-center gap-3">
+        {!dryRunDone ? (
+          <Button onClick={onDryRun} disabled={diffPending}>
+            {diffPending ? "Running…" : known ? `${actionLabel} (dry run)` : "Dry run"}
+          </Button>
+        ) : (
+          <Button
+            variant={rollbackTo ? "destructive" : "default"}
+            onClick={onApply}
+            disabled={!canApply || applyPending}
+          >
+            {applyPending ? "Submitting…" : actionLabel}
+          </Button>
+        )}
+
+        {!dryRunDone && (
+          <span className="text-sm text-muted-foreground">
+            Nothing is written. This shows what would change
+            {install ? " when the release is created" : ", and pins the revision"}.
+          </span>
+        )}
+
+        {nothingToDo && (
+          <span className="flex items-start gap-2 text-sm text-warning">
+            <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+            <span>
+              {rollbackTo
+                ? `Revision ${rollbackTo} matches what is running — nothing to roll back to.`
+                : "Nothing would change, so there is nothing to apply. Recompose after editing the settings above."}
+            </span>
+          </span>
+        )}
+
+        {canApply && diff && (
+          <span className="text-sm text-muted-foreground">
+            {diff.exists
+              ? `Asserting the release is still at revision ${diff.revision}.`
+              : "The release does not exist; this creates it."}
+          </span>
+        )}
+      </div>
+    </div>
   );
 }
 

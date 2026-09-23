@@ -46,6 +46,13 @@ export function Deploy() {
   const planM = useMutation({
     mutationFn: () =>
       deployApi.plan(planRequest(form, { model: name, version, variant: variantId })),
+    // The previous plan is superseded the moment a recompose starts. Dropping
+    // it here rather than on the way back means a failed compose leaves
+    // nothing to act on, instead of a stale plan the error message sits behind.
+    onMutate: () => {
+      setPlan(null);
+      setDiff(null);
+    },
     onSuccess: (p) => {
       setPlan(p);
       setDiff(null);

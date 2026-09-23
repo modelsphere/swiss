@@ -91,6 +91,13 @@ export function Upgrade() {
           fromRelease: release,
         }),
       ),
+    // The previous plan is superseded the moment a recompose starts. Dropping
+    // it here rather than on the way back means a failed compose leaves
+    // nothing to act on, instead of a stale plan the error message sits behind.
+    onMutate: () => {
+      setPlan(null);
+      setDiff(null);
+    },
     onSuccess: (p) => {
       setPlan(p);
       setDiff(null);
