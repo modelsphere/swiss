@@ -225,3 +225,43 @@ func hasPath(doc map[string]any, path string) bool {
 	}
 	return true
 }
+
+// serviceId names the route, the scaler and the SLO. An upgrade that changed it
+// would leave the old objects orphaned under a release that kept its name, so
+// the request is refused rather than quietly carried out.
+func TestUpgradeRefusesAServiceIDChange(t *testing.T) {
+	probe := deployed(t, planRequest{Model: "modelforge", Release: "r", ServiceID: "r"})
+	srv, _ := deployServerWith(t, probe, true)
+
+	code, out := post(t, srv, "/api/plans", map[string]any{
+		"fromRelease": "r",
+		"serviceId":   "r-renamed",
+		"overrides":   map[string]any{"replicaCount": 2},
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400: %v", code, out)
+	}
+	if msg, _ := out["error"].(string); !strings.Contains(msg, "serviceId cannot change") {
+		t.Fatalf("the refusal must say what is wrong, got %q", msg)
+	}
+}
+
+// The upgrade form posts every field it shows, serviceId included. Sending the
+// deployed value back is what "unchanged" looks like on the wire, so it must
+// not be read as an attempt to rename anything.
+func TestUpgradeAcceptsTheDeployedServiceID(t *testing.T) {
+	probe := deployed(t, planRequest{Model: "modelforge", Release: "r", ServiceID: "r"})
+	srv, _ := deployServerWith(t, probe, true)
+
+	code, up := post(t, srv, "/api/plans", map[string]any{
+		"fromRelease": "r",
+		"serviceId":   "r",
+		"overrides":   map[string]any{"replicaCount": 2},
+	})
+	if code != 200 {
+		t.Fatalf("status %d: %v", code, up)
+	}
+	if got := planValues(up)["serviceId"]; got != "r" {
+		t.Fatalf("serviceId = %v, want it carried through unchanged", got)
+	}
+}

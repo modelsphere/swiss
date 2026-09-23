@@ -174,6 +174,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/releases/{namespace}/{release}/status", s.handleStatus)
 	mux.HandleFunc("GET /api/releases/{namespace}/{release}/revisions", s.handleRevisions)
 	mux.HandleFunc("GET /api/releases/{namespace}/{release}/revisions/{revision}/values", s.handleRevisionValues)
+	mux.HandleFunc("GET /api/releases/{namespace}/{release}/revisions/{revision}/plan", s.handleRevisionPlan)
 	mux.HandleFunc("POST /api/releases/{namespace}/{release}/probe", s.handleProbe)
 	// Not behind allowDeploy: it changes nothing in the cluster. It spends a few
 	// tokens of GPU time, which is the same bargain as the /v1/models probe.

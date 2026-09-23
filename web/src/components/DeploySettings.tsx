@@ -61,6 +61,10 @@ export function DeploySettings({
   // Upgrade locks the namespace: it names the helm release being upgraded, and
   // changing it does not move the release, it installs a second one.
   lockIdentity = false,
+  // Rollback shows the form and lets nothing be typed into it: it re-applies an
+  // archived plan verbatim, so an editable field beside it would promise a
+  // change that the rollback would then not make.
+  readOnly = false,
 }: {
   form: Form;
   onChange: (patch: Partial<Form>) => void;
@@ -68,6 +72,7 @@ export function DeploySettings({
   serviceIdPlaceholder?: string;
   localPathPlaceholder?: string;
   lockIdentity?: boolean;
+  readOnly?: boolean;
   // Products the chosen variant declares, and those a node in this cluster
   // actually reports. The intersection is what is worth offering.
   supportedGPUs?: string[];
@@ -81,13 +86,18 @@ export function DeploySettings({
   const on = effective(form);
 
   return (
-    <>
+    // One disabled fieldset rather than a disabled prop threaded through every
+    // control: the browser already disables everything inside one, and a form
+    // that is read-only in fifteen places is read-only in fourteen after the
+    // next field is added.
+    <fieldset disabled={readOnly} className="min-w-0 space-y-5">
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Deploy settings</CardTitle>
           <p className="text-sm text-muted-foreground">
-            Engine flags, probes and the image come from the catalog. Pick another variant to
-            change those.
+            {readOnly
+              ? "What this revision ran with, exactly as it ran. A rollback re-applies it verbatim — to change any of it, upgrade instead."
+              : "Engine flags, probes and the image come from the catalog. Pick another variant to change those."}
           </p>
         </CardHeader>
         {/* One label column for every row, toggles included. Mixing
@@ -100,10 +110,23 @@ export function DeploySettings({
             in the box it applies to; the label carries the longer note for the
             rows whose control is a switch and has no box to put it in. */}
         <CardContent className="divide-y pt-0">
-          <Row label="Service ID" note="names the helm release, the route, the scaler and the SLO">
+          {/* Locked on an upgrade, like the namespace: the route, the scaler
+              and the SLO are all named after it, and changing it renames none
+              of them -- helm renders a second set and orphans the first. The
+              server refuses it either way; disabling the box is so nobody
+              types a rename and reads the refusal as a bug. */}
+          <Row
+            label="Service ID"
+            note={
+              lockIdentity
+                ? "fixed for the life of the release: the route, the scaler and the SLO are named after it"
+                : "names the helm release, the route, the scaler and the SLO"
+            }
+          >
             <Input
               value={form.serviceId}
               onChange={set("serviceId")}
+              disabled={lockIdentity}
               placeholder={serviceIdPlaceholder}
             />
           </Row>
@@ -251,7 +274,7 @@ export function DeploySettings({
           />
         </CardContent>
       </Card>
-    </>
+    </fieldset>
   );
 }
 

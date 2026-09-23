@@ -1,21 +1,12 @@
-import { Fragment, useState } from "react";
+import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, TriangleAlert } from "lucide-react";
-import {
-  api,
-  deployApi,
-  type RevisionDiff,
-  type PlanStatus,
-  type ReleaseStatus as Status,
-} from "@/lib/api";
+import { api, deployApi, type PlanStatus, type ReleaseStatus as Status } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, Input } from "@/components/ui/input";
-import { Code } from "@/components/ui/code";
-import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
-import { DiffView } from "@/components/DiffView";
 import { Provenance } from "@/components/Provenance";
 import { ReleaseStatus } from "@/components/ReleaseStatus";
 import { ErrorState, Loading } from "@/components/States";
@@ -68,11 +59,14 @@ export function DeploymentDetail() {
           </p>
         </div>
         <div className="flex gap-2">
+          {/* Revisions are rows in the log now: an applied revision and the
+              run that produced it are one event, and rolling back starts from
+              the row that records it. */}
           <Link
             to={`/runs?namespace=${encodeURIComponent(namespace)}&release=${encodeURIComponent(release)}`}
           >
             <Button size="sm" variant="outline">
-              History
+              History &amp; rollback
             </Button>
           </Link>
           {plan.data && (
@@ -103,10 +97,6 @@ export function DeploymentDetail() {
             <Provenance plan={plan.data} />
           </CardContent>
         </Card>
-      )}
-
-      {cluster.data?.allowDeploy && s.exists && (
-        <Revisions namespace={namespace} release={release} live={s.revision} />
       )}
 
       {cluster.data?.allowDeploy && (
@@ -150,6 +140,9 @@ function InstallStatus({ status }: { status: Status }) {
               <Row label="Recorded revision" value={p.revision ? String(p.revision) : undefined} />
               <Row label="Started" value={p.startedAt} />
               <Row label="Updated" value={p.updatedAt} />
+              {/* Why, in the words of whoever did it. Written here as well as
+                  to the log, so it survives losing the database. */}
+              <Row label="Note" value={p.note} />
             </>
           )}
           <Row label="Route" value={status.route} />
@@ -172,218 +165,6 @@ function InstallStatus({ status }: { status: Status }) {
         )}
       </CardContent>
     </Card>
-  );
-}
-
-// Revisions is what this release can be rolled back to: one archived workspace
-// per applied revision, read from the cluster. A rollback re-applies one
-// forward as a new revision -- helm's own rollback does the same -- so the plan
-// beside the release keeps describing what is running.
-function Revisions({
-  namespace,
-  release,
-  live,
-}: {
-  namespace: string;
-  release: string;
-  live: number;
-}) {
-  const [diff, setDiff] = useState<RevisionDiff | null>(null);
-  // Every revision whose values are open. Several at once, because two
-  // revisions' values are read side by side or not at all.
-  const [openValues, setOpenValues] = useState<number[]>([]);
-  const qc = useQueryClient();
-
-  const toggleValues = (rev: number) =>
-    setOpenValues((open) =>
-      open.includes(rev) ? open.filter((n) => n !== rev) : [...open, rev],
-    );
-
-  // Optional, exactly as on the deploy and upgrade pipelines. Running it also
-  // pins the rollback to the revision it saw.
-  const diffM = useMutation({
-    mutationFn: (to: number) => deployApi.diffRevision(namespace, release, to),
-    onSuccess: setDiff,
-  });
-
-  const revs = useQuery({
-    queryKey: ["revisions", namespace, release],
-    queryFn: () => api.revisions(namespace, release),
-  });
-
-  const roll = useMutation({
-    // The revision the diff saw when there is one, else the one this page
-    // rendered. Either way the rollback asserts it has not moved.
-    mutationFn: (to: number) =>
-      deployApi.rollback(namespace, release, to, diff?.toRevision === to ? diff.revision : live),
-    onSettled: () => {
-      setDiff(null);
-      qc.invalidateQueries({ queryKey: ["status", namespace, release] });
-      qc.invalidateQueries({ queryKey: ["revisions", namespace, release] });
-      qc.invalidateQueries({ queryKey: ["release-plan", namespace, release] });
-    },
-  });
-
-  const rows = revs.data?.revisions ?? [];
-  const archived = rows.filter((r) => !r.current);
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Revisions</CardTitle>
-        <p className="text-sm text-muted-foreground">
-          Diff first: rolling back re-applies that revision's plan as a new one, with the
-          image, chart and engine flags it had — not whatever the catalog says that version
-          is today.
-        </p>
-      </CardHeader>
-      <CardContent className="space-y-2">
-        {revs.error && <ErrorState what="the revisions" error={revs.error} />}
-        {diffM.error && <ErrorState what="the diff" error={diffM.error} />}
-        {roll.error && <ErrorState what="the rollback" error={roll.error} />}
-
-        {revs.isPending ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
-        ) : archived.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            Nothing to roll back to yet — a plan is kept each time this release is applied.
-          </p>
-        ) : (
-          // A table rather than a row of flex boxes: a "current" badge and a
-          // rollback button are not the same width, and only shared columns
-          // keep the two action cells from stepping about from row to row.
-          <Table>
-            <TableBody>
-              {rows.map((r) => (
-                <Fragment key={r.revision}>
-                  <TableRow>
-                    <TableCell className="pl-0 text-sm tabular-nums whitespace-nowrap">
-                      rev {r.revision}
-                    </TableCell>
-                    <TableCell className="w-full text-sm text-muted-foreground">
-                      {r.model}
-                      {r.version && ` v${r.version}`}
-                      {r.variant && ` · ${r.variant}`}
-                      {r.chart && ` · ${r.chart}`}
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap">
-                      <Button size="sm" variant="ghost" onClick={() => toggleValues(r.revision)}>
-                        {openValues.includes(r.revision) ? "Hide values" : "Values"}
-                      </Button>
-                    </TableCell>
-                    <TableCell className="pr-0 text-right whitespace-nowrap">
-                      {r.current ? (
-                        <Badge variant="success">current</Badge>
-                      ) : diff?.toRevision === r.revision && diff.changed ? (
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          onClick={() => roll.mutate(r.revision)}
-                          disabled={roll.isPending}
-                        >
-                          {roll.isPending ? "Rolling back…" : "Roll back"}
-                        </Button>
-                      ) : (
-                        // A diff that came back empty never offers the rollback:
-                        // the revision is what is already running, so applying it
-                        // forward would be a new revision with nothing in it.
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => {
-                            setDiff(null);
-                            diffM.mutate(r.revision);
-                          }}
-                          disabled={diffM.isPending || roll.isPending}
-                        >
-                          {diffM.isPending && diffM.variables === r.revision
-                            ? "Diffing…"
-                            : diff?.toRevision === r.revision
-                              ? "Diff again"
-                              : "Roll back"}
-                        </Button>
-                      )}
-                    </TableCell>
-                  </TableRow>
-
-                  {diff?.toRevision === r.revision && (
-                    <TableRow>
-                      <TableCell colSpan={4} className="space-y-1 px-0">
-                        <div className="flex flex-wrap items-center gap-2 text-xs">
-                          {diff.changed ? (
-                            <Badge variant="warning">changes</Badge>
-                          ) : (
-                            <Badge variant="success">no changes</Badge>
-                          )}
-                          <span className="text-muted-foreground">
-                            against live revision {diff.revision}
-                          </span>
-                        </div>
-                        {diff.output.trim() ? (
-                          <DiffView output={diff.output} />
-                        ) : (
-                          <p className="text-sm text-muted-foreground">
-                            Nothing would change — this revision matches what is running.
-                          </p>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  )}
-
-                  {openValues.includes(r.revision) && (
-                    <TableRow>
-                      <TableCell colSpan={4} className="px-0">
-                        <RevisionValues
-                          namespace={namespace}
-                          release={release}
-                          revision={r.revision}
-                        />
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </Fragment>
-              ))}
-            </TableBody>
-          </Table>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-// RevisionValues is what helm holds for one revision, rather than what swiss
-// composed. A revision's values never change once written, so what is read is
-// kept for as long as the page lives.
-function RevisionValues({
-  namespace,
-  release,
-  revision,
-}: {
-  namespace: string;
-  release: string;
-  revision: number;
-}) {
-  const values = useQuery({
-    queryKey: ["revision-values", namespace, release, revision],
-    queryFn: () => api.revisionValues(namespace, release, revision),
-    staleTime: Infinity,
-  });
-
-  return (
-    <div className="space-y-1">
-      <div className="text-xs tracking-wide text-muted-foreground uppercase">
-        helm values · revision {revision}
-      </div>
-      {values.isPending ? (
-        <p className="text-sm text-muted-foreground">Reading values…</p>
-      ) : values.error ? (
-        <ErrorState what="the values" error={values.error} />
-      ) : (
-        <Code lang="yaml" className="max-h-96 overflow-auto">
-          {values.data?.values.trim() || "# helm recorded no values here"}
-        </Code>
-      )}
-    </div>
   );
 }
 

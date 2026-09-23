@@ -21,6 +21,11 @@ type rollbackRequest struct {
 	// likely to be acting on the same release -- so it asserts that nothing
 	// moved rather than silently overwriting whatever landed in between.
 	ExpectRevision int `json:"expectRevision"`
+	// Note is why the release is going back, in the operator's own words. A
+	// rollback is the operation whose reason is least recoverable from the
+	// diff: the plan says what came back, never what was wrong with what it
+	// replaced.
+	Note string `json:"note,omitempty"`
 }
 
 type revision struct {
@@ -108,6 +113,42 @@ func (s *Server) handleRevisionValues(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleRevisionPlan answers with the plan that produced a revision, read from
+// its archive.
+//
+// It is what the rollback page shows in place of the upgrade form: the settings
+// that would come back, rendered read-only, because a rollback re-applies that
+// plan verbatim. A form beside a rollback that could be edited would be an
+// upgrade wearing a rollback's name.
+//
+// Read-only, so it is not behind allowDeploy -- it reads a Secret and composes
+// nothing.
+func (s *Server) handleRevisionPlan(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := contextWithTimeout(r, 30*time.Second)
+	defer cancel()
+
+	ns, release := r.PathValue("namespace"), r.PathValue("release")
+	rev, err := strconv.Atoi(r.PathValue("revision"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "revision must be a number")
+		return
+	}
+	// The live revision has no archive: its plan is the one beside the release,
+	// and it is archived only when the next apply overwrites it.
+	if st, err := exec.Lookup(ctx, s.probe, ns, release); err == nil && st.Exists && st.Revision == rev {
+		if p, err := s.currentPlan(ctx, ns, release); err == nil {
+			writeJSON(w, http.StatusOK, p)
+			return
+		}
+	}
+	p, err := s.archivedPlan(ctx, ns, release, rev)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
 // handleRevisionDiff renders what rolling back to a revision would change,
 // against the release as it is now. Optional, like every other diff here -- and
 // like every other diff it carries back the live revision it saw, which is what
@@ -185,7 +226,7 @@ func (s *Server) handleRollback(w http.ResponseWriter, r *http.Request) {
 			"expectRevision is required: send the revision you were looking at, so a rollback cannot overwrite an apply that landed in between")
 		return
 	}
-	s.applyPlan(ctx, w, p, exec.Upgrade, req.ExpectRevision, "rollback")
+	s.applyPlan(ctx, w, p, exec.Upgrade, req.ExpectRevision, "rollback", req.Note)
 }
 
 // archivedPlan reads the workspace that produced a revision, and checks it

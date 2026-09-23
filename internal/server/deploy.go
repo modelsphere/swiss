@@ -62,6 +62,10 @@ type applyRequest struct {
 	// diff sends. The diff is optional, so the lock it carries is optional with
 	// it; the caller is giving up the concurrency check, not evading one.
 	ExpectRevision int `json:"expectRevision,omitempty"`
+	// Note is why this is being applied, in the operator's own words. Optional,
+	// recorded in the audit log and beside the release, and read by nothing --
+	// a diff says what changed, and only a person can say why.
+	Note string `json:"note,omitempty"`
 }
 
 func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
@@ -236,8 +240,15 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 	}
 	values.Merge(out.Overrides, req.Overrides, values.LayerForm, nil)
 	out.EditsYAML = req.EditsYAML
-	if req.ServiceID != "" {
-		out.ServiceID = req.ServiceID
+	// serviceId is identity, not a setting: the route, the scaler and the SLO
+	// are all named after it. Changing it on an upgrade renames none of them --
+	// helm renders a new set under the new name and orphans the old ones, on a
+	// release that keeps its name either way. Refused rather than ignored, so a
+	// caller that meant it learns that a new service is a new deploy.
+	if req.ServiceID != "" && req.ServiceID != serviceIDOf(prev) {
+		return req, fmt.Errorf(
+			"serviceId cannot change on an upgrade: %s is deployed as %q, not %q -- deploy a new release to run a second service",
+			prev.Release.Name, serviceIDOf(prev), req.ServiceID)
 	}
 	if req.LocalPath != "" {
 		out.LocalPath = req.LocalPath
@@ -246,6 +257,20 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 		out.GPUProducts = req.GPUProducts
 	}
 	return out, nil
+}
+
+// serviceIDOf is the identity a release is deployed under. Read from the
+// composed values rather than the form layer alone: a plan whose form never set
+// one still runs under whatever the catalog or the chart named it, and that is
+// the name an upgrade has to keep. Falls back to the release name, which is
+// what a chart with no serviceId of its own uses.
+func serviceIDOf(p *plan.Plan) string {
+	if v, ok := values.Get(p.Values(), "serviceId"); ok {
+		if s, ok := v.(string); ok && s != "" {
+			return s
+		}
+	}
+	return p.Release.Name
 }
 
 // currentPlan is the plan a release was last deployed from, read from the
@@ -351,13 +376,13 @@ func (s *Server) handleApply(mode exec.Mode) http.HandlerFunc {
 			return
 		}
 
-		s.applyPlan(ctx, w, p, mode, req.ExpectRevision, actionName(mode))
+		s.applyPlan(ctx, w, p, mode, req.ExpectRevision, actionName(mode), req.Note)
 	}
 }
 
 // applyPlan is the cluster-changing half, shared by apply, install and
 // rollback. They differ in where the plan came from and in nothing after that.
-func (s *Server) applyPlan(ctx context.Context, w http.ResponseWriter, p *plan.Plan, mode exec.Mode, expectRevision int, action string) {
+func (s *Server) applyPlan(ctx context.Context, w http.ResponseWriter, p *plan.Plan, mode exec.Mode, expectRevision int, action, note string) {
 	st, err := exec.Lookup(ctx, s.probe, p.Release.Namespace, p.Release.Name)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
@@ -388,7 +413,7 @@ func (s *Server) applyPlan(ctx context.Context, w http.ResponseWriter, p *plan.P
 	// reconciliation view must never say about swissd's own work.
 	started := time.Now()
 	if err := s.writePlan(ctx, p, planStatus{
-		Phase: phaseApplying, Action: action, StartedAt: stamp(started),
+		Phase: phaseApplying, Action: action, StartedAt: stamp(started), Note: note,
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, "plan not recorded, nothing applied: "+err.Error())
 		return
@@ -399,14 +424,22 @@ func (s *Server) applyPlan(ctx context.Context, w http.ResponseWriter, p *plan.P
 	defer cancel()
 
 	res, applyErr := s.runner().Apply(ctx, p)
-	s.record(ctx, action, p, res, applyErr, started)
 
+	// Looked up before the audit write, so the row can name the revision this
+	// produced -- which is what makes the log a list of rollback targets rather
+	// than a list of timestamps. A failed apply names none: helm may have left
+	// a revision behind, but it is not one to go back to.
 	after, _ := exec.Lookup(ctx, s.probe, p.Release.Namespace, p.Release.Name)
+	produced := after.Revision
+	if applyErr != nil {
+		produced = 0
+	}
+	s.record(ctx, action, p, res, applyErr, started, note, produced)
 
 	status := planStatus{
 		Phase: phaseApplied, Action: action,
 		StartedAt: stamp(started), UpdatedAt: stamp(time.Now()),
-		Revision: after.Revision,
+		Revision: after.Revision, Note: note,
 	}
 	if applyErr != nil {
 		status.Phase, status.Error = phaseFailed, applyErr.Error()
@@ -468,7 +501,7 @@ func (s *Server) handleUninstall(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	res, uninstallErr := s.runner().Uninstall(ctx, ns, release)
-	s.recordRelease(ctx, "uninstall", ns, release, planHash, res, uninstallErr, started)
+	s.recordRelease(ctx, "uninstall", ns, release, planHash, res, uninstallErr, started, "", 0)
 	if uninstallErr != nil {
 		writeError(w, http.StatusInternalServerError, uninstallErr.Error())
 		return
@@ -535,6 +568,10 @@ type planStatus struct {
 	StartedAt string `yaml:"startedAt,omitempty" json:"startedAt,omitempty"`
 	UpdatedAt string `yaml:"updatedAt,omitempty" json:"updatedAt,omitempty"`
 	Error     string `yaml:"error,omitempty" json:"error,omitempty"`
+	// Note is why this was done. Written here as well as to the audit log
+	// because etcd is the half that is backed up: the reason a release was
+	// rolled back outlives the sqlite file it was also recorded in.
+	Note string `yaml:"note,omitempty" json:"note,omitempty"`
 }
 
 func stamp(t time.Time) string { return t.UTC().Format(time.RFC3339) }
@@ -658,20 +695,21 @@ func (s *Server) runner() exec.Runner {
 	return exec.Runner{HelmBin: s.cfg.Server.HelmBin, HelmfileBin: s.cfg.Server.HelmfileBin}
 }
 
-func (s *Server) record(ctx context.Context, action string, p *plan.Plan, res exec.Result, err error, started time.Time) {
-	s.recordRelease(ctx, action, p.Release.Namespace, p.Release.Name, p.Hash, res, err, started)
+func (s *Server) record(ctx context.Context, action string, p *plan.Plan, res exec.Result, err error, started time.Time, note string, revision int) {
+	s.recordRelease(ctx, action, p.Release.Namespace, p.Release.Name, p.Hash, res, err, started, note, revision)
 }
 
 // recordRelease is the audit write for operations that name a release rather
 // than a plan. Uninstall is the only one: it needs no plan to run, so it cannot
 // always supply a hash, and an empty one is honest rather than missing.
-func (s *Server) recordRelease(ctx context.Context, action, namespace, release, planHash string, res exec.Result, err error, started time.Time) {
+func (s *Server) recordRelease(ctx context.Context, action, namespace, release, planHash string, res exec.Result, err error, started time.Time, note string, revision int) {
 	if s.store == nil {
 		return
 	}
 	run := store.Run{
 		Namespace: namespace, Release: release,
 		Action: action, PlanHash: planHash, Changed: res.Changed, Output: res.Output,
+		Note: note, Revision: revision,
 		StartedAt: started.UTC().Format(time.RFC3339), EndedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 	if err != nil {

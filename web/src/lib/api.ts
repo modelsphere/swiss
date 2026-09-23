@@ -130,6 +130,13 @@ export interface Run {
   // Only on a single-run fetch: the list omits it, because helmfile output runs
   // to tens of kilobytes a row.
   output?: string;
+  // Why it was done, typed by whoever did it. Nothing derives it -- a diff says
+  // what changed and only a person can say why.
+  note?: string;
+  // The revision this left the release at. Absent for an operation that
+  // produced none: a failed apply, an uninstall, or a row written before
+  // swissd recorded it. A row that has one is a rollback target.
+  revision?: number;
   startedAt: string;
   endedAt: string;
 }
@@ -310,6 +317,13 @@ export const api = {
     get<RevisionValues>(
       `/api/releases/${encodeURIComponent(ns)}/${encodeURIComponent(release)}/revisions/${revision}/values`,
     ),
+  // The plan a revision was applied from, read from its archive. What the
+  // rollback page shows: the settings that would come back, which are not what
+  // recomposing that version against today's catalog would produce.
+  revisionPlan: (ns: string, release: string, revision: number) =>
+    get<Plan>(
+      `/api/releases/${encodeURIComponent(ns)}/${encodeURIComponent(release)}/revisions/${revision}/plan`,
+    ),
   releasePlan: (namespace: string, release: string) =>
     get<Plan>(
       `/api/releases/${encodeURIComponent(namespace)}/${encodeURIComponent(release)}/plan`,
@@ -397,6 +411,9 @@ export interface PlanStatus {
   startedAt?: string;
   updatedAt?: string;
   error?: string;
+  // Kept beside the release as well as in the audit log, so the reason for the
+  // last change outlives the database it was also written to.
+  note?: string;
 }
 
 export interface ReleaseStatus {
@@ -542,9 +559,10 @@ export const deployApi = {
   // expectRevision is the optimistic lock a diff computed. It is left out when
   // no diff was run, and the server reads a missing revision as asserting
   // nothing rather than as revision zero.
-  apply: (planHash: string, expectRevision?: number) =>
-    post<ApplyResult>("/api/apply", { planHash, expectRevision }),
-  install: (planHash: string) => post<ApplyResult>("/api/install", { planHash }),
+  apply: (planHash: string, expectRevision?: number, note?: string) =>
+    post<ApplyResult>("/api/apply", { planHash, expectRevision, note }),
+  install: (planHash: string, note?: string) =>
+    post<ApplyResult>("/api/install", { planHash, note }),
   probe: (ns: string, release: string, auth: EntrypointAuth = {}) =>
     post<ProbeResult>(
       `/api/releases/${encodeURIComponent(ns)}/${encodeURIComponent(release)}/probe`,
@@ -567,10 +585,16 @@ export const deployApi = {
   // expectRevision is what the page was showing. A rollback runs when something
   // is already wrong, which is when a second operator is most likely to be
   // acting on the same release, so it refuses rather than overwriting theirs.
-  rollback: (ns: string, release: string, toRevision: number, expectRevision: number) =>
+  rollback: (
+    ns: string,
+    release: string,
+    toRevision: number,
+    expectRevision: number,
+    note?: string,
+  ) =>
     post<ApplyResult>(
       `/api/releases/${encodeURIComponent(ns)}/${encodeURIComponent(release)}/rollback`,
-      { toRevision, expectRevision },
+      { toRevision, expectRevision, note },
     ),
   uninstall: (ns: string, release: string) =>
     del<UninstallResult>(`/api/releases/${encodeURIComponent(ns)}/${encodeURIComponent(release)}`),
