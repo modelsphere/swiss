@@ -26,8 +26,6 @@ type Input struct {
 	Release   string
 	Namespace string
 	Overrides values.Tree
-	// Edits bypass the ownership check on purpose: they are the escape hatch
-	// for a key no layer claims, or one a deploy must override anyway.
 	Edits values.Tree
 }
 

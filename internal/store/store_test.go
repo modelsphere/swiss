@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"path/filepath"
 	"testing"
 
@@ -119,74 +118,4 @@ func TestReleasesAreKeyedByNamespaceAndName(t *testing.T) {
 	if len(seen) != 2 {
 		t.Fatalf("the same release name in two namespaces is two releases: %+v", runs)
 	}
-}
-
-// A swissd upgrade must not need a fresh volume: the columns added after the
-// first release are added to the database that is already on the PVC, with the
-// rows that are already in it left alone.
-func TestOpenAddsColumnsToAnOlderDatabase(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "old.db")
-
-	// The schema as it shipped before notes and revisions existed.
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`
-CREATE TABLE runs (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  namespace  TEXT NOT NULL,
-  release    TEXT NOT NULL,
-  action     TEXT NOT NULL,
-  plan_hash  TEXT NOT NULL,
-  actor      TEXT NOT NULL DEFAULT '',
-  changed    INTEGER NOT NULL DEFAULT 0,
-  error      TEXT NOT NULL DEFAULT '',
-  output     TEXT NOT NULL DEFAULT '',
-  started_at TEXT NOT NULL,
-  ended_at   TEXT NOT NULL
-);
-INSERT INTO runs (namespace, release, action, plan_hash, started_at, ended_at)
-VALUES ('modelforge', 'glm-53', 'apply', 'sha256:old', '2026-01-01T00:00:00Z', '2026-01-01T00:01:00Z');
-`); err != nil {
-		t.Fatal(err)
-	}
-	db.Close()
-
-	s, err := Open(path)
-	if err != nil {
-		t.Fatalf("an existing database must open: %v", err)
-	}
-	defer s.Close()
-
-	ctx := context.Background()
-	if _, err := s.RecordRun(ctx, Run{
-		Namespace: "modelforge", Release: "glm-53", Action: "rollback",
-		PlanHash: "sha256:new", Note: "b300s were OOMing", Revision: 8,
-		StartedAt: "2026-01-02T00:00:00Z", EndedAt: "2026-01-02T00:01:00Z",
-	}); err != nil {
-		t.Fatalf("record after migrate: %v", err)
-	}
-
-	runs, err := s.Runs(ctx, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(runs) != 2 {
-		t.Fatalf("the rows that were already there must survive, got %d", len(runs))
-	}
-	if runs[0].Note != "b300s were OOMing" || runs[0].Revision != 8 {
-		t.Errorf("new columns not stored: %+v", runs[0])
-	}
-	// The old row has no note, which is what a default is for.
-	if runs[1].Note != "" || runs[1].Revision != 0 {
-		t.Errorf("an old row must read back empty, got %+v", runs[1])
-	}
-
-	// Opening twice must not try to add the columns again.
-	again, err := Open(path)
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
-	again.Close()
 }

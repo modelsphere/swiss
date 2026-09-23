@@ -48,8 +48,31 @@ config:
   # How long a fetched catalog or profile is reused before refetching.
   cacheTTL: 60s
 
-  # Gates every endpoint that changes a cluster. Must be set together with
-  # rbac.allowDeploy below; on its own it only produces failing applies.
+  # Gates every endpoint that changes a cluster, and grants the RBAC those
+  # endpoints need -- one switch, so swissd cannot accept an apply it has no
+  # permission to perform. Needs persistence and one replica.
+  #
+  # The grant is everything the sglang and vllm charts render, in the namespaces
+  # rbac.scope selects, and nothing else:
+  #
+  #   core                      configmaps, services, serviceaccounts, secrets
+  #   apps                      deployments
+  #   policy                    poddisruptionbudgets
+  #   rbac                      roles, rolebindings   (the cart subchart)
+  #   monitoring.coreos.com     servicemonitors
+  #   leaderworkerset.x-k8s.io  leaderworkersets
+  #   autoscaling.4pd.io        llmscalers
+  #   inference.x-k8s.io        llmslorequirements
+  #   routing.gpucluster.io     modelroutes
+  #
+  # roles/rolebindings means swissd can create RBAC. Kubernetes bounds that to
+  # what swissd already holds -- which is why the grant also includes
+  # coordination.k8s.io leases and pods watch/patch: the cart subchart's HA Role
+  # hands those to CART, and a subject cannot grant what it lacks. swissd never
+  # uses them itself. Still the widest thing this chart does.
+  #
+  # Requires rbac.create; with RBAC managed outside this chart the permissions
+  # are yours to wire.
   allowDeploy: false
 
   # Drafts, plans and the audit log. Never the source of truth for what is
@@ -142,28 +165,6 @@ rbac:
     # - modelforge
     # - kimi
 
-  # Deploy permissions: everything the sglang and vllm charts actually render,
-  # and nothing else. Off by default -- an unused permission is only ever a
-  # liability.
-  #
-  # Granted when on, in the namespaces above:
-  #   core                      configmaps, services, serviceaccounts, secrets
-  #   apps                      deployments
-  #   policy                    poddisruptionbudgets
-  #   rbac                      roles, rolebindings   (the cart subchart)
-  #   monitoring.coreos.com     servicemonitors
-  #   leaderworkerset.x-k8s.io  leaderworkersets
-  #   autoscaling.4pd.io        llmscalers
-  #   inference.x-k8s.io        llmslorequirements
-  #   routing.gpucluster.io     modelroutes
-  #
-  # roles/rolebindings means swissd can create RBAC. Kubernetes bounds that to
-  # what swissd already holds -- which is why the grant also includes
-  # coordination.k8s.io leases and pods watch/patch: the cart subchart's HA
-  # Role hands those to CART, and a subject cannot grant what it lacks. swissd
-  # never uses them itself. Still the widest thing here.
-  allowDeploy: false
-
 serviceAccount:
   create: true
   name: ""
@@ -248,7 +249,7 @@ tmpSizeLimit: 1Gi
 # ReadWriteOnce and one replica: sqlite is a single writer.
 persistence:
   enabled: true
-  size: 2Gi
+  size: 10Gi
   storageClass: ""
   existingClaim: ""
 

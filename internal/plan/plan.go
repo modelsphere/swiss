@@ -28,17 +28,6 @@ type Plan struct {
 	Engine  string    `json:"engine"`
 	Profile string    `json:"profile"`
 
-	// Overrides is the deploy form's layer, exactly as the user gave it --
-	// kept separate from Values so a plan can be re-composed against a newer
-	// catalog without the user's intent having been flattened away.
-	Overrides values.Tree `json:"overrides,omitempty"`
-
-	// Edits are the escape hatch, applied after every layer and exempt from
-	// ownership. Kept apart from Overrides so an upgrade can carry them forward
-	// or drop them deliberately, and so provenance can show which values came
-	// from a human editing the plan rather than from the form.
-	Edits values.Tree `json:"edits,omitempty"`
-
 	// Layers is the deploy: one override document per layer, each exactly as
 	// that layer wrote it. Applied in Layers order, last writer wins -- which is
 	// helm's own values-file semantics, so helm merging these files lands on the
@@ -244,9 +233,6 @@ func (p *Plan) ValuesFiles() []string {
 		if _, ok := present[layer]; ok {
 			out = append(out, layer+".yaml")
 		}
-	}
-	if len(out) == 0 {
-		return []string{"values.yaml"}
 	}
 	return out
 }

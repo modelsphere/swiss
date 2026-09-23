@@ -1,6 +1,3 @@
-{{- if and .Values.config.allowDeploy (not .Values.rbac.allowDeploy) }}
-{{- fail "config.allowDeploy is on but rbac.allowDeploy is off: swissd would accept applies it has no permission to perform" }}
-{{- end }}
 {{- if and .Values.config.allowDeploy (not .Values.persistence.enabled) (not .Values.persistence.existingClaim) }}
 {{- fail "config.allowDeploy needs persistence: the database holds the audit log, which is not cluster state and cannot be rebuilt, plus the release -> plan mapping apply and upgrade read. Set persistence.enabled or persistence.existingClaim." }}
 {{- end }}

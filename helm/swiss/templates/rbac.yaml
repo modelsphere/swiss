@@ -159,7 +159,7 @@ rules:
   - apiGroups: [""]
     resources: ["secrets", "configmaps", "pods"]
     verbs: ["get", "list"]
-  {{- if .Values.rbac.allowDeploy }}
+  {{- if .Values.config.allowDeploy }}
   {{- include "swiss.deployRules" . | nindent 2 }}
   {{- end }}
 ---
@@ -201,7 +201,7 @@ rules:
   - apiGroups: [""]
     resources: ["secrets", "configmaps", "pods"]
     verbs: ["get", "list"]
-  {{- if $.Values.rbac.allowDeploy }}
+  {{- if $.Values.config.allowDeploy }}
   {{- include "swiss.deployRules" $ | nindent 2 }}
   {{- end }}
 ---

@@ -62,16 +62,8 @@ func parsePlanSummary(raw []byte) (planSummary, error) {
 	}, nil
 }
 
-// chartRef names a chart the way helm does. A plan written before the chart was
-// recorded has neither half, and an empty string says so rather than a stray
-// dash pretending to be a name.
+// chartRef names a chart the way helm does.
 func chartRef(name, version string) string {
-	switch {
-	case name == "":
-		return ""
-	case version == "":
-		return name
-	}
 	return name + "-" + version
 }
 

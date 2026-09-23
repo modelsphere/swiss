@@ -9,7 +9,6 @@ package values
 // not a veto but a report, so plan.Shadowed lists the values one layer set and a
 // later one overrode.
 const (
-	LayerChart   = "chart"   // the chart's own values.yaml; never written by us
 	LayerCatalog = "catalog" // what makes this model run
 	LayerSite    = "site"    // what makes it work here
 	LayerDerived = "derived" // computed from catalog x site; a provenance label only

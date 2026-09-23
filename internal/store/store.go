@@ -54,51 +54,6 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE INDEX IF NOT EXISTS runs_release ON runs (namespace, release, id DESC);
 `
 
-// added are columns that arrived after the first release. The CREATE above
-// covers a new database; an existing one is altered here, because sqlite has no
-// ADD COLUMN IF NOT EXISTS and a swissd upgrade must not need a fresh volume.
-var added = []struct{ column, ddl string }{
-	{"note", `ALTER TABLE runs ADD COLUMN note TEXT NOT NULL DEFAULT ''`},
-	{"revision", `ALTER TABLE runs ADD COLUMN revision INTEGER NOT NULL DEFAULT 0`},
-}
-
-// migrate adds those columns, reading what is there first rather than running
-// each ALTER and ignoring the error it returns: "duplicate column" and a real
-// failure are both errors, and telling them apart by message is how a broken
-// database gets opened as a working one.
-func migrate(db *sql.DB) error {
-	rows, err := db.Query(`PRAGMA table_info(runs)`)
-	if err != nil {
-		return err
-	}
-	have := map[string]bool{}
-	for rows.Next() {
-		var cid int
-		var name, typ string
-		var notNull int
-		var dflt sql.NullString
-		var pk int
-		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
-			rows.Close()
-			return err
-		}
-		have[name] = true
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	for _, c := range added {
-		if have[c.column] {
-			continue
-		}
-		if _, err := db.Exec(c.ddl); err != nil {
-			return fmt.Errorf("add runs.%s: %w", c.column, err)
-		}
-	}
-	return nil
-}
-
 func Open(path string) (*Store, error) {
 	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)")
 	if err != nil {
@@ -109,11 +64,7 @@ func Open(path string) (*Store, error) {
 	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("migrate: %w", err)
-	}
-	if err := migrate(db); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("migrate: %w", err)
+		return nil, fmt.Errorf("schema: %w", err)
 	}
 	return &Store{db: db}, nil
 }

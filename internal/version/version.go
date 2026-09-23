@@ -6,4 +6,4 @@
 // together, and a test here refuses a commit where they disagree.
 package version
 
-const Version = "0.4.3"
+const Version = "0.4.4"
