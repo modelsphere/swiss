@@ -17,7 +17,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -28,6 +30,12 @@ import (
 // only one deployment is where the bugs would live.
 type Kube struct {
 	client kubernetes.Interface
+	// meta lists object metadata without object contents. Plan ConfigMaps carry
+	// the whole deploy -- every values document -- so listing them through the
+	// typed client to learn their names would pull megabytes to render a page of
+	// twenty-five. Nil outside production; ManagedRefs says so rather than
+	// silently falling back to the expensive path.
+	meta metadata.Interface
 	// SwissPlanPrefix names the ConfigMap holding a release's plan. It is read
 	// alongside the release so a reconciliation view can tell a Swiss-managed
 	// release from one installed by hand.
@@ -63,12 +71,21 @@ func NewKube(kubeconfig, context_ string, namespaces ...string) (*Kube, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Kube{client: cs, SwissPlanPrefix: PlanConfigMapPrefix, Namespaces: namespaces}, nil
+	md, err := metadata.NewForConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &Kube{client: cs, meta: md, SwissPlanPrefix: PlanConfigMapPrefix, Namespaces: namespaces}, nil
 }
 
 // NewKubeWithClient is for tests, which supply a fake clientset.
 func NewKubeWithClient(c kubernetes.Interface) *Kube {
 	return &Kube{client: c, SwissPlanPrefix: PlanConfigMapPrefix}
+}
+
+// NewKubeWithClients is for tests that exercise the metadata-only listing.
+func NewKubeWithClients(c kubernetes.Interface, md metadata.Interface) *Kube {
+	return &Kube{client: c, meta: md, SwissPlanPrefix: PlanConfigMapPrefix}
 }
 
 // SelfNamespace is the namespace this process runs in: POD_NAMESPACE when the
@@ -224,6 +241,102 @@ func (k *Kube) planFor(ctx context.Context, namespace, release string) (files ma
 		return nil, nil, fmt.Errorf("configmap %s/%s%s has no %s", namespace, k.SwissPlanPrefix, release, planKey)
 	}
 	return cm.Data, []byte(cm.Data[statusKey]), nil
+}
+
+var configMapGVR = schema.GroupVersionResource{Version: "v1", Resource: "configmaps"}
+
+// ManagedRefs lists the plan ConfigMaps and reads the release name out of each
+// one's name. Metadata only: a plan ConfigMap holds every values document the
+// release was applied with, and none of that is needed to answer "which
+// releases did swiss deploy".
+//
+// The label is what swiss stamps on everything it writes, so the site profile
+// carries it too -- the name prefix is what separates a plan from it.
+func (k *Kube) ManagedRefs(ctx context.Context) ([]ManagedRef, error) {
+	if k.meta == nil {
+		return nil, fmt.Errorf("no metadata client: ManagedRefs needs one")
+	}
+	var out []ManagedRef
+	for _, ns := range k.scopes() {
+		list, err := k.meta.Resource(configMapGVR).Namespace(ns).List(ctx, metav1.ListOptions{
+			LabelSelector: "app.kubernetes.io/managed-by=swiss",
+		})
+		if err != nil {
+			return nil, fmt.Errorf("list plan configmaps in %s: %w", scopeName(ns), err)
+		}
+		for _, item := range list.Items {
+			name, ok := strings.CutPrefix(item.Name, k.SwissPlanPrefix)
+			if !ok || name == "" {
+				continue
+			}
+			out = append(out, ManagedRef{Namespace: item.Namespace, Name: name})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Namespace != out[j].Namespace {
+			return out[i].Namespace < out[j].Namespace
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out, nil
+}
+
+// ManagedRelease reads one release's plan and the live helm state beside it.
+//
+// The helm read is one labelled list in one namespace rather than a scan of
+// every release secret in scope: helm labels each of its secrets with the
+// release name, so the server sends back this release's revisions and nothing
+// else. Only the highest is decoded -- the older ones are whole rendered
+// manifests, gzipped, and nothing here reads them.
+func (k *Kube) ManagedRelease(ctx context.Context, namespace, name string) (*Release, error) {
+	files, status, err := k.planFor(ctx, namespace, name)
+	if err != nil {
+		return nil, err
+	}
+	rel := &Release{Namespace: namespace, Name: name, SwissFiles: files, SwissStatus: status}
+
+	secrets, err := k.client.CoreV1().Secrets(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: "owner=helm,name=" + name,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list helm release secrets for %s/%s: %w", namespace, name, err)
+	}
+	var newest *corev1.Secret
+	for i := range secrets.Items {
+		s := &secrets.Items[i]
+		if newest == nil || revisionOf(s) > revisionOf(newest) {
+			newest = s
+		}
+	}
+	if newest == nil {
+		// A plan with no release: an uninstall that did not finish cleaning up.
+		// The row still belongs in the view, which is how it gets noticed.
+		return rel, nil
+	}
+	live, err := decodeRelease(newest)
+	if err != nil {
+		// One unreadable release must not cost the row: the plan is what names
+		// it, and that decoded fine.
+		return rel, nil
+	}
+	live.SwissFiles, live.SwissStatus = files, status
+	return live, nil
+}
+
+// revisionOf reads the revision helm labels its secret with, falling back to
+// the ….v3 suffix on the name.
+func revisionOf(s *corev1.Secret) int {
+	if v, ok := s.Labels["version"]; ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	if i := strings.LastIndex(s.Name, ".v"); i >= 0 {
+		if n, err := strconv.Atoi(s.Name[i+2:]); err == nil {
+			return n
+		}
+	}
+	return 0
 }
 
 // scopes is the namespaces to list, or one cluster-wide scope.

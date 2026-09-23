@@ -161,22 +161,19 @@ func TestDeploymentsCarryTheRoute(t *testing.T) {
 	srv := testServer(t, probe)
 
 	_, body := get(t, srv, "/api/deployments")
-	var routed, untracked map[string]any
+	var routed map[string]any
 	for _, row := range body["deployments"].([]any) {
 		d := row.(map[string]any)
-		switch d["release"] {
-		case "r":
+		if d["release"] == "r" {
 			routed = d
-		case "by-hand":
-			untracked = d
+		}
+		// by-hand has no plan beside it, so it is not listed at all -- and
+		// therefore cannot carry an invented route to a path openresty never had.
+		if d["release"] == "by-hand" {
+			t.Errorf("an untracked release must not be listed: %v", d)
 		}
 	}
 	if routed == nil || routed["route"] != "glm-53" {
 		t.Fatalf("the row must carry the route: %v", routed)
-	}
-	// A release with no plan beside it has no route to report, and an invented
-	// one would send somebody to a path openresty never had.
-	if untracked == nil || untracked["route"] != nil {
-		t.Errorf("an untracked release has no route: %v", untracked)
 	}
 }

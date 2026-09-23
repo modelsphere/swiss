@@ -121,9 +121,9 @@ func TestCatalogModelEndpointFetchesTheEntry(t *testing.T) {
 	}
 }
 
-// The reconciliation view exists for this row: a release nobody's inventory
-// knows about is how two engines end up on one set of GPUs.
-func TestDeploymentsFlagsUntrackedReleases(t *testing.T) {
+// A helm release with no plan beside it is not swiss's to report. swissd can
+// see it -- helm's storage cannot be queried for a subset -- and leaves it out.
+func TestDeploymentsOmitUntrackedReleases(t *testing.T) {
 	probe := fakeProbe()
 	probe.Rel = []cluster.Release{
 		{Name: "by-hand", Namespace: "modelforge", Chart: "sglang-0.8.0", Status: "deployed", Revision: 1},
@@ -136,26 +136,24 @@ func TestDeploymentsFlagsUntrackedReleases(t *testing.T) {
 		t.Fatalf("status %d: %v", code, body)
 	}
 	summary := body["summary"].(map[string]any)
-	if summary["untracked"].(float64) != 1 {
-		t.Errorf("want 1 untracked release, got %v", summary)
+	if _, ok := summary["untracked"]; ok {
+		t.Errorf("untracked is not reported any more: %v", summary)
 	}
-	// The managed one was deployed from a catalog ref that no longer matches.
+	// Only glm-53 is counted, and it came from a catalog ref that has moved.
+	if summary["total"].(float64) != 1 {
+		t.Errorf("want only the swiss-deployed release, got %v", summary)
+	}
 	if summary["catalogBehind"].(float64) != 1 {
 		t.Errorf("want 1 release behind the catalog, got %v", summary)
 	}
 
-	for _, d := range body["deployments"].([]any) {
-		row := d.(map[string]any)
-		switch row["release"] {
-		case "by-hand":
-			if row["managed"].(bool) || row["drift"] == "" {
-				t.Errorf("hand-installed release must be reported untracked: %v", row)
-			}
-		case "glm-53":
-			if !row["managed"].(bool) || row["model"] != "modelforge" {
-				t.Errorf("plan not read off the release: %v", row)
-			}
-		}
+	rows := body["deployments"].([]any)
+	if len(rows) != 1 {
+		t.Fatalf("want one row, got %v", rows)
+	}
+	row := rows[0].(map[string]any)
+	if row["release"] != "glm-53" || row["model"] != "modelforge" {
+		t.Errorf("plan not read off the release: %v", row)
 	}
 }
 

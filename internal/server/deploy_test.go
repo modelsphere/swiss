@@ -386,12 +386,15 @@ func TestDeploymentsSurfaceTheApplyPhase(t *testing.T) {
 	}}
 	srv := testServer(t, probe)
 	_, body := get(t, srv, "/api/deployments")
-	row := body["deployments"].([]any)[0].(map[string]any)
+	rows := body["deployments"].([]any)
+	// A failed apply does not take the release out of the view: the plan is
+	// right there beside it, which is the only thing listing depends on.
+	if len(rows) != 1 {
+		t.Fatalf("want the release listed, got %v", rows)
+	}
+	row := rows[0].(map[string]any)
 	if row["phase"] != "failed" || row["drift"] == "" {
 		t.Fatalf("a failed apply must be visible: %v", row)
-	}
-	if !row["managed"].(bool) {
-		t.Error("it is still swiss-managed; the plan is right there")
 	}
 }
 

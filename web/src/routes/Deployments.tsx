@@ -1,5 +1,6 @@
+import { useState } from "react";
 import { Link } from "react-router";
-import { Plus } from "lucide-react";
+import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { api, type Deployment } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
@@ -8,22 +9,31 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Empty, ErrorState, Loading } from "@/components/States";
 
+const PER_PAGE = 25;
+
 export function Deployments() {
+  const [page, setPage] = useState(1);
   const { data, isPending, error } = useQuery({
-    queryKey: ["deployments"],
-    queryFn: api.deployments,
+    queryKey: ["deployments", page],
+    queryFn: () => api.deployments(page, PER_PAGE),
     // A release changes on a human timescale; a rollout takes 20-40 minutes.
     refetchInterval: 15_000,
+    // Paging with this on would blank the table on every click. Keeping the
+    // previous page up while the next one loads is what makes Next feel like
+    // paging rather than a reload.
+    placeholderData: (prev) => prev,
   });
 
   if (isPending) return <Loading what="deployments" />;
   if (error) return <ErrorState what="deployments" error={error} />;
 
-  // Untracked first. A release nobody's inventory knows about is how two engines
-  // end up on one set of GPUs, so it is the row that should be read first.
-  const rows = [...data.deployments].sort(
-    (a, b) => Number(a.managed) - Number(b.managed) || a.release.localeCompare(b.release),
-  );
+  // Already in ref order from the server, which is also the order the page was
+  // cut on -- re-sorting here would shuffle rows within a page and make Next
+  // look like it skipped some.
+  const rows = data.deployments;
+  const total = data.summary.total;
+  const first = total === 0 ? 0 : (data.page - 1) * data.perPage + 1;
+  const last = Math.min(data.page * data.perPage, total);
 
   return (
     <div className="space-y-4">
@@ -36,15 +46,14 @@ export function Deployments() {
         </Link>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-3">
-        <Stat label="Releases" value={data.summary.total} />
-        <Stat label="Untracked" value={data.summary.untracked} tone={data.summary.untracked > 0 ? "warn" : undefined} />
-        <Stat label="Behind catalog" value={data.summary.catalogBehind} />
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Stat label="Releases" value={total} />
+        <Stat label="Behind catalog (page)" value={data.summary.catalogBehind} />
       </div>
 
       {rows.length === 0 ? (
         <Empty>
-          No helm releases in this cluster.{" "}
+          Nothing deployed from this catalog yet.{" "}
           <Link to="/catalog" className="underline">
             Deploy one
           </Link>
@@ -73,6 +82,32 @@ export function Deployments() {
           </Table>
         </Card>
       )}
+
+      {total > data.perPage && (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-sm text-muted-foreground tabular-nums">
+            {first}–{last} of {total}
+          </span>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={data.page <= 1}
+            >
+              <ChevronLeft className="size-4" /> Prev
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setPage((p) => p + 1)}
+              disabled={last >= total}
+            >
+              Next <ChevronRight className="size-4" />
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -91,15 +126,11 @@ function Row({ d }: { d: Deployment }) {
       </TableCell>
       <TableCell className="text-muted-foreground">{d.namespace}</TableCell>
       <TableCell>
-        {d.managed ? (
-          <span>
-            {d.model}
-            {d.version && <span className="text-muted-foreground"> v{d.version}</span>}
-            {d.variant && <span className="text-muted-foreground"> · {d.variant}</span>}
-          </span>
-        ) : (
-          <Badge variant="warning">untracked</Badge>
-        )}
+        <span>
+          {d.model}
+          {d.version && <span className="text-muted-foreground"> v{d.version}</span>}
+          {d.variant && <span className="text-muted-foreground"> · {d.variant}</span>}
+        </span>
       </TableCell>
       <TableCell className="font-mono text-xs text-muted-foreground">
         {d.route || "—"}

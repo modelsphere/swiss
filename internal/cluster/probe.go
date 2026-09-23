@@ -32,6 +32,14 @@ type Release struct {
 	SwissStatus []byte
 }
 
+// ManagedRef names one release swiss deployed. The plan ConfigMap is the link:
+// swiss writes one per release, so the set of those ConfigMaps IS the set of
+// managed releases -- no helm read required to enumerate them.
+type ManagedRef struct {
+	Namespace string
+	Name      string // the release name, not the ConfigMap name
+}
+
 // Node is what a fit check needs, plus what a node view shows.
 type Node struct {
 	Name       string
@@ -75,6 +83,19 @@ type Probe interface {
 	// Ping is a cheap reachability check, for readiness probes.
 	Ping(ctx context.Context) error
 	Releases(ctx context.Context) ([]Release, error)
+	// ManagedRefs names every release swiss deployed, sorted, reading metadata
+	// only -- the plan ConfigMaps' names and nothing of their contents.
+	//
+	// This is the cheap half of the reconciliation view, and the reason it is
+	// separate from Releases: listing helm's own storage means pulling and
+	// gunzipping every release in scope, most of which swiss did not deploy.
+	// Here the answer is a name list, and the expensive per-release reads happen
+	// only for the page actually being shown.
+	ManagedRefs(ctx context.Context) ([]ManagedRef, error)
+	// ManagedRelease resolves one ref into a release: its plan, and the live
+	// helm state beside it. A nil release is a plan whose release is gone --
+	// an uninstall that did not finish cleaning up, not an error.
+	ManagedRelease(ctx context.Context, namespace, name string) (*Release, error)
 	Nodes(ctx context.Context) ([]Node, error)
 	// ConfigMap reads a ConfigMap given as "ns/name". Route collisions are
 	// detected from its key set before a write, rather than after two models are
@@ -136,7 +157,35 @@ type Fake struct {
 func (f Fake) Ping(context.Context) error                          { return f.PingErr }
 func (f Fake) Pods(context.Context, string, string) ([]Pod, error) { return f.Pod, nil }
 func (f Fake) Releases(context.Context) ([]Release, error)         { return f.Rel, nil }
-func (f Fake) Nodes(context.Context) ([]Node, error)               { return f.Nod, nil }
+
+// ManagedRefs derives the managed set from the seeded releases the way Kube
+// derives it from plan ConfigMaps: a release with a plan beside it is managed.
+func (f Fake) ManagedRefs(context.Context) ([]ManagedRef, error) {
+	var out []ManagedRef
+	for _, r := range f.Rel {
+		if len(r.SwissFiles) > 0 {
+			out = append(out, ManagedRef{Namespace: r.Namespace, Name: r.Name})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Namespace != out[j].Namespace {
+			return out[i].Namespace < out[j].Namespace
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out, nil
+}
+
+func (f Fake) ManagedRelease(_ context.Context, namespace, name string) (*Release, error) {
+	for _, r := range f.Rel {
+		if r.Namespace == namespace && r.Name == name {
+			found := r
+			return &found, nil
+		}
+	}
+	return nil, nil
+}
+func (f Fake) Nodes(context.Context) ([]Node, error) { return f.Nod, nil }
 func (f Fake) ConfigMap(_ context.Context, ref string) (map[string]string, error) {
 	return f.Maps[ref], nil
 }

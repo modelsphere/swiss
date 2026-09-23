@@ -26,7 +26,7 @@ type Input struct {
 	Release   string
 	Namespace string
 	Overrides values.Tree
-	Edits values.Tree
+	Edits     values.Tree
 }
 
 // Compose resolves an entry, a variant, a profile and a set of overrides into a

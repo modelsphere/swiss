@@ -1,10 +1,13 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aceforeverd/swiss/internal/catalog"
@@ -363,7 +366,6 @@ type deployment struct {
 	Status     string `json:"status,omitempty"`
 	Revision   int    `json:"revision"`
 	Updated    string `json:"updated,omitempty"`
-	Managed    bool   `json:"managed"`
 	Model      string `json:"model,omitempty"`
 	Variant    string `json:"variant,omitempty"`
 	CatalogRef string `json:"catalogRef,omitempty"`
@@ -371,88 +373,171 @@ type deployment struct {
 	Phase      string `json:"phase,omitempty"`
 	Drift      string `json:"drift,omitempty"`
 	// Route is the path the entrypoint publishes this release on, derived from
-	// the plan the way the detail view derives it. Empty when the release has
-	// no plan beside it, or names no route.
+	// the plan the way the detail view derives it. Empty when the plan names no
+	// route.
 	Route string `json:"route,omitempty"`
 }
 
-// handleDeployments is the reconciliation view: every live release, and whether
-// Swiss knows where it came from.
+// Paging bounds. A page is what the request pays for: the managed set is a name
+// list, and the expensive per-release reads -- the plan ConfigMap and helm's own
+// storage -- happen only for the rows being returned. So the cost of this
+// endpoint is set by perPage, not by how many releases the cluster holds.
+const (
+	defaultPerPage = 25
+	maxPerPage     = 100
+)
+
+// deployFanout is how many releases are resolved at once. Each one is two round
+// trips, so serial is a page-sized multiple of the API server's latency; the
+// cap is there because this is a shared apiserver and a reconciliation view is
+// not entitled to all of it.
+const deployFanout = 8
+
+// handleDeployments is the reconciliation view: the releases swiss deployed,
+// and whether each still matches the catalog it came from.
 //
-// The row that matters is the unmanaged one. A release live in the cluster with
-// no plan beside it was installed by hand, and it is exactly what the adoption
-// hazard looks like from the outside -- two engines on one set of GPUs starts
-// with one release nobody's inventory knows about.
+// The plan ConfigMap is the link. swiss writes one per release, so the set of
+// those ConfigMaps IS the managed set -- enumerated with a metadata-only list,
+// which costs a name list rather than every plan's values documents. helm's own
+// storage is never scanned here: reading it means pulling and gunzipping every
+// release in scope, most of which swiss did not deploy, to then throw them away.
+//
+// A release with no plan beside it is not reported at all. Installing over one
+// is still refused: exec.Lookup reads helm directly, so a name already taken by
+// a hand-installed release is a conflict rather than an adoption.
 func (s *Server) handleDeployments(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := contextWithTimeout(r, 30*time.Second)
 	defer cancel()
 
-	releases, err := s.probe.Releases(ctx)
+	refs, err := s.probe.ManagedRefs(ctx)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	cat, catErr := s.Catalog(ctx)
 
-	out := make([]deployment, 0, len(releases))
-	var unmanaged, behind int
-	for _, rel := range releases {
-		d := deployment{
-			Release: rel.Name, Namespace: rel.Namespace, Chart: rel.Chart,
-			Status: rel.Status, Revision: rel.Revision,
-		}
-		if !rel.Updated.IsZero() {
-			d.Updated = rel.Updated.UTC().Format(time.RFC3339)
-		}
-		if len(rel.SwissFiles) == 0 {
-			unmanaged++
-			d.Drift = "untracked: no plan recorded beside this release"
-			out = append(out, d)
+	total := len(refs)
+	page, perPage := pageParams(r)
+	from := (page - 1) * perPage
+	if from > total {
+		from = total
+	}
+	to := min(from+perPage, total)
+	window := refs[from:to]
+
+	// Resolved in parallel into a slice indexed by position, so the order is the
+	// ref order rather than whichever read finished first.
+	rows := make([]*deployment, len(window))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, deployFanout)
+	for i, ref := range window {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			rel, err := s.probe.ManagedRelease(ctx, ref.Namespace, ref.Name)
+			if err != nil {
+				// The plan named it a moment ago. Report the row with what is
+				// known rather than failing the page over one release.
+				s.log.WarnContext(ctx, "release not resolved",
+					"namespace", ref.Namespace, "release", ref.Name, "err", err)
+				rows[i] = &deployment{
+					Release: ref.Name, Namespace: ref.Namespace,
+					Drift: "could not read this release: " + err.Error(),
+				}
+				return
+			}
+			if rel == nil {
+				rows[i] = &deployment{
+					Release: ref.Name, Namespace: ref.Namespace,
+					Drift: "a plan is recorded but the release is gone",
+				}
+				return
+			}
+			rows[i] = s.deploymentRow(ctx, *rel)
+		}()
+	}
+	wg.Wait()
+
+	out := make([]deployment, 0, len(rows))
+	var behind int
+	for _, d := range rows {
+		if d == nil {
 			continue
 		}
-		d.Managed = true
-		if st := parseStatus(rel.SwissStatus); st.Phase != "" {
-			d.Phase = st.Phase
-			switch st.Phase {
-			case phaseFailed:
-				d.Drift = "last apply failed: " + st.Error
-			case phaseApplying:
-				d.Drift = "an apply was started and never completed"
+		if cat != nil && catErr == nil && d.CatalogRef != "" && d.CatalogRef != cat.Ref {
+			behind++
+			if d.Drift == "" {
+				d.Drift = "catalog moved since this was deployed"
 			}
 		}
-		// The route is read off the composed values rather than the summary: it
-		// is a value like any other, and where it came from is the plan's own
-		// layering. A plan this version cannot decode costs the route and
-		// nothing else -- but it is logged, because an empty route otherwise
-		// reads as "this release publishes none", which is a different fact.
-		if p, err := plan.FromFiles(rel.SwissFiles); err == nil {
-			d.Route = routeOf(p)
-		} else {
-			s.log.WarnContext(ctx, "route not derived: plan does not decode",
-				"namespace", rel.Namespace, "release", rel.Name, "err", err)
-		}
-		if p, err := parsePlanSummary([]byte(rel.SwissFiles[plan.MetaFile])); err == nil {
-			d.Model, d.Variant, d.CatalogRef, d.Version = p.Model, p.Variant, p.Ref, p.Version
-			if catErr == nil && p.Ref != "" && p.Ref != cat.Ref {
-				behind++
-				if d.Drift == "" {
-					d.Drift = "catalog moved since this was deployed"
-				}
-			}
-		} else {
-			d.Drift = "plan unreadable: " + err.Error()
-		}
-		out = append(out, d)
+		out = append(out, *d)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"cluster":     s.cfg.Cluster.Name,
 		"catalogRef":  refOrEmpty(cat, catErr),
+		"page":        page,
+		"perPage":     perPage,
 		"deployments": out,
 		"summary": map[string]int{
-			"total": len(out), "untracked": unmanaged, "catalogBehind": behind,
+			// total is every managed release; catalogBehind is only the ones on
+			// this page, because knowing it for the rest means reading their
+			// plans, which is the cost paging exists to avoid.
+			"total": total, "catalogBehind": behind,
 		},
 	})
+}
+
+// deploymentRow is one release as the view reports it.
+func (s *Server) deploymentRow(ctx context.Context, rel cluster.Release) *deployment {
+	d := &deployment{
+		Release: rel.Name, Namespace: rel.Namespace, Chart: rel.Chart,
+		Status: rel.Status, Revision: rel.Revision,
+	}
+	if !rel.Updated.IsZero() {
+		d.Updated = rel.Updated.UTC().Format(time.RFC3339)
+	}
+	if st := parseStatus(rel.SwissStatus); st.Phase != "" {
+		d.Phase = st.Phase
+		switch st.Phase {
+		case phaseFailed:
+			d.Drift = "last apply failed: " + st.Error
+		case phaseApplying:
+			d.Drift = "an apply was started and never completed"
+		}
+	}
+	// The route is read off the composed values rather than the summary: it is a
+	// value like any other, and where it came from is the plan's own layering. A
+	// plan this version cannot decode costs the route and nothing else -- but it
+	// is logged, because an empty route otherwise reads as "this release
+	// publishes none", which is a different fact.
+	if p, err := plan.FromFiles(rel.SwissFiles); err == nil {
+		d.Route = routeOf(p)
+	} else {
+		s.log.WarnContext(ctx, "route not derived: plan does not decode",
+			"namespace", rel.Namespace, "release", rel.Name, "err", err)
+	}
+	if p, err := parsePlanSummary([]byte(rel.SwissFiles[plan.MetaFile])); err == nil {
+		d.Model, d.Variant, d.CatalogRef, d.Version = p.Model, p.Variant, p.Ref, p.Version
+	} else {
+		d.Drift = "plan unreadable: " + err.Error()
+	}
+	return d
+}
+
+// pageParams reads page and perPage, clamped. Anything unparseable is the
+// default rather than an error: a bad query string should not cost the view.
+func pageParams(r *http.Request) (page, perPage int) {
+	page, perPage = 1, defaultPerPage
+	if n, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && n > 1 {
+		page = n
+	}
+	if n, err := strconv.Atoi(r.URL.Query().Get("perPage")); err == nil && n > 0 {
+		perPage = min(n, maxPerPage)
+	}
+	return page, perPage
 }
 
 func refOrEmpty(c *catalog.Catalog, err error) string {

@@ -30,15 +30,14 @@ export interface Deployment {
   status?: string;
   revision: number;
   updated?: string;
-  managed: boolean;
   model?: string;
   variant?: string;
   catalogRef?: string;
   version?: string;
   phase?: string;
   drift?: string;
-  // The path the entrypoint publishes this release on. Absent on an untracked
-  // release, and on one whose plan names no route.
+  // The path the entrypoint publishes this release on. Absent when the plan
+  // names no route.
   route?: string;
 }
 
@@ -46,7 +45,12 @@ export interface DeploymentsResponse {
   cluster: string;
   catalogRef: string;
   deployments: Deployment[];
-  summary: { total: number; untracked: number; catalogBehind: number };
+  page: number;
+  perPage: number;
+  // total is every release swiss deployed, counted from a metadata-only list.
+  // catalogBehind is only the rows on this page -- knowing it for the rest means
+  // reading their plans, which is the cost paging exists to avoid.
+  summary: { total: number; catalogBehind: number };
 }
 
 export interface Chart {
@@ -287,7 +291,8 @@ export const api = {
     post<Session & { token: string }>("/api/login", { username, password }),
   logout: () => post<{ ok: boolean }>("/api/logout", {}),
   cluster: () => get<ClusterInfo>("/api/cluster"),
-  deployments: () => get<DeploymentsResponse>("/api/deployments"),
+  deployments: (page = 1, perPage = 25) =>
+    get<DeploymentsResponse>(`/api/deployments?page=${page}&perPage=${perPage}`),
   catalog: () => get<CatalogResponse>("/api/catalog"),
   model: (name: string, version?: string) =>
     // localPath is what the site's template resolves to for this model, so a
