@@ -44,13 +44,26 @@ func TestUnknownPlaceholderIsAnError(t *testing.T) {
 
 func TestSecretReferenceQualifiesABareName(t *testing.T) {
 	a := RouteAuth{SecretRef: "llm-openresty"}
-	if got := a.SecretReference("llm-route"); got != "llm-route/llm-openresty" {
+	if got := a.SecretReference("swiss-system"); got != "swiss-system/llm-openresty" {
 		t.Errorf("bare name: %q", got)
 	}
-	if got := (RouteAuth{SecretRef: "other/key"}).SecretReference("llm-route"); got != "other/key" {
+	if got := (RouteAuth{SecretRef: "other/key"}).SecretReference("swiss-system"); got != "other/key" {
 		t.Errorf("an explicit namespace must win: %q", got)
 	}
-	if got := (RouteAuth{}).SecretReference("llm-route"); got != "" {
+	if got := (RouteAuth{}).SecretReference("swiss-system"); got != "" {
 		t.Errorf("no ref stays no ref: %q", got)
+	}
+}
+
+func TestModelURLJoinsTheGatewayAndRoute(t *testing.T) {
+	r := Route{Gateway: "https://llm.example.com/"}
+	if got := r.ModelURL("/kimi"); got != "https://llm.example.com/kimi" {
+		t.Errorf("one slash between them: %q", got)
+	}
+	if got := (Route{}).ModelURL("kimi"); got != "" {
+		t.Errorf("no gateway, no URL: %q", got)
+	}
+	if got := r.ModelURL(""); got != "" {
+		t.Errorf("no route, no URL: %q", got)
 	}
 }

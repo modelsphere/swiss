@@ -20,7 +20,7 @@ func TestScalerDropsTheFixedReplicaCount(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, p)
 	}
-	vals := p["values"].(map[string]any)
+	vals := planValues(p)
 	if _, present := vals["replicaCount"]; present {
 		t.Fatalf("the scaler owns the count: %v", vals["replicaCount"])
 	}
@@ -39,7 +39,7 @@ func TestScalerOffKeepsTheFixedReplicaCount(t *testing.T) {
 			"scaler":       map[string]any{"enabled": false},
 		},
 	})
-	if p["values"].(map[string]any)["replicaCount"] != float64(4) {
+	if planValues(p)["replicaCount"] != float64(4) {
 		t.Fatalf("a fixed count is the point when the scaler is off: %v", p["values"])
 	}
 }
@@ -54,7 +54,7 @@ func TestUpgradeDoesNotResurrectAReplicaCount(t *testing.T) {
 	})
 	probe := liveProbe()
 	probe.Rel = append(probe.Rel, cluster.Release{
-		Name: "r", Namespace: "modelforge", Status: "deployed", Revision: 1, SwissPlan: doc,
+		Name: "r", Namespace: "modelforge", Status: "deployed", Revision: 1, SwissFiles: doc,
 	})
 	srv, _ := deployServerWith(t, probe, true)
 
@@ -62,7 +62,7 @@ func TestUpgradeDoesNotResurrectAReplicaCount(t *testing.T) {
 		"fromRelease": "r",
 		"overrides":   map[string]any{"scaler": map[string]any{"enabled": true, "minReplicas": 1}},
 	})
-	if _, present := up["values"].(map[string]any)["replicaCount"]; present {
+	if _, present := planValues(up)["replicaCount"]; present {
 		t.Fatal("turning the scaler on must clear the count it replaces")
 	}
 }

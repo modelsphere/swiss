@@ -1,47 +1,52 @@
 import type { ClusterInfo, Plan, PlanRequest } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Field, Input } from "@/components/ui/input";
-import { Toggle } from "@/components/ui/toggle";
+import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 
 // One form, two routes. Deploy composes it against a catalog model and Upgrade
 // against a release's stored plan, but a setting that means one thing on one
 // page and another on the other is how the two drift into disagreeing about
 // what a deploy is.
+export interface Toleration {
+  key: string;
+  operator: "Exists" | "Equal";
+  value: string;
+  effect: string;
+}
+
 export interface Form {
   edits: string;
+  gpuProducts: string[];
+  tolerations: Toleration[];
   priorityClassName: string;
   schedulerName: string;
   cart: boolean;
   modelRoute: boolean;
   slo: boolean;
   serviceMonitor: boolean;
-  release: string;
   namespace: string;
   serviceId: string;
   localPath: string;
   scaler: boolean;
   replicaCount: string;
-  minReplicas: string;
-  maxReplicas: string;
   route: string;
 }
 
 export const EMPTY: Form = {
   edits: "",
+  gpuProducts: [],
+  tolerations: [],
   priorityClassName: "",
   schedulerName: "",
   cart: true,
   modelRoute: false,
-  slo: false,
-  serviceMonitor: false,
-  release: "",
+  slo: true,
+  serviceMonitor: true,
   namespace: "",
   serviceId: "",
   localPath: "",
   scaler: false,
   replicaCount: "",
-  minReplicas: "",
-  maxReplicas: "",
   route: "",
 };
 
@@ -50,23 +55,30 @@ export function DeploySettings({
   onChange,
   cluster,
   serviceIdPlaceholder,
-  releaseHint,
-  // Upgrade locks these two: they name the helm release being upgraded, and
-  // changing them does not rename it, it installs a second one.
+  localPathPlaceholder,
+  supportedGPUs,
+  clusterGPUs,
+  // Upgrade locks the namespace: it names the helm release being upgraded, and
+  // changing it does not move the release, it installs a second one.
   lockIdentity = false,
 }: {
   form: Form;
   onChange: (patch: Partial<Form>) => void;
   cluster?: ClusterInfo;
   serviceIdPlaceholder?: string;
-  releaseHint?: string;
+  localPathPlaceholder?: string;
   lockIdentity?: boolean;
+  // Products the chosen variant declares, and those a node in this cluster
+  // actually reports. The intersection is what is worth offering.
+  supportedGPUs?: string[];
+  clusterGPUs?: string[];
 }) {
   const set =
     (k: keyof Form) =>
     (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
       onChange({ [k]: e.target.value } as Partial<Form>);
   const toggle = (k: keyof Form) => (v: boolean) => onChange({ [k]: v } as Partial<Form>);
+  const on = effective(form);
 
   return (
     <>
@@ -74,146 +86,158 @@ export function DeploySettings({
         <CardHeader>
           <CardTitle className="text-base">Deploy settings</CardTitle>
           <p className="text-sm text-muted-foreground">
-            Engine flags, probes and the image come from the catalog and are not editable here.
-            To change those, pick another variant or move the catalog reference.
+            Engine flags, probes and the image come from the catalog. Pick another variant to
+            change those.
           </p>
         </CardHeader>
-        <CardContent className="grid gap-4 sm:grid-cols-2">
-          <Field
-            label="Service ID"
-            hint="the identity everything is named after: release, route, scaler, SLO"
-          >
+        {/* One label column for every row, toggles included. Mixing
+            label-above fields with label-beside checkboxes gives a form three
+            alignment axes and no two rows that line up. */}
+        {/* One label column for every row, switches included. Guidance lives
+            in the box it applies to; the label carries the longer note for the
+            rows whose control is a switch and has no box to put it in. */}
+        {/* One label column for every row, switches included. Guidance lives
+            in the box it applies to; the label carries the longer note for the
+            rows whose control is a switch and has no box to put it in. */}
+        <CardContent className="divide-y pt-0">
+          <Row label="Service ID" note="names the helm release, the route, the scaler and the SLO">
             <Input
               value={form.serviceId}
               onChange={set("serviceId")}
               placeholder={serviceIdPlaceholder}
             />
-          </Field>
-          <Field
-            label="Release"
-            hint={lockIdentity ? "the release being upgraded" : (releaseHint ?? "helm release name")}
-          >
-            <Input
-              value={form.release}
-              onChange={set("release")}
-              placeholder={form.serviceId}
-              disabled={lockIdentity}
-            />
-          </Field>
-          <Field
-            label="Namespace"
-            hint={
-              lockIdentity
-                ? "moving a release between namespaces installs a second one"
-                : `defaults to ${cluster?.namespace ?? "the profile's"}`
+          </Row>
+
+          {/* The path and the switch that publishes it are one decision: a
+              path typed under a disabled switch published nothing. */}
+          <Row
+            label="Route path"
+            note="publishes a modelRoute to openresty and the monitor"
+            toggle={
+              <Switch
+                checked={on.modelRoute}
+                onChange={(v) =>
+                  onChange(v ? { modelRoute: true } : { modelRoute: false, route: "" })
+                }
+                label="publish a route"
+              />
             }
           >
-            <Input value={form.namespace} onChange={set("namespace")} disabled={lockIdentity} />
-          </Field>
-          <Field label="Route" hint="openresty path; empty uses the service ID">
-            <Input value={form.route} onChange={set("route")} placeholder={form.serviceId} />
-          </Field>
-          <Field label="Model path" hint="overrides the site's path template">
-            <Input value={form.localPath} onChange={set("localPath")} />
-          </Field>
-        </CardContent>
-
-        <CardContent className="space-y-4 border-t pt-4">
-          <Toggle
-            label="Autoscale"
-            hint="an LLMScaler owns the replica count; off means a fixed number"
-            checked={form.scaler}
-            onChange={toggle("scaler")}
-          />
-          <div className="grid gap-4 sm:grid-cols-2">
-            {form.scaler ? (
-              <>
-                <Field label="Min replicas" hint="the floor the scaler will not go below">
-                  <Input
-                    value={form.minReplicas}
-                    onChange={set("minReplicas")}
-                    inputMode="numeric"
-                  />
-                </Field>
-                <Field label="Max replicas" hint={bounds(form)}>
-                  <Input
-                    value={form.maxReplicas}
-                    onChange={set("maxReplicas")}
-                    inputMode="numeric"
-                  />
-                </Field>
-              </>
-            ) : (
-              <Field label="Replicas" hint="fixed count; empty leaves the chart's default">
-                <Input
-                  value={form.replicaCount}
-                  onChange={set("replicaCount")}
-                  inputMode="numeric"
-                />
-              </Field>
+            {on.modelRoute && (
+              <PathInput
+                value={form.route}
+                onChange={(v) => onChange({ route: v })}
+                placeholder={form.serviceId || "the service ID"}
+              />
             )}
-          </div>
+          </Row>
+
+          <Row label="Model path" note="overrides the site's path template">
+            <Input
+              value={form.localPath}
+              onChange={set("localPath")}
+              placeholder={localPathPlaceholder}
+            />
+          </Row>
+
+          <Row
+            label="Autoscale"
+            note="an LLMScaler owns the replica count, bounds included"
+            toggle={
+              <Switch checked={form.scaler} onChange={toggle("scaler")} label="autoscale" />
+            }
+          >
+            {!form.scaler && (
+              <Input
+                className="w-32"
+                value={form.replicaCount}
+                onChange={set("replicaCount")}
+                inputMode="numeric"
+                aria-label="replicas"
+                placeholder="replicas"
+              />
+            )}
+          </Row>
+
+          <Row
+            label="Namespace"
+            note={lockIdentity ? "moving a release between namespaces installs a second one" : undefined}
+          >
+            <Input
+              value={form.namespace}
+              onChange={set("namespace")}
+              disabled={lockIdentity}
+              placeholder={cluster?.namespace ?? "the site profile's"}
+            />
+          </Row>
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Features</CardTitle>
-          <p className="text-sm text-muted-foreground">
-            Written into the plan either way — nothing is left to a chart default.
-          </p>
-        </CardHeader>
-        <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <Toggle
-            label="CART"
-            hint="cache-aware router in front of the backends"
-            checked={form.cart}
-            onChange={toggle("cart")}
-          />
-          <Toggle
-            label="ModelRoute"
-            hint="publish to openresty and the monitor"
-            checked={effective(form).modelRoute}
-            onChange={toggle("modelRoute")}
-          />
-          <Toggle
-            label="SLO requirement"
-            hint="LLMSLORequirement for this service"
-            checked={form.slo}
-            onChange={toggle("slo")}
-          />
-          <Toggle
-            label="ServiceMonitor"
-            hint="scrape metrics into Prometheus"
-            checked={form.serviceMonitor}
-            onChange={toggle("serviceMonitor")}
-          />
-        </CardContent>
-      </Card>
-
+      {/* Folded away, but every flag is still written into the plan either
+          way -- a section nobody opens must not hand the decision back to a
+          chart default. */}
       <details className="rounded-lg border">
-        <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
-          Advanced — scheduling
-        </summary>
-        <div className="grid gap-4 border-t p-4 sm:grid-cols-2">
-          <Field label="Priority class" hint="priorityClassName">
-            <Input value={form.priorityClassName} onChange={set("priorityClassName")} />
-          </Field>
-          <Field label="Scheduler" hint="schedulerName, e.g. volcano">
-            <Input value={form.schedulerName} onChange={set("schedulerName")} />
-          </Field>
+        <summary className="cursor-pointer px-4 py-3 text-sm font-medium">Advanced</summary>
+        <div className="divide-y border-t px-4">
+          <Row
+            label="CART"
+            note="cache-aware router in front of the backends"
+            toggle={<Switch checked={form.cart} onChange={toggle("cart")} label="CART" />}
+          />
+          <Row
+            label="SLO requirement"
+            note="an LLMSLORequirement for this service"
+            toggle={<Switch checked={form.slo} onChange={toggle("slo")} label="SLO requirement" />}
+          />
+          <Row
+            label="ServiceMonitor"
+            note="scrape metrics into Prometheus"
+            toggle={
+              <Switch
+                checked={form.serviceMonitor}
+                onChange={toggle("serviceMonitor")}
+                label="ServiceMonitor"
+              />
+            }
+          />
+          <Row label="GPU product" note="restricts scheduling to these products; any one will do">
+            <Products
+              selected={form.gpuProducts}
+              onChange={(v) => onChange({ gpuProducts: v })}
+              options={gpuOptions(supportedGPUs, clusterGPUs)}
+            />
+          </Row>
+          <Row label="Tolerations" note="lets this deploy land on tainted GPU nodes">
+            <Tolerations
+              rows={form.tolerations}
+              onChange={(v) => onChange({ tolerations: v })}
+            />
+          </Row>
+          <Row label="Priority class">
+            <Input
+              value={form.priorityClassName}
+              onChange={set("priorityClassName")}
+              placeholder={cluster?.priorityClassName ?? "the chart's default"}
+            />
+          </Row>
+          <Row label="Scheduler">
+            <Input
+              value={form.schedulerName}
+              onChange={set("schedulerName")}
+              placeholder={cluster?.schedulerName ?? "the chart's default"}
+            />
+          </Row>
         </div>
+
       </details>
 
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Plan editor</CardTitle>
           <p className="text-sm text-muted-foreground">
-            Any values key, applied after every layer — scheduling and resources the fields
-            above do not cover, and catalog or site keys the form refuses. It is the one input
-            exempt from layer ownership, so nothing here is checked against the layer that owns
-            it. Everything it sets is shown as its own <span className="font-medium">edit</span>{" "}
-            layer in the composed plan, so it is never invisible.
+            Any values key, applied after every layer and exempt from layer ownership. Shown as
+            its own <span className="font-medium">edit</span> layer in the composed plan, so it
+            is never invisible.
           </p>
         </CardHeader>
         <CardContent>
@@ -228,6 +252,257 @@ export function DeploySettings({
         </CardContent>
       </Card>
     </>
+  );
+}
+
+// Three columns: label, switch, control. The switch gets a column of its own
+// -- reserved whether or not a row has one -- so every input in the form lines
+// up on one right-hand edge instead of being indented by the switch beside it.
+// The control column keeps the input's height either way, so toggling a row
+// grows it sideways and never moves what is below.
+function Row({
+  label,
+  note,
+  toggle,
+  children,
+}: {
+  label: string;
+  note?: string;
+  toggle?: React.ReactNode;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className="grid gap-x-3 gap-y-1 py-2.5 sm:grid-cols-[11rem_2.25rem_minmax(0,1fr)] sm:items-center">
+      <div className="text-sm font-medium" title={note}>
+        {label}
+      </div>
+      <div className="flex min-h-9 items-center">{toggle}</div>
+      <div className="flex min-h-9 min-w-0 items-center">{children}</div>
+    </div>
+  );
+}
+
+// The products worth offering are those the variant declares and a node in
+// this cluster reports. Either list alone is a guess: the catalog does not know
+// what is racked here, and the cluster does not know what the model supports.
+function tolerationsOf(o: Record<string, unknown>): Toleration[] {
+  if (!Array.isArray(o.tolerations)) return [];
+  return o.tolerations.flatMap((t): Toleration[] => {
+    if (!t || typeof t !== "object") return [];
+    const r = t as Record<string, unknown>;
+    if (typeof r.key !== "string" || !r.key) return [];
+    return [
+      {
+        key: r.key,
+        operator: r.operator === "Equal" ? "Equal" : "Exists",
+        value: typeof r.value === "string" ? r.value : "",
+        effect: typeof r.effect === "string" ? r.effect : "",
+      },
+    ];
+  });
+}
+
+// The products sit in a required nodeAffinity term under a vendor-specific
+// label key, so match the key by suffix rather than guessing the vendor.
+function gpuProductsOf(o: Record<string, unknown>): string[] {
+  const dig = (v: unknown, k: string): unknown =>
+    v && typeof v === "object" ? (v as Record<string, unknown>)[k] : undefined;
+  const req = dig(
+    dig(o.affinity, "nodeAffinity"),
+    "requiredDuringSchedulingIgnoredDuringExecution",
+  );
+  const terms = dig(req, "nodeSelectorTerms");
+  if (!Array.isArray(terms)) return [];
+  for (const term of terms) {
+    const exprs = dig(term, "matchExpressions");
+    if (!Array.isArray(exprs)) continue;
+    for (const e of exprs) {
+      const key = dig(e, "key");
+      const vals = dig(e, "values");
+      if (
+        typeof key === "string" &&
+        /\.product$|device-id$|ascend910$/i.test(key) &&
+        Array.isArray(vals)
+      ) {
+        return vals.filter((v): v is string => typeof v === "string");
+      }
+    }
+  }
+  return [];
+}
+
+function gpuOptions(supported?: string[], present?: string[]): string[] {
+  const has = new Set(present?.filter(Boolean) ?? []);
+  if (!supported?.length) return [...has].sort();
+  const both = supported.filter((p) => has.has(p));
+  return (both.length ? both : supported).slice().sort();
+}
+
+// The slash is drawn, never stored: the chart wants the path without it, and a
+// leading one typed or pasted here is stripped rather than sent.
+function PathInput({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+}) {
+  return (
+    <div className="flex h-9 min-w-0 flex-1 items-center rounded-md border bg-background pl-3 focus-within:outline-2 focus-within:outline-offset-1">
+      <span className="select-none text-sm text-muted-foreground">/</span>
+      <input
+        className="h-full min-w-0 flex-1 bg-transparent px-1 text-sm outline-none placeholder:text-muted-foreground"
+        value={value}
+        onChange={(e) => onChange(e.target.value.replace(/^\/+/, ""))}
+        placeholder={placeholder}
+      />
+    </div>
+  );
+}
+
+const EFFECTS = ["", "NoSchedule", "PreferNoSchedule", "NoExecute"];
+
+// Structured rows rather than a YAML box: a toleration is four fields, and
+// three of them are closed sets.
+function Tolerations({
+  rows,
+  onChange,
+}: {
+  rows: Toleration[];
+  onChange: (v: Toleration[]) => void;
+}) {
+  const patch = (i: number, p: Partial<Toleration>) =>
+    onChange(rows.map((r, j) => (i === j ? { ...r, ...p } : r)));
+
+  return (
+    <div className="w-full space-y-2">
+      {rows.map((r, i) => (
+        <div key={i} className="flex flex-wrap items-center gap-2">
+          <Input
+            className="w-44"
+            value={r.key}
+            onChange={(e) => patch(i, { key: e.target.value })}
+            placeholder="taint key"
+            aria-label="taint key"
+          />
+          <Select
+            value={r.operator}
+            onChange={(v) => patch(i, { operator: v as Toleration["operator"] })}
+            options={["Exists", "Equal"]}
+            label="operator"
+          />
+          {r.operator === "Equal" && (
+            <Input
+              className="w-32"
+              value={r.value}
+              onChange={(e) => patch(i, { value: e.target.value })}
+              placeholder="value"
+              aria-label="taint value"
+            />
+          )}
+          <Select
+            value={r.effect}
+            onChange={(v) => patch(i, { effect: v })}
+            options={EFFECTS}
+            label="effect"
+            emptyLabel="any effect"
+          />
+          <button
+            type="button"
+            onClick={() => onChange(rows.filter((_, j) => j !== i))}
+            aria-label="remove toleration"
+            className="text-sm text-muted-foreground hover:text-destructive"
+          >
+            remove
+          </button>
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={() => onChange([...rows, { key: "", operator: "Exists", value: "", effect: "" }])}
+        className="text-sm text-muted-foreground underline hover:text-foreground"
+      >
+        Add toleration
+      </button>
+    </div>
+  );
+}
+
+function Select({
+  value,
+  onChange,
+  options,
+  label,
+  emptyLabel,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: string[];
+  label: string;
+  emptyLabel?: string;
+}) {
+  return (
+    <select
+      aria-label={label}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="h-9 rounded-md border bg-background px-2 text-sm"
+    >
+      {options.map((o) => (
+        <option key={o} value={o}>
+          {o || (emptyLabel ?? "any")}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function Products({
+  selected,
+  onChange,
+  options,
+}: {
+  selected: string[];
+  onChange: (v: string[]) => void;
+  options: string[];
+}) {
+  if (options.length === 0) {
+    return (
+      <span className="text-xs text-muted-foreground">
+        no GPU product reported by this cluster
+      </span>
+    );
+  }
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {options.map((o) => {
+        const active = selected.includes(o);
+        return (
+          <button
+            key={o}
+            type="button"
+            aria-pressed={active}
+            onClick={() =>
+              onChange(active ? selected.filter((p) => p !== o) : [...selected, o])
+            }
+            className={
+              active
+                ? "rounded-full border border-foreground px-2.5 py-1 text-xs font-medium"
+                : "rounded-full border px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground"
+            }
+          >
+            {o}
+          </button>
+        );
+      })}
+      {selected.length === 0 && (
+        <span className="self-center text-xs text-muted-foreground">
+          none selected — any product the variant supports
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -252,13 +527,6 @@ export function effective(f: Form) {
   return { modelRoute: f.modelRoute || f.route.trim() !== "" };
 }
 
-function bounds(f: Form): string {
-  const min = num(f.minReplicas);
-  const max = num(f.maxReplicas);
-  if (min !== undefined && max !== undefined && max < min) return `below the min of ${min}`;
-  return "the ceiling; empty leaves it to the chart";
-}
-
 export function planRequest(
   f: Form,
   opts: { model: string; version?: string; variant?: string; fromRelease?: string },
@@ -270,10 +538,7 @@ export function planRequest(
   // that applies is sent: a fixed count under a live scaler is two answers to
   // one question, and the scaler wins at a time nobody chose.
   if (f.scaler) {
-    const scaler: Record<string, unknown> = { enabled: true };
-    if (num(f.minReplicas) !== undefined) scaler.minReplicas = num(f.minReplicas);
-    if (num(f.maxReplicas) !== undefined) scaler.maxReplicas = num(f.maxReplicas);
-    overrides.scaler = scaler;
+    overrides.scaler = { enabled: true };
   } else {
     overrides.scaler = { enabled: false };
     if (num(f.replicaCount) !== undefined) overrides.replicaCount = num(f.replicaCount);
@@ -290,6 +555,17 @@ export function planRequest(
     ? { enabled: on.modelRoute, nginx: { route } }
     : { enabled: on.modelRoute };
 
+  // A row with no key tolerates nothing; it is a half-typed row, not a value.
+  const tolerations = f.tolerations
+    .filter((t) => t.key.trim())
+    .map((t) => {
+      const out: Record<string, unknown> = { key: t.key.trim(), operator: t.operator };
+      if (t.operator === "Equal" && t.value.trim()) out.value = t.value.trim();
+      if (t.effect) out.effect = t.effect;
+      return out;
+    });
+  if (tolerations.length) overrides.tolerations = tolerations;
+
   if (f.priorityClassName.trim()) overrides.priorityClassName = f.priorityClassName.trim();
   if (f.schedulerName.trim()) overrides.schedulerName = f.schedulerName.trim();
 
@@ -298,8 +574,9 @@ export function planRequest(
     fromRelease: opts.fromRelease,
     version: opts.version || undefined,
     editsYAML: f.edits.trim() || undefined,
+    gpuProducts: f.gpuProducts.length ? f.gpuProducts : undefined,
     variant: opts.variant || undefined,
-    release: f.release.trim() || undefined,
+    release: f.serviceId.trim() || undefined,
     namespace: f.namespace.trim() || undefined,
     serviceId: f.serviceId.trim() || undefined,
     localPath: f.localPath.trim() || undefined,
@@ -312,7 +589,9 @@ export function planRequest(
 // the inverse of planRequest -- and the pair is why an upgrade can show the
 // settings rather than only promise it carried them forward.
 export function formFromPlan(plan: Plan): Form {
-  const o = (plan.overrides ?? {}) as Record<string, unknown>;
+  // The form's own document, not the composed result: an upgrade seeds from
+  // what the operator set, so recomposing against a newer catalog keeps it.
+  const o = (plan.layers?.form ?? {}) as Record<string, unknown>;
   const at = (path: string): unknown =>
     path.split(".").reduce<unknown>((acc, k) => {
       if (acc && typeof acc === "object" && k in (acc as Record<string, unknown>)) {
@@ -332,14 +611,15 @@ export function formFromPlan(plan: Plan): Form {
 
   return {
     ...EMPTY,
-    release: plan.release.name,
     namespace: plan.release.namespace,
     serviceId: str("serviceId"),
     localPath: str("model.localPath"),
     scaler: bool("scaler.enabled"),
+    // The product sits under the vendor's own label key, so find it by suffix
+    // rather than guessing which vendor this variant was built for.
+    gpuProducts: gpuProductsOf(o),
+    tolerations: tolerationsOf(o),
     replicaCount: str("replicaCount"),
-    minReplicas: str("scaler.minReplicas"),
-    maxReplicas: str("scaler.maxReplicas"),
     route: str("modelRoute.nginx.route"),
     cart: bool("cart.enabled", true),
     modelRoute: bool("modelRoute.enabled"),
@@ -347,7 +627,10 @@ export function formFromPlan(plan: Plan): Form {
     serviceMonitor: bool("serviceMonitor.enabled"),
     priorityClassName: str("priorityClassName"),
     schedulerName: str("schedulerName"),
-    edits: plan.edits && Object.keys(plan.edits).length > 0 ? toYamlish(plan.edits) : "",
+    edits:
+      plan.layers?.edit && Object.keys(plan.layers.edit).length > 0
+        ? toYamlish(plan.layers.edit)
+        : "",
   };
 }
 

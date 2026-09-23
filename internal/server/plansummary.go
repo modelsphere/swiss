@@ -20,6 +20,8 @@ type planSummary struct {
 	Ref     string
 	Profile string
 	Hash    string
+	// Chart is "name-version", the way helm names a chart everywhere else here.
+	Chart string
 }
 
 // parseStatus reads the status key written beside a release. It decodes into
@@ -40,6 +42,10 @@ func parsePlanSummary(raw []byte) (planSummary, error) {
 			Variant string `yaml:"variant" json:"variant"`
 			Ref     string `yaml:"ref" json:"ref"`
 		} `yaml:"source" json:"source"`
+		Chart struct {
+			Name    string `yaml:"name" json:"name"`
+			Version string `yaml:"version" json:"version"`
+		} `yaml:"chart" json:"chart"`
 		Profile string `yaml:"profile" json:"profile"`
 		Hash    string `yaml:"hash" json:"hash"`
 	}
@@ -52,7 +58,21 @@ func parsePlanSummary(raw []byte) (planSummary, error) {
 		Model: doc.Source.Model, Version: doc.Source.Version, Digest: doc.Source.Digest,
 		Variant: doc.Source.Variant, Ref: doc.Source.Ref,
 		Profile: doc.Profile, Hash: doc.Hash,
+		Chart: chartRef(doc.Chart.Name, doc.Chart.Version),
 	}, nil
+}
+
+// chartRef names a chart the way helm does. A plan written before the chart was
+// recorded has neither half, and an empty string says so rather than a stray
+// dash pretending to be a name.
+func chartRef(name, version string) string {
+	switch {
+	case name == "":
+		return ""
+	case version == "":
+		return name
+	}
+	return name + "-" + version
 }
 
 // contextWithTimeout bounds one request. Handlers set their own budget rather

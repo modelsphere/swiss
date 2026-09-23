@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Empty, ErrorState, Loading } from "@/components/States";
+import { gpuCount, gpuSupport, vendorLabel } from "@/lib/gpu";
 
 export function Catalog() {
   const { data, isPending, error } = useQuery({ queryKey: ["catalog"], queryFn: api.catalog });
@@ -31,6 +32,12 @@ export function Catalog() {
       )}
     </div>
   );
+}
+
+// A model may publish one variant per accelerator, so the card names every
+// kind of card its variants accept rather than only the default's.
+function runsOn(variants: IndexModel["versions"][number]["variants"]): string {
+  return Array.from(new Set(variants.map((v) => gpuSupport(v.requires)))).join(" · ");
 }
 
 function ModelCard({ m }: { m: IndexModel }) {
@@ -61,14 +68,11 @@ function ModelCard({ m }: { m: IndexModel }) {
         <div className="flex flex-wrap items-center gap-1">
           {latest.variants.map((v) => (
             <Badge key={v.id} variant="outline">
-              {v.engine} ·{" "}
-              {v.requires.nodes && v.requires.nodes > 1
-                ? `${v.requires.nodes}×${v.requires.gpus}`
-                : `${v.requires.gpus}`}{" "}
-              GPU
+              {v.engine} · {gpuCount(v.requires)} · {vendorLabel(v.requires.vendor)}
             </Badge>
           ))}
         </div>
+        <div className="text-xs text-muted-foreground">Runs on {runsOn(latest.variants)}</div>
         <div className="flex items-center gap-2">
           <Link
             to={

@@ -79,10 +79,10 @@ func TestReleasesMarksSwissManagedOnes(t *testing.T) {
 	for _, r := range got {
 		byName[r.Name] = r
 	}
-	if byName["glm-53"].SwissPlan == nil {
+	if byName["glm-53"].SwissFiles == nil {
 		t.Error("glm-53 has a plan ConfigMap and should carry it")
 	}
-	if byName["by-hand"].SwissPlan != nil {
+	if byName["by-hand"].SwissFiles != nil {
 		t.Error("a hand-installed release must come back untracked, not fail")
 	}
 }

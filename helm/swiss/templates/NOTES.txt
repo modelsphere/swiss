@@ -9,6 +9,27 @@ Reach it:
   open http://localhost:8080
 {{- end }}
 
+{{ if .Values.auth.disabled -}}
+NO LOGIN. server.auth.disabled is set, so everything swissd serves is open to
+anyone who can reach the Service. Turn auth.disabled off before this is
+reachable by anybody but you.
+{{- else -}}
+Log in as "{{ .Values.auth.username }}". The password was
+{{- if .Values.auth.existingSecret }} set in {{ .Values.auth.existingSecret }}, which you manage.
+{{- else if .Values.auth.password }} set in your values file.
+{{- else }} generated on first install; read it with:
+
+  kubectl -n {{ .Release.Namespace }} get secret {{ include "swiss.authSecretName" . }}     -o jsonpath='{.data.password}' | base64 -d; echo
+{{- end }}
+
+To change it, edit that Secret. The kubelet updates the mounted file within a
+minute or so and the next login uses it -- no restart. Every session issued
+against the old password stops working, which is the only way to end one early.
+
+FIRST RUN: there is no site profile yet -- this chart no longer writes one.
+Log in and the setup page asks for it, pre-filled with a working default.
+{{- end }}
+
 Check what it can actually see -- /readyz reports the cluster, the profile and
 the catalog separately, so a failure names the dependency:
 
@@ -28,3 +49,9 @@ untracked-release view. Make sure that trade was deliberate.
 
 Swiss does not deploy Swiss: upgrade this release with helm or helmfile, never
 through its own UI.
+
+UPGRADING FROM 0.3.x, WHERE THE CHART CREATED THE SITE PROFILE: helm deletes
+what it no longer renders. Hand the ConfigMap to swissd before upgrading, or
+lose what is in it --
+
+  kubectl -n {{ .Release.Namespace }} annotate configmap {{ include "swiss.fullname" . }}-profile     helm.sh/resource-policy=keep

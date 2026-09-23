@@ -48,8 +48,7 @@ func main() {
 		notYet("emit", "write the values file and the helmfile entry, then open a PR"))
 
 	if err := root.Execute(); err != nil {
-		var ec exitErr
-		if errors.As(err, &ec) {
+		if ec, ok := errors.AsType[exitErr](err); ok {
 			if ec.msg != "" {
 				fmt.Fprintln(os.Stderr, "swiss: "+ec.msg)
 			}

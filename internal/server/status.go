@@ -27,7 +27,17 @@ type releaseStatus struct {
 	Ready      int           `json:"ready"`
 	Total      int           `json:"total"`
 	Route      string        `json:"route,omitempty"`
-	Warning    string        `json:"warning,omitempty"`
+	// URL is that route on the site's gateway, when the profile names one.
+	URL string `json:"url,omitempty"`
+	// Model is what the engine advertises, so a caller can name it in a request.
+	Model string `json:"model,omitempty"`
+	// AuthHeader and AuthPrefix are how the entrypoint expects a key, for the
+	// benefit of a worked example. Names only -- the key itself stays in its
+	// Secret. AuthPrefix is not omitted when empty: a custom header usually
+	// carries the key with no scheme, and that is a real answer.
+	AuthHeader string `json:"authHeader,omitempty"`
+	AuthPrefix string `json:"authPrefix"`
+	Warning    string `json:"warning,omitempty"`
 	// Plan is the status key written beside the release on every apply. It is
 	// the only thing that can say an apply was started and never finished --
 	// helm's own status describes the last apply that returned.
@@ -59,6 +69,12 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if p, err := s.currentPlan(ctx, ns, release); err == nil {
 		selector = fmt.Sprintf("app=%s-%s", release, p.Engine)
 		out.Route = routeOf(p)
+		out.Model = servedName(p)
+		if prof, err := s.Profile(ctx); err == nil {
+			out.URL = prof.Route.ModelURL(out.Route)
+			out.AuthHeader = prof.Route.Auth.HeaderName()
+			out.AuthPrefix = prof.Route.Auth.KeyPrefix()
+		}
 	}
 	pods, err := s.probe.Pods(ctx, ns, selector)
 	if err != nil {
@@ -259,7 +275,7 @@ func (s *Server) entrypoint(ctx context.Context, p *plan.Plan, auth entrypointAu
 	if port == 0 {
 		port = 8080
 	}
-	hdr, err := s.entrypointHeaders(ctx, prof.Route.Auth, svcNS, auth)
+	hdr, err := s.entrypointHeaders(ctx, prof.Route.Auth, auth)
 	if err != nil {
 		return "", nil, err
 	}
@@ -272,8 +288,7 @@ func (s *Server) entrypoint(ctx context.Context, p *plan.Plan, auth entrypointAu
 // The profile is a ConfigMap, so it names a Secret rather than holding the key.
 // A request-supplied key wins outright -- that is what makes it possible to test
 // a credential before writing it into the cluster.
-// entrypointNS is the namespace a bare route.auth.secretRef is read from.
-func (s *Server) entrypointHeaders(ctx context.Context, cfg site.RouteAuth, entrypointNS string, req entrypointAuth) (http.Header, error) {
+func (s *Server) entrypointHeaders(ctx context.Context, cfg site.RouteAuth, req entrypointAuth) (http.Header, error) {
 	hdr := http.Header{}
 	for k, v := range cfg.Headers {
 		hdr.Set(k, v)
@@ -284,7 +299,7 @@ func (s *Server) entrypointHeaders(ctx context.Context, cfg site.RouteAuth, entr
 
 	key := req.APIKey
 	if key == "" && cfg.SecretRef != "" {
-		ref := cfg.SecretReference(entrypointNS)
+		ref := cfg.SecretReference(s.namespace)
 		data, err := s.probe.Secret(ctx, ref)
 		if err != nil {
 			return nil, fmt.Errorf("route.auth.secretRef %s: %w", ref, err)
@@ -422,7 +437,7 @@ func contentText(raw json.RawMessage) (text, thinking string) {
 // servedName is the name the engine answers to, which is model.name after the
 // catalog's servedName projection -- not the catalog entry's own name.
 func servedName(p *plan.Plan) string {
-	if v, ok := values.Get(p.Values, "model.name"); ok {
+	if v, ok := values.Get(p.Values(), "model.name"); ok {
 		if s, _ := v.(string); s != "" {
 			return s
 		}
@@ -430,13 +445,22 @@ func servedName(p *plan.Plan) string {
 	return p.Source.Model
 }
 
+// routeOf is the path this release publishes, or "" when it publishes none.
+// Compose writes every feature flag into the plan, so modelRoute.enabled is
+// always there to read: without this check a release with routing off still
+// reported a route, and the status page advertised a URL nothing serves.
 func routeOf(p *plan.Plan) string {
-	if v, ok := values.Get(p.Values, "modelRoute.nginx.route"); ok {
+	if v, ok := values.Get(p.Values(), "modelRoute.enabled"); ok {
+		if on, _ := v.(bool); !on {
+			return ""
+		}
+	}
+	if v, ok := values.Get(p.Values(), "modelRoute.nginx.route"); ok {
 		if s, _ := v.(string); s != "" {
 			return s
 		}
 	}
-	if v, ok := values.Get(p.Values, "serviceId"); ok {
+	if v, ok := values.Get(p.Values(), "serviceId"); ok {
 		if s, _ := v.(string); s != "" {
 			return s
 		}

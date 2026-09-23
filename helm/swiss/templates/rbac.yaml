@@ -47,10 +47,30 @@ subjects:
     namespace: {{ .Release.Namespace }}
 ---
 # ---------------------------------------------------------------------------
-# swissd's own namespace: it reads the site profile ConfigMap from here. Granted
-# whichever scope is in use, and only when the profile lives in this namespace.
+# swissd's own namespace: the site profile ConfigMap, and the entrypoint Secret
+# when the profile names one by bare name. Granted whichever scope is in use,
+# and only for the objects that actually live here.
+#
+# The secret grant covers this namespace whole -- RBAC cannot filter a read by
+# name -- which includes swiss's own helm release.
 # ---------------------------------------------------------------------------
-{{- if eq $profileNS .Release.Namespace }}
+{{- /*
+The entrypoint credential the profile may name is not known at install time
+any more: swissd owns the profile, and the operator writes route.auth.secretRef
+into it from the web. So the secret read here is granted for this namespace
+whole, which is the same grant it was before -- RBAC cannot filter a read by
+name -- just no longer conditional on a value this chart can see.
+
+The login Secret needs no grant at all: it is mounted as a volume, and the
+kubelet reads it rather than swissd.
+*/}}
+{{- $profileVerbs := list "get" }}
+{{- if .Values.rbac.manageProfile }}
+{{- /* swissd writes the profile the setup page and the editor produce. `create`
+       cannot be scoped to one name by RBAC, so this is configmaps create in
+       swissd's own namespace. */}}
+{{- $profileVerbs = list "get" "create" "update" "patch" }}
+{{- end }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -60,14 +80,50 @@ metadata:
     {{- include "swiss.labels" . | nindent 4 }}
 rules:
   - apiGroups: [""]
-    resources: ["configmaps"]
+    resources: ["secrets"]
     verbs: ["get"]
+  {{- if eq $profileNS .Release.Namespace }}
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: {{ $profileVerbs | toJson }}
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: {{ $fullName }}-profile
   namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "swiss.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $fullName }}-profile
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sa }}
+    namespace: {{ .Release.Namespace }}
+---
+{{- if ne $profileNS .Release.Namespace }}
+{{- /* The profile was pointed at another namespace, so the grant has to follow
+       it there rather than be assumed here. */}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fullName }}-profile
+  namespace: {{ $profileNS }}
+  labels:
+    {{- include "swiss.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: {{ $profileVerbs | toJson }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fullName }}-profile
+  namespace: {{ $profileNS }}
   labels:
     {{- include "swiss.labels" . | nindent 4 }}
 roleRef:

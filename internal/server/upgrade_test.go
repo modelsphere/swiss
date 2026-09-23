@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/aceforeverd/swiss/internal/cluster"
@@ -14,7 +15,7 @@ func deployed(t *testing.T, req planRequest) cluster.Fake {
 	_, doc := livePlan(t, req)
 	probe := liveProbe()
 	probe.Rel = append(probe.Rel, cluster.Release{
-		Name: req.Release, Namespace: "modelforge", Status: "deployed", Revision: 3, SwissPlan: doc,
+		Name: req.Release, Namespace: "modelforge", Status: "deployed", Revision: 3, SwissFiles: doc,
 	})
 	return probe
 }
@@ -35,7 +36,7 @@ func TestUpgradeFormOverridesWin(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, up)
 	}
-	if got := up["values"].(map[string]any)["replicaCount"]; got != float64(5) {
+	if got := planValues(up)["replicaCount"]; got != float64(5) {
 		t.Fatalf("the form must win over what was carried forward, got %v", got)
 	}
 }
@@ -62,7 +63,7 @@ func TestUpgradeKeepsValuesTheFormDoesNotCover(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, up)
 	}
-	vals := up["values"].(map[string]any)
+	vals := planValues(up)
 	sel, ok := vals["nodeSelector"].(map[string]any)
 	if !ok || sel["disktype"] != "nvme" {
 		t.Fatalf("a value the form does not cover must survive: %v", vals["nodeSelector"])
@@ -123,12 +124,12 @@ func TestBareUpgradeStillCarriesEverything(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, up)
 	}
-	if up["values"].(map[string]any)["replicaCount"] != float64(3) {
+	if planValues(up)["replicaCount"] != float64(3) {
 		t.Error("a bare upgrade must carry the form layer forward")
 	}
-	edits, ok := up["edits"].(map[string]any)
-	if !ok || edits["nodeSelector"] == nil {
-		t.Fatalf("a bare upgrade must carry the plan editor forward: %v", up["edits"])
+	edits := layerDoc(up, "edit")
+	if edits["nodeSelector"] == nil {
+		t.Fatalf("a bare upgrade must carry the plan editor forward: %v", edits)
 	}
 }
 
@@ -149,7 +150,7 @@ func TestUpgradeFormCanClearTheEdits(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, up)
 	}
-	if edits, present := up["edits"]; present && edits != nil {
+	if edits := layerDoc(up, "edit"); len(edits) > 0 {
 		t.Fatalf("clearing the plan editor must clear it: %v", edits)
 	}
 }
@@ -167,4 +168,60 @@ func TestUpgradeFormStillObeysOwnership(t *testing.T) {
 	if code != http.StatusBadRequest {
 		t.Fatalf("a catalog-owned key must be refused from the upgrade form too, got %d", code)
 	}
+}
+
+// The upgrade form seeds itself from the form layer of the release's stored
+// plan. If those inputs are not there, the form comes up empty and composing an
+// upgrade resets every setting the release had -- silently, because an empty
+// form still sends its defaults.
+func TestFormLayerCarriesWhatTheUpgradeFormSeedsFrom(t *testing.T) {
+	srv, _ := deployServer(t, true)
+	code, p := post(t, srv, "/api/plans", map[string]any{
+		"model": "glm5.1", "serviceId": "glm-53", "localPath": "/mnt/disk9/weights",
+		"gpuProducts": []string{"NVIDIA-B300-SXM6-AC"},
+		"overrides": map[string]any{
+			"replicaCount":   2,
+			"cart":           map[string]any{"enabled": false},
+			"sloRequirement": map[string]any{"enabled": true},
+			"modelRoute":     map[string]any{"enabled": true, "nginx": map[string]any{"route": "glm-53"}},
+			"tolerations":    []any{map[string]any{"key": "gpu", "operator": "Exists"}},
+		},
+		"editsYAML": "nodeSelector:\n  zone: az1\n",
+	})
+	if code != 200 {
+		t.Fatalf("status %d: %v", code, p)
+	}
+
+	form := layerDoc(p, "form")
+	if len(form) == 0 {
+		t.Fatal("no form layer: the upgrade form would seed from nothing")
+	}
+	// Every field formFromPlan reads.
+	for _, path := range []string{
+		"serviceId", "model.localPath", "replicaCount",
+		"cart.enabled", "sloRequirement.enabled", "modelRoute.enabled",
+		"modelRoute.nginx.route", "tolerations", "affinity",
+	} {
+		if !hasPath(form, path) {
+			t.Errorf("form layer is missing %s", path)
+		}
+	}
+	if edit := layerDoc(p, "edit"); edit["nodeSelector"] == nil {
+		t.Error("the plan editor's input must be its own layer, for the form to show it")
+	}
+}
+
+func hasPath(doc map[string]any, path string) bool {
+	var node any = doc
+	for _, seg := range strings.Split(path, ".") {
+		m, ok := node.(map[string]any)
+		if !ok {
+			return false
+		}
+		node, ok = m[seg]
+		if !ok {
+			return false
+		}
+	}
+	return true
 }

@@ -24,10 +24,11 @@ type Release struct {
 	Status    string // deployed, pending-upgrade, failed, ...
 	Revision  int
 	Updated   time.Time
-	// SwissPlan is the plan recorded alongside the release, when one is present.
-	// Absent means the release was not deployed by Swiss -- the "live but
-	// untracked" row that matters most in a reconciliation view.
-	SwissPlan   []byte
+	// SwissFiles is the plan ConfigMap's contents: helmfile.yaml, one values
+	// file per layer, and the metadata -- the directory the release was applied
+	// from. Empty means the release was not deployed by Swiss, which is the
+	// "live but untracked" row that matters most in a reconciliation view.
+	SwissFiles  map[string]string
 	SwissStatus []byte
 }
 
@@ -79,6 +80,11 @@ type Probe interface {
 	// detected from its key set before a write, rather than after two models are
 	// fighting over one openresty key; site profiles are read from one whole.
 	ConfigMap(ctx context.Context, ref string) (map[string]string, error)
+	// SecretNames lists the Secrets in a namespace matching a label selector.
+	// Plan history is one Secret per revision, labelled the way helm labels its
+	// own, so enumerating what a release can roll back to is a cluster listing
+	// and not a database query.
+	SecretNames(ctx context.Context, namespace, selector string) ([]string, error)
 	// Secret reads a Secret given as "ns/name". The site profile is a ConfigMap,
 	// so a credential it needs -- the entrypoint's API key -- is named there and
 	// held here. Values come back already base64-decoded.
@@ -115,14 +121,16 @@ func SplitRef(ref string) (namespace, name string, err error) {
 
 // Fake is an in-memory Probe.
 type Fake struct {
-	PingErr  error
-	Pod      []Pod
-	Rel      []Release
-	Nod      []Node
-	Maps     map[string]map[string]string
-	Secrets  map[string]map[string]string
-	Alloc    map[string][]GPUPod
-	AllocErr error
+	PingErr error
+	Pod     []Pod
+	Rel     []Release
+	Nod     []Node
+	Maps    map[string]map[string]string
+	Secrets map[string]map[string]string
+	// SecretLabels is what SecretNames matches on, keyed like Secrets.
+	SecretLabels map[string]map[string]string
+	Alloc        map[string][]GPUPod
+	AllocErr     error
 }
 
 func (f Fake) Ping(context.Context) error                          { return f.PingErr }
@@ -131,6 +139,33 @@ func (f Fake) Releases(context.Context) ([]Release, error)         { return f.Re
 func (f Fake) Nodes(context.Context) ([]Node, error)               { return f.Nod, nil }
 func (f Fake) ConfigMap(_ context.Context, ref string) (map[string]string, error) {
 	return f.Maps[ref], nil
+}
+
+// SecretNames matches on the labels the fake was seeded with. Good enough for
+// the one selector swiss uses: every term must match.
+func (f Fake) SecretNames(_ context.Context, namespace, selector string) ([]string, error) {
+	var out []string
+	for ref, labels := range f.SecretLabels {
+		ns, name, err := SplitRef(ref)
+		if err != nil || ns != namespace {
+			continue
+		}
+		if matchSelector(labels, selector) {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func matchSelector(labels map[string]string, selector string) bool {
+	for _, term := range strings.Split(selector, ",") {
+		k, v, ok := strings.Cut(strings.TrimSpace(term), "=")
+		if !ok || labels[k] != v {
+			return false
+		}
+	}
+	return true
 }
 
 func (f Fake) GPUAllocations(context.Context) (map[string][]GPUPod, error) {
@@ -155,4 +190,8 @@ type Writer interface {
 	// DeleteConfigMap removes one, and succeeds when it is already gone.
 	// Uninstall is a cleanup path: it has to be safe to run twice.
 	DeleteConfigMap(ctx context.Context, ref string) error
+	// PutSecret writes one with labels, which is how plan history is stored:
+	// one Secret per revision, the way helm stores its own.
+	PutSecret(ctx context.Context, ref string, data, labels map[string]string) error
+	DeleteSecret(ctx context.Context, ref string) error
 }

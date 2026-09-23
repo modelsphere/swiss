@@ -183,3 +183,24 @@ func Subtree(t Tree, paths []string) Tree {
 	}
 	return out
 }
+
+// Paths lists every leaf path in a tree, dotted.
+func Paths(t Tree) []string {
+	var out []string
+	var walk func(Tree, string)
+	walk = func(n Tree, prefix string) {
+		for k, v := range n {
+			path := k
+			if prefix != "" {
+				path = prefix + "." + k
+			}
+			if sub, ok := asMap(v); ok && len(sub) > 0 {
+				walk(sub, path)
+				continue
+			}
+			out = append(out, path)
+		}
+	}
+	walk(t, "")
+	return out
+}

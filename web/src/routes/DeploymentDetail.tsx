@@ -1,13 +1,11 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, CircleCheck, CircleX, TriangleAlert } from "lucide-react";
+import { ChevronLeft, TriangleAlert } from "lucide-react";
 import {
   api,
   deployApi,
-  type ChatResult,
-  type InferenceApi,
-  type EntrypointAuth,
+  type RevisionDiff,
   type PlanStatus,
   type ReleaseStatus as Status,
 } from "@/lib/api";
@@ -15,7 +13,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, Input } from "@/components/ui/input";
-import { AuthFields, SentHeaders } from "@/components/EntrypointAuth";
+import { Code } from "@/components/ui/code";
+import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
+import { DiffView } from "@/components/DiffView";
 import { Provenance } from "@/components/Provenance";
 import { ReleaseStatus } from "@/components/ReleaseStatus";
 import { ErrorState, Loading } from "@/components/States";
@@ -48,7 +48,7 @@ export function DeploymentDetail() {
         to="/"
         className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
       >
-        <ChevronLeft className="size-4" /> Deployments
+        <ChevronLeft className="size-4" /> LLM deployments
       </Link>
 
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -91,8 +91,6 @@ export function DeploymentDetail() {
 
       <ReleaseStatus namespace={namespace} release={release} />
 
-      <HealthCheck namespace={namespace} release={release} hasPlan={!!plan.data} />
-
       {plan.data && (
         <Card>
           <CardHeader>
@@ -105,6 +103,10 @@ export function DeploymentDetail() {
             <Provenance plan={plan.data} />
           </CardContent>
         </Card>
+      )}
+
+      {cluster.data?.allowDeploy && s.exists && (
+        <Revisions namespace={namespace} release={release} live={s.revision} />
       )}
 
       {cluster.data?.allowDeploy && (
@@ -173,151 +175,213 @@ function InstallStatus({ status }: { status: Status }) {
   );
 }
 
-// Named by protocol: "Chat" and "Messages" are the same word to an operator
-// deciding which one their gateway accepts.
-const API_FORMATS: { id: InferenceApi; label: string; path: string }[] = [
-  { id: "chat", label: "OpenAI Chat Completions", path: "/v1/chat/completions" },
-  { id: "completions", label: "OpenAI Completions (legacy)", path: "/v1/completions" },
-  { id: "messages", label: "Anthropic Messages", path: "/v1/messages" },
-];
-
-// HealthCheck sends a real inference request. The pod readiness above and the
-// /v1/models probe both pass on a model that cannot generate a token, so this
-// is the only check that answers the question an operator actually has.
-function HealthCheck({
+// Revisions is what this release can be rolled back to: one archived workspace
+// per applied revision, read from the cluster. A rollback re-applies one
+// forward as a new revision -- helm's own rollback does the same -- so the plan
+// beside the release keeps describing what is running.
+function Revisions({
   namespace,
   release,
-  hasPlan,
+  live,
 }: {
   namespace: string;
   release: string;
-  hasPlan: boolean;
+  live: number;
 }) {
-  const [format, setFormat] = useState<InferenceApi>("chat");
-  const [prompt, setPrompt] = useState("Reply with the single word: ok");
-  // Room for a reasoning model to finish thinking before it answers; on a
-  // tighter budget every such model stops mid-thought and looks broken.
-  const [maxTokens, setMaxTokens] = useState(256);
-  const [auth, setAuth] = useState<EntrypointAuth>({});
-  const [result, setResult] = useState<ChatResult | null>(null);
+  const [diff, setDiff] = useState<RevisionDiff | null>(null);
+  // Every revision whose values are open. Several at once, because two
+  // revisions' values are read side by side or not at all.
+  const [openValues, setOpenValues] = useState<number[]>([]);
+  const qc = useQueryClient();
 
-  const run = useMutation({
-    mutationFn: () =>
-      deployApi.chat(namespace, release, { api: format, prompt, maxTokens, ...auth }),
-    onSuccess: setResult,
+  const toggleValues = (rev: number) =>
+    setOpenValues((open) =>
+      open.includes(rev) ? open.filter((n) => n !== rev) : [...open, rev],
+    );
+
+  // Optional, exactly as on the deploy and upgrade pipelines. Running it also
+  // pins the rollback to the revision it saw.
+  const diffM = useMutation({
+    mutationFn: (to: number) => deployApi.diffRevision(namespace, release, to),
+    onSuccess: setDiff,
   });
+
+  const revs = useQuery({
+    queryKey: ["revisions", namespace, release],
+    queryFn: () => api.revisions(namespace, release),
+  });
+
+  const roll = useMutation({
+    // The revision the diff saw when there is one, else the one this page
+    // rendered. Either way the rollback asserts it has not moved.
+    mutationFn: (to: number) =>
+      deployApi.rollback(namespace, release, to, diff?.toRevision === to ? diff.revision : live),
+    onSettled: () => {
+      setDiff(null);
+      qc.invalidateQueries({ queryKey: ["status", namespace, release] });
+      qc.invalidateQueries({ queryKey: ["revisions", namespace, release] });
+      qc.invalidateQueries({ queryKey: ["release-plan", namespace, release] });
+    },
+  });
+
+  const rows = revs.data?.revisions ?? [];
+  const archived = rows.filter((r) => !r.current);
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Health check</CardTitle>
+        <CardTitle className="text-base">Revisions</CardTitle>
         <p className="text-sm text-muted-foreground">
-          Sends a real request through the openresty entrypoint and shows what came back. A
-          ready pod behind an unpublished route serves nobody, and a model list comes back
-          from an engine that cannot yet generate a token.
+          Diff first: rolling back re-applies that revision's plan as a new one, with the
+          image, chart and engine flags it had — not whatever the catalog says that version
+          is today.
         </p>
       </CardHeader>
-      <CardContent className="space-y-3">
-        {!hasPlan ? (
+      <CardContent className="space-y-2">
+        {revs.error && <ErrorState what="the revisions" error={revs.error} />}
+        {diffM.error && <ErrorState what="the diff" error={diffM.error} />}
+        {roll.error && <ErrorState what="the rollback" error={roll.error} />}
+
+        {revs.isPending ? (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        ) : archived.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            Needs the plan beside the release to know which route to call.
+            Nothing to roll back to yet — a plan is kept each time this release is applied.
           </p>
         ) : (
-          <>
-            <div className="flex flex-wrap gap-1">
-              {API_FORMATS.map((a) => (
-                <button
-                  key={a.id}
-                  onClick={() => setFormat(a.id)}
-                  className={
-                    format === a.id
-                      ? "rounded-md border border-foreground px-3 py-1 text-left"
-                      : "rounded-md border px-3 py-1 text-left text-muted-foreground hover:text-foreground"
-                  }
-                >
-                  <span className="block text-sm font-medium">{a.label}</span>
-                  <span className="block font-mono text-xs opacity-70">{a.path}</span>
-                </button>
+          // A table rather than a row of flex boxes: a "current" badge and a
+          // rollback button are not the same width, and only shared columns
+          // keep the two action cells from stepping about from row to row.
+          <Table>
+            <TableBody>
+              {rows.map((r) => (
+                <Fragment key={r.revision}>
+                  <TableRow>
+                    <TableCell className="pl-0 text-sm tabular-nums whitespace-nowrap">
+                      rev {r.revision}
+                    </TableCell>
+                    <TableCell className="w-full text-sm text-muted-foreground">
+                      {r.model}
+                      {r.version && ` v${r.version}`}
+                      {r.variant && ` · ${r.variant}`}
+                      {r.chart && ` · ${r.chart}`}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap">
+                      <Button size="sm" variant="ghost" onClick={() => toggleValues(r.revision)}>
+                        {openValues.includes(r.revision) ? "Hide values" : "Values"}
+                      </Button>
+                    </TableCell>
+                    <TableCell className="pr-0 text-right whitespace-nowrap">
+                      {r.current ? (
+                        <Badge variant="success">current</Badge>
+                      ) : diff?.toRevision === r.revision && diff.changed ? (
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          onClick={() => roll.mutate(r.revision)}
+                          disabled={roll.isPending}
+                        >
+                          {roll.isPending ? "Rolling back…" : "Roll back"}
+                        </Button>
+                      ) : (
+                        // A diff that came back empty never offers the rollback:
+                        // the revision is what is already running, so applying it
+                        // forward would be a new revision with nothing in it.
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            setDiff(null);
+                            diffM.mutate(r.revision);
+                          }}
+                          disabled={diffM.isPending || roll.isPending}
+                        >
+                          {diffM.isPending && diffM.variables === r.revision
+                            ? "Diffing…"
+                            : diff?.toRevision === r.revision
+                              ? "Diff again"
+                              : "Roll back"}
+                        </Button>
+                      )}
+                    </TableCell>
+                  </TableRow>
+
+                  {diff?.toRevision === r.revision && (
+                    <TableRow>
+                      <TableCell colSpan={4} className="space-y-1 px-0">
+                        <div className="flex flex-wrap items-center gap-2 text-xs">
+                          {diff.changed ? (
+                            <Badge variant="warning">changes</Badge>
+                          ) : (
+                            <Badge variant="success">no changes</Badge>
+                          )}
+                          <span className="text-muted-foreground">
+                            against live revision {diff.revision}
+                          </span>
+                        </div>
+                        {diff.output.trim() ? (
+                          <DiffView output={diff.output} />
+                        ) : (
+                          <p className="text-sm text-muted-foreground">
+                            Nothing would change — this revision matches what is running.
+                          </p>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  )}
+
+                  {openValues.includes(r.revision) && (
+                    <TableRow>
+                      <TableCell colSpan={4} className="px-0">
+                        <RevisionValues
+                          namespace={namespace}
+                          release={release}
+                          revision={r.revision}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </Fragment>
               ))}
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-[1fr_8rem]">
-              <Field label="Prompt">
-                <Input value={prompt} onChange={(e) => setPrompt(e.target.value)} />
-              </Field>
-              <Field label="Max tokens">
-                <Input
-                  type="number"
-                  min={1}
-                  value={maxTokens}
-                  onChange={(e) => setMaxTokens(Number(e.target.value) || 1)}
-                />
-              </Field>
-            </div>
-
-            <AuthFields value={auth} onChange={setAuth} />
-
-            <Button onClick={() => run.mutate()} disabled={run.isPending}>
-              {run.isPending ? "Asking the model…" : "Send request"}
-            </Button>
-
-            {run.error && <ErrorState what="the health check" error={run.error} />}
-            {result && <ChatOutcome result={result} />}
-          </>
+            </TableBody>
+          </Table>
         )}
       </CardContent>
     </Card>
   );
 }
 
-// A reasoning model that spent the budget thinking generated tokens, so the
-// check passes -- but it is not an answer, and saying so is the difference
-// between "raise the budget" and "the model is broken".
-function outcomeText(result: ChatResult): string {
-  if (!result.ok) return "No usable answer";
-  if (!result.reply) return "Reasoning only, no answer";
-  return "The model answered";
-}
+// RevisionValues is what helm holds for one revision, rather than what swiss
+// composed. A revision's values never change once written, so what is read is
+// kept for as long as the page lives.
+function RevisionValues({
+  namespace,
+  release,
+  revision,
+}: {
+  namespace: string;
+  release: string;
+  revision: number;
+}) {
+  const values = useQuery({
+    queryKey: ["revision-values", namespace, release, revision],
+    queryFn: () => api.revisionValues(namespace, release, revision),
+    staleTime: Infinity,
+  });
 
-function ChatOutcome({ result }: { result: ChatResult }) {
   return (
-    <div className="space-y-2 rounded-lg border p-3">
-      <div className="flex flex-wrap items-center gap-2 text-sm">
-        {result.ok ? (
-          <CircleCheck className="size-4 shrink-0 text-success" />
-        ) : (
-          <CircleX className="size-4 shrink-0 text-destructive" />
-        )}
-        <span className="font-medium">{outcomeText(result)}</span>
-        {result.status ? <Badge variant="muted">HTTP {result.status}</Badge> : null}
-        <Badge variant="outline">{result.latencyMs} ms</Badge>
-        {result.finishReason && <Badge variant="muted">stopped: {result.finishReason}</Badge>}
-        {result.model && <Badge variant="muted">{result.model}</Badge>}
-        <SentHeaders names={result.sentHeaders} />
+    <div className="space-y-1">
+      <div className="text-xs tracking-wide text-muted-foreground uppercase">
+        helm values · revision {revision}
       </div>
-
-      <div className="font-mono text-xs break-all text-muted-foreground">{result.url}</div>
-
-      {result.reply && (
-        <pre className="overflow-x-auto rounded-md bg-muted p-3 text-xs whitespace-pre-wrap">
-          {result.reply}
-        </pre>
-      )}
-      {result.reasoning && (
-        <details className="rounded-md border">
-          <summary className="cursor-pointer px-3 py-2 text-xs text-muted-foreground">
-            Reasoning ({result.reasoning.length} chars)
-          </summary>
-          <pre className="overflow-x-auto border-t p-3 text-xs whitespace-pre-wrap text-muted-foreground">
-            {result.reasoning}
-          </pre>
-        </details>
-      )}
-      {result.error && <p className="text-sm text-destructive">{result.error}</p>}
-      {result.body && (
-        <pre className="overflow-x-auto rounded-md bg-muted p-3 text-xs whitespace-pre-wrap">
-          {result.body}
-        </pre>
+      {values.isPending ? (
+        <p className="text-sm text-muted-foreground">Reading values…</p>
+      ) : values.error ? (
+        <ErrorState what="the values" error={values.error} />
+      ) : (
+        <Code lang="yaml" className="max-h-96 overflow-auto">
+          {values.data?.values.trim() || "# helm recorded no values here"}
+        </Code>
       )}
     </div>
   );

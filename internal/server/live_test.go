@@ -59,7 +59,7 @@ func liveProbe() cluster.Fake {
 	p.Rel = []cluster.Release{
 		{Name: "by-hand", Namespace: "modelforge", Chart: "sglang-0.8.0", Status: "deployed", Revision: 1},
 		{Name: "glm-53", Namespace: "modelforge", Chart: "sglang-0.8.0", Status: "deployed", Revision: 4,
-			SwissPlan: []byte("source:\n  model: modelforge\n  variant: sglang-tp2\n")},
+			SwissFiles: map[string]string{"plan.yaml": "source:\n  model: modelforge\n  variant: sglang-tp2\n"}},
 	}
 	p.Nod = []cluster.Node{
 		{Name: "gpu-1", GPUProduct: "NVIDIA-B300-SXM6-AC", GPUs: 8, Schedulable: true},

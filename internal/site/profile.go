@@ -28,13 +28,19 @@ type Profile struct {
 
 	// Registry rewrites engine image repositories to a mirror. The catalog pins
 	// which build (image.tag); this says where it is pulled from.
-	Registry Registry `yaml:"registry,omitempty" json:"registry,omitempty"`
+	//
+	// omitempty on the yaml tags of these sections, and not on the json ones:
+	// the form editor round-trips a profile through Marshal, and a section
+	// nobody filled in should come back absent rather than as `cache: {}`. The
+	// JSON the web reads keeps them, so a form field has something to bind to.
+	Registry Registry `yaml:"registry,omitempty" json:"registry"`
 
-	Model  ModelPaths `yaml:"model" json:"model"`
-	Cache  Cache      `yaml:"cache,omitempty" json:"cache,omitempty"`
-	Scaler Scaler     `yaml:"scaler,omitempty" json:"scaler,omitempty"`
-	Route  Route      `yaml:"route,omitempty" json:"route,omitempty"`
-	Nodes  Nodes      `yaml:"nodes,omitempty" json:"nodes,omitempty"`
+	Model    ModelPaths `yaml:"model" json:"model"`
+	Schedule Schedule   `yaml:"schedule,omitempty" json:"schedule"`
+	Cache    Cache      `yaml:"cache,omitempty" json:"cache"`
+	Scaler   Scaler     `yaml:"scaler,omitempty" json:"scaler"`
+	Route    Route      `yaml:"route,omitempty" json:"route"`
+	Nodes    Nodes      `yaml:"nodes,omitempty" json:"nodes"`
 
 	// CreateNamespace passes --create-namespace. Off by default: under helm v4
 	// that applies the Namespace object server-side, so it needs patch on
@@ -43,6 +49,13 @@ type Profile struct {
 	// already created for it.
 	CreateNamespace bool        `yaml:"createNamespace,omitempty" json:"createNamespace,omitempty"`
 	Extra           values.Tree `yaml:"extra,omitempty" json:"extra,omitempty"`
+}
+
+// Schedule is what this cluster puts a GPU workload on by default. Both are
+// form-owned, so a deploy overrides either; absent means the chart's default.
+type Schedule struct {
+	PriorityClassName string `yaml:"priorityClassName,omitempty" json:"priorityClassName,omitempty"`
+	SchedulerName     string `yaml:"schedulerName,omitempty" json:"schedulerName,omitempty"`
 }
 
 type Registry struct {
@@ -83,12 +96,26 @@ type Route struct {
 	NginxService     string `yaml:"nginxService,omitempty" json:"nginxService,omitempty"`
 	NginxSelector    string `yaml:"nginxSelector,omitempty" json:"nginxSelector,omitempty"`
 	MonitorConfigMap string `yaml:"monitorConfigMap,omitempty" json:"monitorConfigMap,omitempty"`
+	// Gateway is the public base URL openresty is served on from outside the
+	// cluster, e.g. https://llm.example.com. Display only: a model's URL is
+	// <gateway>/<route>. Every check still calls nginxService in-cluster, so a
+	// wrong or absent gateway changes nothing but what the status page shows.
+	Gateway string `yaml:"gateway,omitempty" json:"gateway,omitempty"`
 	// NginxPort is the entrypoint's port; the readiness check calls
 	// http://<nginxService>:<port>/<route>/v1/models. Defaults to 8080.
 	NginxPort int `yaml:"nginxPort,omitempty" json:"nginxPort,omitempty"`
 	// Auth is how swissd authenticates when it calls the entrypoint. Only the
 	// serving and health checks do; nothing else here talks to a model.
-	Auth RouteAuth `yaml:"auth,omitempty" json:"auth,omitempty"`
+	Auth RouteAuth `yaml:"auth,omitempty" json:"auth"`
+}
+
+// ModelURL is where a route is reached from outside, empty when the profile
+// names no gateway.
+func (r Route) ModelURL(route string) string {
+	if r.Gateway == "" || route == "" {
+		return ""
+	}
+	return strings.TrimSuffix(r.Gateway, "/") + "/" + strings.TrimPrefix(route, "/")
 }
 
 // RouteAuth names a credential rather than holding one. The site profile is a
@@ -100,9 +127,9 @@ type RouteAuth struct {
 	Header string `yaml:"header,omitempty" json:"header,omitempty"`
 	Prefix string `yaml:"prefix,omitempty" json:"prefix,omitempty"`
 	// SecretRef is "namespace/name" of the Secret holding the key, SecretKey
-	// the key within it. A bare name is read from the entrypoint's own
-	// namespace. The namespace must be one swissd was granted, or the read
-	// fails the way any other unlisted namespace does.
+	// the key within it. A bare name is swissd's own namespace. The namespace
+	// must be one swissd was granted, or the read fails the way any other
+	// unlisted namespace does.
 	SecretRef string `yaml:"secretRef,omitempty" json:"secretRef,omitempty"`
 	SecretKey string `yaml:"secretKey,omitempty" json:"secretKey,omitempty"`
 	// Headers are sent on every call to the entrypoint. Not a place for
@@ -119,8 +146,8 @@ func (a RouteAuth) HeaderName() string {
 }
 
 // SecretReference is SecretRef as "namespace/name", qualifying a bare name with
-// ns. A profile names the entrypoint's Secret beside the entrypoint itself, and
-// an operator writing one name there is not describing a different namespace.
+// ns -- swissd's own namespace, where a key written for swissd to send is
+// created. Where the entrypoint runs is a separate fact and not a default.
 func (a RouteAuth) SecretReference(ns string) string {
 	if a.SecretRef == "" || ns == "" || strings.Contains(a.SecretRef, "/") {
 		return a.SecretRef

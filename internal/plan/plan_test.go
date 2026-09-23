@@ -12,7 +12,7 @@ func testPlan() *Plan {
 		APIVersion: APIVersion,
 		Release:    Release{Name: "glm-53", Namespace: "modelforge"},
 		Chart:      ChartRef{Name: "sglang", Version: "0.8.0"},
-		Values:     values.Tree{"replicaCount": 2},
+		Layers:     map[string]values.Tree{"form": {"replicaCount": 2}},
 	}
 }
 
@@ -47,7 +47,7 @@ func TestHelmfileCarriesTheDeployDeclaration(t *testing.T) {
 	for _, want := range []string{
 		"wait: false", "atomic: false", "historyMax: 20", "--three-way-merge",
 		"chart: charts/sglang", "version: 0.8.0",
-		"namespace: modelforge", "values:", "- values.yaml",
+		"namespace: modelforge", "values:", "- form.yaml",
 	} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("declaration is missing %q:\n%s", want, doc)

@@ -33,32 +33,6 @@ export function toYaml(value: unknown, indent = 0): string {
   return `${pad}${scalar(value)}\n`;
 }
 
-// Group a plan's values by the layer that set each path, so each layer reads as
-// its own overrides document.
-export function subtree(values: Record<string, unknown>, paths: string[]): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const path of paths) {
-    const segs = path.split(".");
-    let src: unknown = values;
-    for (const seg of segs) {
-      if (!isRecord(src)) {
-        src = undefined;
-        break;
-      }
-      src = src[seg];
-    }
-    if (src === undefined) continue;
-
-    let cur = out;
-    for (const seg of segs.slice(0, -1)) {
-      if (!isRecord(cur[seg])) cur[seg] = {};
-      cur = cur[seg] as Record<string, unknown>;
-    }
-    cur[segs[segs.length - 1]] = src;
-  }
-  return out;
-}
-
 function isScalar(v: unknown): boolean {
   return v === null || (typeof v !== "object" && typeof v !== "undefined");
 }

@@ -74,11 +74,45 @@ type Server struct {
 	// Binaries, when not on PATH.
 	HelmBin     string `yaml:"helmBin,omitempty"`
 	HelmfileBin string `yaml:"helmfileBin,omitempty"`
+	// PlanHistory is how many previous plans to keep beside a release, one
+	// Secret each, for rollback. Independent of helm's own historyMax: helm can
+	// restore older values, but without a plan beside them swissd would be
+	// describing something other than what is running.
+	PlanHistory int `yaml:"planHistory,omitempty"`
+
 	// CacheTTL bounds how long a fetched catalog or profile is reused.
 	CacheTTL time.Duration `yaml:"cacheTTL,omitempty"`
+
+	// Auth is the site login. On unless explicitly turned off: a default that
+	// depends on whether a credential happens to be configured is a default
+	// that ships open.
+	Auth Auth `yaml:"auth,omitempty"`
 	// Peers are the other clusters' swissd instances, for the nav switcher.
 	// Config, not discovery.
 	Peers []Peer `yaml:"peers,omitempty"`
+}
+
+// Auth is the site login: one account, read from a mounted Secret.
+//
+// A directory rather than a ConfigMap or an API read, because that is what a
+// Secret volume is: the kubelet keeps the files current, so a rotated password
+// takes effect without a restart and swissd needs no Secret grant of its own to
+// log anybody in.
+type Auth struct {
+	// Dir holds one file per key: username, password, and optionally tokenKey.
+	Dir string `yaml:"dir,omitempty"`
+	// TokenTTL is how long a login lasts. One day by default: long enough not
+	// to interrupt a 40-minute model load being watched, short enough that a
+	// forgotten browser tab is not a standing key.
+	TokenTTL time.Duration `yaml:"tokenTTL,omitempty"`
+	// Disabled runs swissd with no login at all. For a laptop; it is logged at
+	// every boot, because an unauthenticated swissd reachable from a Service is
+	// a deploy button for whoever finds it.
+	Disabled bool `yaml:"disabled,omitempty"`
+	// CookieSecure is auto, always or never. Auto sets the flag when the
+	// request arrived over TLS, which is right behind an ingress that
+	// terminates it and right in a plain-http port-forward.
+	CookieSecure string `yaml:"cookieSecure,omitempty"`
 }
 
 type Peer struct {
@@ -135,11 +169,20 @@ func (c *Config) applyDefaults() {
 	if c.Server.Addr == "" {
 		c.Server.Addr = ":8080"
 	}
+	if c.Server.PlanHistory == 0 {
+		c.Server.PlanHistory = 5
+	}
 	if c.Server.CacheTTL == 0 {
 		c.Server.CacheTTL = 60 * time.Second
 	}
 	if c.Server.Database == "" {
 		c.Server.Database = "/tmp/swiss/swiss.db"
+	}
+	if c.Server.Auth.TokenTTL == 0 {
+		c.Server.Auth.TokenTTL = 24 * time.Hour
+	}
+	if c.Server.Auth.CookieSecure == "" {
+		c.Server.Auth.CookieSecure = "auto"
 	}
 }
 
@@ -156,6 +199,9 @@ func (c *Config) resolvePaths(dir string) {
 	}
 	if f := c.Cluster.Profile.File; f != "" && !filepath.IsAbs(f) {
 		c.Cluster.Profile.File = filepath.Join(dir, f)
+	}
+	if d := c.Server.Auth.Dir; d != "" && !filepath.IsAbs(d) {
+		c.Server.Auth.Dir = filepath.Join(dir, d)
 	}
 }
 
@@ -193,6 +239,14 @@ func (c *Config) ValidateServer() error {
 	}
 	if c.Cluster.Name == "" {
 		return fmt.Errorf("%s: cluster.name is required for swissd -- it labels every plan composed here", c.origin())
+	}
+	if !c.Server.Auth.Disabled && c.Server.Auth.Dir == "" {
+		return fmt.Errorf("%s: server.auth.dir is required -- mount the credential Secret, or set server.auth.disabled to run without a login", c.origin())
+	}
+	switch c.Server.Auth.CookieSecure {
+	case "auto", "always", "never":
+	default:
+		return fmt.Errorf("%s: server.auth.cookieSecure %q is not auto, always or never", c.origin(), c.Server.Auth.CookieSecure)
 	}
 	return nil
 }

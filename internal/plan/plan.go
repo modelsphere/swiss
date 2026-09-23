@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"sort"
 
 	"github.com/aceforeverd/swiss/internal/values"
@@ -38,21 +39,23 @@ type Plan struct {
 	// from a human editing the plan rather than from the form.
 	Edits values.Tree `json:"edits,omitempty"`
 
-	// Values is the composed document handed to helm.
-	Values values.Tree `json:"values"`
-
-	// Provenance maps each leaf of Values to the layer that set it. This is what
-	// makes a derived value legible: a number that appears in a cluster without
-	// appearing in a diff is the failure mode the whole design is avoiding.
-	Provenance values.Provenance `json:"provenance,omitempty"`
+	// Layers is the deploy: one override document per layer, each exactly as
+	// that layer wrote it. Applied in Layers order, last writer wins -- which is
+	// helm's own values-file semantics, so helm merging these files lands on the
+	// same result swiss did.
+	//
+	// The order determines the outcome, so nothing here records which layer won
+	// a path: that is read off the order. There is no separate provenance map,
+	// and no separate copy of the form's or the editor's input, because those
+	// are two of these documents.
+	Layers map[string]values.Tree `json:"layers,omitempty"`
 
 	// CreateNamespace passes --create-namespace to helm.
 	CreateNamespace bool `json:"createNamespace,omitempty"`
 
 	// Helmfile is the release declaration these values are applied through, so
-	// a plan is a complete deploy on its own. Derived, and excluded from Hash
-	// for the same reason Provenance is: it explains the values rather than
-	// changing them.
+	// a plan is a complete deploy on its own. Derived, and excluded from Hash:
+	// it explains the values rather than changing them.
 	Helmfile string `json:"helmfile,omitempty"`
 
 	// Hash covers release identity, chart, and the composed values. Two plans
@@ -96,7 +99,7 @@ func (p *Plan) ComputeHash() error {
 		Source  SourceRef   `json:"source"`
 		Chart   ChartRef    `json:"chart"`
 		Values  values.Tree `json:"values"`
-	}{p.Release, p.Source, p.Chart, p.Values}
+	}{p.Release, p.Source, p.Chart, p.Values()}
 
 	b, err := json.Marshal(payload) // encoding/json sorts map keys, so this is stable
 	if err != nil {
@@ -107,15 +110,62 @@ func (p *Plan) ComputeHash() error {
 	return nil
 }
 
-// ByLayer groups provenance for display, so `swiss plan` can show what each
-// layer contributed instead of one flat document.
+// VerifyHash recomputes the hash over the layers and compares. A plan read back
+// from the cluster has been bytes in etcd since it was written, and a rollback
+// applies it without composing anything.
+func (p *Plan) VerifyHash() error {
+	want := p.Hash
+	if want == "" {
+		return fmt.Errorf("plan carries no hash")
+	}
+	c := *p
+	if err := c.ComputeHash(); err != nil {
+		return err
+	}
+	if c.Hash != want {
+		return fmt.Errorf("hash %s does not match the plan it is stored under (%s) -- it was edited in place", c.Hash, want)
+	}
+	return nil
+}
+
+// Values is the document helm receives: the union of the layers. They are
+// disjoint, so this does not depend on merge order and cannot drift from what
+// compose produced the way a separately stored copy could.
+func (p *Plan) Values() values.Tree {
+	out := values.Tree{}
+	for _, layer := range Layers {
+		if tree, ok := p.Layers[layer]; ok {
+			values.Merge(out, tree, layer, nil)
+		}
+	}
+	return out
+}
+
+// LayerOf is the layer whose value for a path survived. Several documents may
+// set one path -- that is what overriding is -- so this reads them back to
+// front: the last writer in Layers order is the one that won.
+func (p *Plan) LayerOf(path string) string {
+	for i := len(Layers) - 1; i >= 0; i-- {
+		if tree, ok := p.Layers[Layers[i]]; ok {
+			if _, found := values.Get(tree, path); found {
+				return Layers[i]
+			}
+		}
+	}
+	return ""
+}
+
+// ByLayer lists the paths each layer set, for display.
 func (p *Plan) ByLayer() map[string][]string {
 	out := map[string][]string{}
-	for path, layer := range p.Provenance {
-		out[layer] = append(out[layer], path)
-	}
-	for _, paths := range out {
+	for _, layer := range Layers {
+		tree, ok := p.Layers[layer]
+		if !ok {
+			continue
+		}
+		paths := values.Paths(tree)
 		sort.Strings(paths)
+		out[layer] = paths
 	}
 	return out
 }
@@ -141,19 +191,7 @@ var Layers = []string{values.LayerCatalog, values.LayerSite, values.LayerDerived
 // LayerValues splits the composed values by the layer that set each path, so a
 // release is applied through one document per layer rather than one merged file.
 // Layers that contributed nothing are omitted.
-func (p *Plan) LayerValues() map[string]values.Tree {
-	byLayer := map[string][]string{}
-	for path, layer := range p.Provenance {
-		byLayer[layer] = append(byLayer[layer], path)
-	}
-	out := map[string]values.Tree{}
-	for _, layer := range Layers {
-		if paths := byLayer[layer]; len(paths) > 0 {
-			out[layer] = values.Subtree(p.Values, paths)
-		}
-	}
-	return out
-}
+func (p *Plan) LayerValues() map[string]values.Tree { return p.Layers }
 
 // ValuesFiles names the documents LayerValues produces, in merge order.
 func (p *Plan) ValuesFiles() []string {
@@ -168,6 +206,73 @@ func (p *Plan) ValuesFiles() []string {
 		return []string{"values.yaml"}
 	}
 	return out
+}
+
+// MetaFile is the key holding everything but the values documents: identity,
+// the catalog and chart locks, and the hash. Named so a mounted directory is
+// self-describing rather than just runnable.
+const MetaFile = "plan.yaml"
+
+// HelmfileFile is the release declaration helmfile is pointed at.
+const HelmfileFile = "helmfile.yaml"
+
+// Files is the deploy as a directory: helmfile.yaml, one values file per layer,
+// and the metadata. This is both what the plan ConfigMap stores and what a
+// workspace is materialised from -- one definition, so a mounted ConfigMap is
+// exactly the tree helmfile runs against.
+func (p *Plan) Files(chartRoot string) (map[string]string, error) {
+	out := map[string]string{}
+	for layer, tree := range p.Layers {
+		doc, err := yaml.Marshal(tree)
+		if err != nil {
+			return nil, err
+		}
+		out[layer+".yaml"] = string(doc)
+	}
+
+	// Best effort: a profile naming neither a chart repo nor a path leaves this
+	// unrenderable, and the runner resolves it against --chart-root instead.
+	if doc, err := p.RenderHelmfile(chartRoot); err == nil {
+		out[HelmfileFile] = doc
+	}
+
+	// The metadata carries no values: those are the files beside it.
+	meta := *p
+	meta.Layers, meta.Helmfile = nil, ""
+	doc, err := meta.YAML()
+	if err != nil {
+		return nil, err
+	}
+	out[MetaFile] = string(doc)
+	return out, nil
+}
+
+// FromFiles rebuilds a plan from that directory.
+func FromFiles(files map[string]string) (*Plan, error) {
+	raw, ok := files[MetaFile]
+	if !ok {
+		return nil, fmt.Errorf("no %s", MetaFile)
+	}
+	p, err := ParseYAML([]byte(raw))
+	if err != nil {
+		return nil, err
+	}
+	p.Helmfile = files[HelmfileFile]
+	p.Layers = map[string]values.Tree{}
+	for _, layer := range Layers {
+		doc, ok := files[layer+".yaml"]
+		if !ok {
+			continue
+		}
+		var tree values.Tree
+		if err := yaml.Unmarshal([]byte(doc), &tree); err != nil {
+			return nil, fmt.Errorf("%s.yaml: %w", layer, err)
+		}
+		if len(tree) > 0 {
+			p.Layers[layer] = tree
+		}
+	}
+	return p, nil
 }
 
 // ParseYAML reads a plan stored beside a release. It goes through JSON because

@@ -124,3 +124,51 @@ func TestDefaults(t *testing.T) {
 		t.Fatalf("defaults not applied: %+v %+v", c.Cluster.Profile, c.Server)
 	}
 }
+
+// The login is on unless it is turned off. A default that depends on whether a
+// credential happens to be configured is a default that ships open.
+func TestSwissdRefusesToRunWithNoLoginUnlessItIsAskedTo(t *testing.T) {
+	dir := t.TempDir()
+	base := "catalog: ./c\ncluster:\n  name: c\n  profile: {configMap: swiss/p}\n"
+
+	c, err := Load(write(t, dir, "bare.yaml", base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ValidateServer(); err == nil {
+		t.Error("a swissd config naming no credential must be refused")
+	}
+
+	mounted, err := Load(write(t, dir, "mounted.yaml", base+"server:\n  auth: {dir: /etc/swiss-auth}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mounted.ValidateServer(); err != nil {
+		t.Errorf("a mounted credential is all it needs: %v", err)
+	}
+	if mounted.Server.Auth.TokenTTL != 24*time.Hour {
+		t.Errorf("tokenTTL default = %v, want a day", mounted.Server.Auth.TokenTTL)
+	}
+
+	off, err := Load(write(t, dir, "off.yaml", base+"server:\n  auth: {disabled: true}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := off.ValidateServer(); err != nil {
+		t.Errorf("turning the login off explicitly is allowed: %v", err)
+	}
+}
+
+// The auth dir is discovered with the config, so a relative path means "next to
+// this file" like every other path here.
+func TestAuthDirResolvesAgainstTheConfigFile(t *testing.T) {
+	dir := t.TempDir()
+	c, err := Load(write(t, dir, "swiss.yaml",
+		"catalog: ./c\ncluster:\n  name: c\n  profile: {configMap: swiss/p}\nserver:\n  auth: {dir: ./auth}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Server.Auth.Dir != filepath.Join(dir, "auth") {
+		t.Errorf("auth.dir = %q", c.Server.Auth.Dir)
+	}
+}

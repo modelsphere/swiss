@@ -7,11 +7,13 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/aceforeverd/swiss/internal/cluster"
 	"github.com/aceforeverd/swiss/internal/config"
+	"github.com/aceforeverd/swiss/internal/plan"
 )
 
 func discardLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
@@ -126,7 +128,7 @@ func TestDeploymentsFlagsUntrackedReleases(t *testing.T) {
 	probe.Rel = []cluster.Release{
 		{Name: "by-hand", Namespace: "modelforge", Chart: "sglang-0.8.0", Status: "deployed", Revision: 1},
 		{Name: "glm-53", Namespace: "modelforge", Chart: "sglang-0.8.0", Status: "deployed", Revision: 4,
-			SwissPlan: []byte("source:\n  model: modelforge\n  variant: sglang-tp2\n  ref: sha256:stale\nprofile: prod\n")},
+			SwissFiles: map[string]string{"plan.yaml": "source:\n  model: modelforge\n  variant: sglang-tp2\n  ref: sha256:stale\nprofile: prod\n"}},
 	}
 	srv := testServer(t, probe)
 	code, body := get(t, srv, "/api/deployments")
@@ -253,8 +255,82 @@ func testConfig(cluster string) *config.Config {
 			Name:    cluster,
 			Profile: config.Profile{ConfigMap: "swiss/site-profile", Key: "profile.yaml"},
 		},
-		Server: config.Server{Addr: ":0", CacheTTL: 60 * time.Second},
+		// No login: these tests are about what the endpoints answer, not about
+		// who is allowed to ask. The login itself is tested in auth_test.go,
+		// which turns it back on.
+		Server: config.Server{
+			Addr: ":0", CacheTTL: 60 * time.Second,
+			Auth: config.Auth{Disabled: true, TokenTTL: 24 * time.Hour, CookieSecure: "auto"},
+		},
 	}
 	c.Origin = "test"
 	return c
+}
+
+// planValues is what helm receives: the union of a plan's layer documents. The
+// plan stores the layers and nothing else, so a test asking "what got composed"
+// unions them the same way every other reader does.
+func planValues(body map[string]any) map[string]any {
+	layers, _ := body["layers"].(map[string]any)
+	out := map[string]any{}
+	for _, layer := range plan.Layers {
+		tree, ok := layers[layer].(map[string]any)
+		if !ok {
+			continue
+		}
+		mergeInto(out, tree)
+	}
+	return out
+}
+
+func mergeInto(dst, src map[string]any) {
+	for k, v := range src {
+		if sub, ok := v.(map[string]any); ok {
+			cur, _ := dst[k].(map[string]any)
+			if cur == nil {
+				cur = map[string]any{}
+			}
+			mergeInto(cur, sub)
+			dst[k] = cur
+			continue
+		}
+		dst[k] = v
+	}
+}
+
+// layerOf is which layer's value for a path survived. Read back to front:
+// several documents may set one path, and the last writer wins.
+func layerOf(body map[string]any, path string) string {
+	layers, _ := body["layers"].(map[string]any)
+	for i := len(plan.Layers) - 1; i >= 0; i-- {
+		layer := plan.Layers[i]
+		cur, ok := layers[layer].(map[string]any)
+		if !ok {
+			continue
+		}
+		var node any = cur
+		found := true
+		for _, seg := range strings.Split(path, ".") {
+			m, isMap := node.(map[string]any)
+			if !isMap {
+				found = false
+				break
+			}
+			node, found = m[seg]
+			if !found {
+				break
+			}
+		}
+		if found {
+			return layer
+		}
+	}
+	return ""
+}
+
+// layerDoc is one of a plan's override documents, as the API returns them.
+func layerDoc(body map[string]any, layer string) map[string]any {
+	layers, _ := body["layers"].(map[string]any)
+	doc, _ := layers[layer].(map[string]any)
+	return doc
 }

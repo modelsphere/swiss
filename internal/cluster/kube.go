@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -37,8 +39,12 @@ type Kube struct {
 	Namespaces []string
 }
 
-// PlanConfigMapPrefix names the ConfigMap holding a release's plan.
+// PlanConfigMapPrefix names the ConfigMap holding a release's live plan.
 const PlanConfigMapPrefix = "swiss-plan-"
+
+// PlanSecretPrefix names the Secrets holding previous plans, one per revision:
+// swiss.plan.v1.<release>.v<revision>, the shape helm uses for its own.
+const PlanSecretPrefix = "swiss.plan.v1."
 
 const (
 	planKey   = "plan.yaml"
@@ -63,6 +69,20 @@ func NewKube(kubeconfig, context_ string, namespaces ...string) (*Kube, error) {
 // NewKubeWithClient is for tests, which supply a fake clientset.
 func NewKubeWithClient(c kubernetes.Interface) *Kube {
 	return &Kube{client: c, SwissPlanPrefix: PlanConfigMapPrefix}
+}
+
+// SelfNamespace is the namespace this process runs in: POD_NAMESPACE when the
+// deployment sets it, otherwise the ServiceAccount the pod mounts. Empty off
+// cluster, where there is no own namespace to speak of.
+func SelfNamespace() string {
+	if ns := strings.TrimSpace(os.Getenv("POD_NAMESPACE")); ns != "" {
+		return ns
+	}
+	b, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
 
 func restConfig(kubeconfig, ctxName string) (*rest.Config, error) {
@@ -134,8 +154,8 @@ func (k *Kube) Releases(ctx context.Context) ([]Release, error) {
 
 	out := make([]Release, 0, len(latest))
 	for _, r := range latest {
-		if doc, status, err := k.planFor(ctx, r.Namespace, r.Name); err == nil {
-			r.SwissPlan, r.SwissStatus = doc, status
+		if files, status, err := k.planFor(ctx, r.Namespace, r.Name); err == nil {
+			r.SwissFiles, r.SwissStatus = files, status
 		}
 		out = append(out, r)
 	}
@@ -195,16 +215,15 @@ func decodeRelease(s *corev1.Secret) (*Release, error) {
 	return r, nil
 }
 
-func (k *Kube) planFor(ctx context.Context, namespace, release string) (plan, status []byte, err error) {
+func (k *Kube) planFor(ctx context.Context, namespace, release string) (files map[string]string, status []byte, err error) {
 	cm, err := k.client.CoreV1().ConfigMaps(namespace).Get(ctx, k.SwissPlanPrefix+release, metav1.GetOptions{})
 	if err != nil {
 		return nil, nil, err
 	}
-	v, ok := cm.Data[planKey]
-	if !ok {
+	if _, ok := cm.Data[planKey]; !ok {
 		return nil, nil, fmt.Errorf("configmap %s/%s%s has no %s", namespace, k.SwissPlanPrefix, release, planKey)
 	}
-	return []byte(v), []byte(cm.Data[statusKey]), nil
+	return cm.Data, []byte(cm.Data[statusKey]), nil
 }
 
 // scopes is the namespaces to list, or one cluster-wide scope.
@@ -382,6 +401,51 @@ func (k *Kube) DeleteConfigMap(ctx context.Context, ref string) error {
 		return err
 	}
 	err = k.client.CoreV1().ConfigMaps(ns).Delete(ctx, name, metav1.DeleteOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	return err
+}
+
+// SecretNames lists Secrets in a namespace by label selector.
+func (k *Kube) SecretNames(ctx context.Context, namespace, selector string) ([]string, error) {
+	list, err := k.client.CoreV1().Secrets(namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		return nil, fmt.Errorf("list secrets in %s: %w", namespace, err)
+	}
+	out := make([]string, 0, len(list.Items))
+	for i := range list.Items {
+		out = append(out, list.Items[i].Name)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// PutSecret creates or replaces a Secret given as "namespace/name".
+func (k *Kube) PutSecret(ctx context.Context, ref string, data, labels map[string]string) error {
+	ns, name, err := SplitRef(ref)
+	if err != nil {
+		return err
+	}
+	sec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, Labels: labels},
+		StringData: data,
+	}
+	_, err = k.client.CoreV1().Secrets(ns).Update(ctx, sec, metav1.UpdateOptions{})
+	if apierrors.IsNotFound(err) {
+		_, err = k.client.CoreV1().Secrets(ns).Create(ctx, sec, metav1.CreateOptions{})
+	}
+	return err
+}
+
+// DeleteSecret treats an absent Secret as removed: pruning history has to be
+// safe to run twice.
+func (k *Kube) DeleteSecret(ctx context.Context, ref string) error {
+	ns, name, err := SplitRef(ref)
+	if err != nil {
+		return err
+	}
+	err = k.client.CoreV1().Secrets(ns).Delete(ctx, name, metav1.DeleteOptions{})
 	if apierrors.IsNotFound(err) {
 		return nil
 	}

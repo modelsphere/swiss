@@ -8,12 +8,14 @@ import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Empty, ErrorState, Loading } from "@/components/States";
 
-const ACTIONS = ["", "diff", "apply", "install", "uninstall"];
+// No "diff": a diff is not audited. Rows from before that carry the action
+// still render, they are just not something to filter for.
+const ACTIONS = ["", "apply", "install", "uninstall", "rollback"];
 
 // The operation log is the half of the system the cluster cannot rebuild. What
 // is deployed is read from the plan ConfigMap beside each release; what was
-// *attempted* -- a diff that changed nothing, an apply that failed, an
-// uninstall -- exists only here.
+// *attempted* -- an apply that failed, a rollback, an uninstall -- exists only
+// here, and each entry carries the diff helmfile computed before it ran.
 export function Runs() {
   const [params, setParams] = useSearchParams();
   const release = params.get("release") ?? "";
@@ -174,8 +176,8 @@ function Row({ run }: { run: Run }) {
   );
 }
 
-// A diff that changed nothing and an apply that failed are different facts, and
-// the log is the only place either is recorded.
+// The log is the only place a failed apply is recorded. The diff branch is for
+// rows written before diffs stopped being audited.
 function Outcome({ run }: { run: Run }) {
   if (run.error) return <Badge variant="destructive">failed</Badge>;
   if (run.action === "diff") {

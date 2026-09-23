@@ -57,6 +57,15 @@ the RBAC that reads it cannot disagree.
 {{- end -}}
 {{- end -}}
 
+{{/* The Secret holding the login, whether this chart made it or the operator did. */}}
+{{- define "swiss.authSecretName" -}}
+{{- if .Values.auth.existingSecret -}}
+{{- .Values.auth.existingSecret -}}
+{{- else -}}
+{{- printf "%s-auth" (include "swiss.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
 {{/* Exactly what the sglang and vllm charts render, plus helm's release storage. */}}
 {{- define "swiss.deployRules" -}}
 {{- $all := list "get" "list" "watch" "create" "update" "patch" "delete" }}

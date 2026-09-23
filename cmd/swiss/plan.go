@@ -209,7 +209,7 @@ func printExplain(p *plan.Plan) {
 		fmt.Printf("%s (%d)\n", layer, len(paths))
 		sort.Strings(paths)
 		for _, path := range paths {
-			v, _ := values.Get(p.Values, path)
+			v, _ := values.Get(p.Values(), path)
 			fmt.Printf("  %-40s %v\n", path, v)
 		}
 		fmt.Println()

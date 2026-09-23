@@ -63,7 +63,7 @@ func CheckUninstall(st State, namespace, release string) error {
 // an apply without one carries no revision to check.
 func CheckRevision(st State, diffedAt int) error {
 	if diffedAt > 0 && st.Revision != diffedAt {
-		return fmt.Errorf("release moved from revision %d to %d since the diff; re-run diff", diffedAt, st.Revision)
+		return fmt.Errorf("release moved from revision %d to %d since you looked; re-check it before applying", diffedAt, st.Revision)
 	}
 	return nil
 }

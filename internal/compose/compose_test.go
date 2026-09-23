@@ -53,7 +53,7 @@ func TestComposeProjectsIdentityFieldsFromTheirSingleSpelling(t *testing.T) {
 		"image.tag":        "v0.5.19",                            // catalog pins the build
 		"image.repository": "harbor.4pd.io/hardcore-tech/sglang", // site picks the mirror
 	} {
-		got, ok := values.Get(p.Values, path)
+		got, ok := values.Get(p.Values(), path)
 		if !ok || got != want {
 			t.Errorf("%s = %#v (present=%v), want %#v", path, got, ok, want)
 		}
@@ -70,7 +70,7 @@ func TestComposeRecordsProvenancePerLayer(t *testing.T) {
 		"model.localPath":       values.LayerSite,
 		"cache.maxSlotsPerNode": values.LayerDerived,
 	} {
-		if got := p.Provenance[path]; got != want {
+		if got := p.LayerOf(path); got != want {
 			t.Errorf("provenance[%s] = %q, want %q", path, got, want)
 		}
 	}
@@ -85,7 +85,7 @@ func TestDerivedMaxSlotsFollowsTheChartsRule(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, _ := values.Get(p.Values, "cache.maxSlotsPerNode")
+		got, _ := values.Get(p.Values(), "cache.maxSlotsPerNode")
 		if got != want {
 			t.Errorf("%d GPUs: maxSlotsPerNode = %v, want %d", gpus, got, want)
 		}
@@ -101,11 +101,11 @@ func TestDerivedYieldsToAnExplicitOverride(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, _ := values.Get(p.Values, "cache.maxSlotsPerNode")
+	got, _ := values.Get(p.Values(), "cache.maxSlotsPerNode")
 	if got != 3 {
 		t.Fatalf("maxSlotsPerNode = %v, want the override 3", got)
 	}
-	if p.Provenance["cache.maxSlotsPerNode"] != values.LayerSite {
+	if p.LayerOf("cache.maxSlotsPerNode") != values.LayerSite {
 		t.Fatalf("an explicit value must be attributed to the layer that set it, not to derived")
 	}
 }
@@ -141,7 +141,7 @@ func TestComposeAllowsFormToSetScalingAndScheduling(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := values.Get(p.Values, "scaler.maxReplicas"); got != 8 {
+	if got, _ := values.Get(p.Values(), "scaler.maxReplicas"); got != 8 {
 		t.Fatalf("scaler.maxReplicas = %v, want 8", got)
 	}
 }
@@ -187,14 +187,14 @@ func TestFormCanSetServiceIDAndOverrideLocalPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v, _ := values.Get(p.Values, "serviceId"); v != "modelforge-01-glm" {
+	if v, _ := values.Get(p.Values(), "serviceId"); v != "modelforge-01-glm" {
 		t.Errorf("serviceId = %v", v)
 	}
-	if v, _ := values.Get(p.Values, "model.localPath"); v != "/mnt/disk1/models/moved" {
+	if v, _ := values.Get(p.Values(), "model.localPath"); v != "/mnt/disk1/models/moved" {
 		t.Errorf("localPath = %v, want the override", v)
 	}
-	if p.Provenance["model.localPath"] != values.LayerForm {
-		t.Errorf("an overridden path must be attributed to the form, got %q", p.Provenance["model.localPath"])
+	if p.LayerOf("model.localPath") != values.LayerForm {
+		t.Errorf("an overridden path must be attributed to the form, got %q", p.LayerOf("model.localPath"))
 	}
 }
 
@@ -203,11 +203,11 @@ func TestLocalPathDefaultsFromTheSiteTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v, _ := values.Get(p.Values, "model.localPath"); v != "/mnt/disk0/models/GLM-5.3" {
+	if v, _ := values.Get(p.Values(), "model.localPath"); v != "/mnt/disk0/models/GLM-5.3" {
 		t.Errorf("localPath = %v", v)
 	}
-	if p.Provenance["model.localPath"] != values.LayerSite {
-		t.Errorf("the template default must be attributed to the site, got %q", p.Provenance["model.localPath"])
+	if p.LayerOf("model.localPath") != values.LayerSite {
+		t.Errorf("the template default must be attributed to the site, got %q", p.LayerOf("model.localPath"))
 	}
 }
 
@@ -220,12 +220,12 @@ func TestDisabledCacheEmitsNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range values.LeafPaths(p.Values) {
+	for _, path := range values.LeafPaths(p.Values()) {
 		if strings.HasPrefix(path, "cache") {
 			t.Errorf("a disabled cache leaked %s", path)
 		}
 	}
-	if _, ok := p.Values["cache"]; ok {
+	if _, ok := p.Values()["cache"]; ok {
 		t.Error("the cache key itself must be absent")
 	}
 }
@@ -235,7 +235,7 @@ func TestEnabledCacheStillDerivesSlots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v, _ := values.Get(p.Values, "cache.maxSlotsPerNode"); v != 1 {
+	if v, _ := values.Get(p.Values(), "cache.maxSlotsPerNode"); v != 1 {
 		t.Fatalf("maxSlotsPerNode = %v, want 1", v)
 	}
 }
@@ -255,7 +255,7 @@ func TestFeatureDefaultsAreExplicit(t *testing.T) {
 		"serviceMonitor": false,
 		"metricsMock":    false,
 	} {
-		v, ok := values.Get(p.Values, feature+".enabled")
+		v, ok := values.Get(p.Values(), feature+".enabled")
 		if !ok {
 			t.Errorf("%s.enabled is not written down", feature)
 			continue
@@ -279,11 +279,11 @@ func TestTouchingASectionEnablesIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, feature := range []string{"scaler", "modelRoute"} {
-		if v, _ := values.Get(p.Values, feature+".enabled"); v != true {
+		if v, _ := values.Get(p.Values(), feature+".enabled"); v != true {
 			t.Errorf("%s.enabled = %v, want true", feature, v)
 		}
 	}
-	if v, _ := values.Get(p.Values, "sloRequirement.enabled"); v != false {
+	if v, _ := values.Get(p.Values(), "sloRequirement.enabled"); v != false {
 		t.Errorf("an untouched feature stays off: %v", v)
 	}
 }
@@ -296,11 +296,11 @@ func TestFormCanTurnAFeatureOff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v, _ := values.Get(p.Values, "cart.enabled"); v != false {
+	if v, _ := values.Get(p.Values(), "cart.enabled"); v != false {
 		t.Fatalf("cart.enabled = %v, want false", v)
 	}
-	if p.Provenance["cart.enabled"] != values.LayerForm {
-		t.Errorf("an explicit choice belongs to the form, got %q", p.Provenance["cart.enabled"])
+	if p.LayerOf("cart.enabled") != values.LayerForm {
+		t.Errorf("an explicit choice belongs to the form, got %q", p.LayerOf("cart.enabled"))
 	}
 }
 
@@ -339,15 +339,15 @@ func TestEditLayerBypassesOwnershipAndWinsLast(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v, _ := values.Get(p.Values, "replicaCount"); v != 9 {
+	if v, _ := values.Get(p.Values(), "replicaCount"); v != 9 {
 		t.Errorf("edits apply last: replicaCount = %v", v)
 	}
-	if v, _ := values.Get(p.Values, "extraArgs"); len(v.([]any)) != 1 {
+	if v, _ := values.Get(p.Values(), "extraArgs"); len(v.([]any)) != 1 {
 		t.Errorf("edits may set a catalog key: %v", v)
 	}
 	for _, path := range []string{"replicaCount", "extraArgs", "somethingNew"} {
-		if p.Provenance[path] != values.LayerEdit {
-			t.Errorf("%s should be attributed to edit, got %q", path, p.Provenance[path])
+		if p.LayerOf(path) != values.LayerEdit {
+			t.Errorf("%s should be attributed to edit, got %q", path, p.LayerOf(path))
 		}
 	}
 }

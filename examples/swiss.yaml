@@ -42,6 +42,30 @@ server:
   # How long a fetched catalog or profile is reused before refetching.
   cacheTTL: 60s
 
+  # The site login: one account, read from a mounted Secret. A directory rather
+  # than an API read, because that is what a Secret volume is -- the kubelet
+  # keeps the files current, so rotating the password takes effect at the next
+  # login instead of at the next restart, and swissd needs no Secret grant of
+  # its own to log anybody in.
+  #
+  # One file per key: username, password, and optionally tokenKey. Without a
+  # tokenKey the signing key is derived from the password, so a Secret made by
+  # hand with two keys works -- at the cost of a password change also
+  # invalidating outstanding tokens, which it does anyway.
+  auth:
+    dir: /etc/swiss-auth
+    # How long a login lasts. Long enough not to interrupt a 40-minute model
+    # load being watched; short enough that a forgotten tab is not a standing
+    # key. A session in active use is extended rather than cut off.
+    tokenTTL: 24h
+    # auto sets the cookie's Secure flag when the request arrived over TLS,
+    # which is right behind an ingress that terminates it and right in a
+    # plain-http port-forward. always | never override it.
+    cookieSecure: auto
+    # No login at all. For a laptop: an unauthenticated swissd reachable from a
+    # Service is a deploy button for whoever finds it.
+    # disabled: true
+
   # The other clusters' swissd instances, for the nav switcher. Config, not
   # discovery: a list you deploy. Every instance serves the same switcher, so
   # any one of them is a valid entry point.

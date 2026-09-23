@@ -38,7 +38,7 @@ about precedence.
 | --- | --- |
 | chart defaults | everything not claimed below |
 | **catalog variant** | model identity and how it parallelizes: `model.*`, `extraArgs`, `lws.*`, `env`, `image` |
-| **site profile** | what makes it work here: the registry mirror, cache paths, route ConfigMaps, namespace, the `model.localPath` template |
+| **site profile** | what makes it work here: the registry mirror, cache paths, route ConfigMaps, namespace, the `model.localPath` template, the default scheduler and priority class |
 | **user form** | how much, where, how routed: `serviceId`, `replicaCount`, `scaler.*`, `modelRoute.*`, scheduling |
 | **plan editor** | the escape hatch, applied last — any key, exempt from ownership, labelled `edit` |
 
@@ -144,9 +144,10 @@ git protocol and no cloning — it would buy nothing a static file server does n
 
 ```
 swiss-catalog/
-  index.json                 generated, committed, the published surface
-  schema/entry.schema.json
-  models/<name>-<version>.yaml
+  index.json                          generated, committed, the published surface
+  schema/{metadata,version}.schema.json
+  models/<name>/metadata.yaml          what the model is, shared by every version
+  models/<name>/<name>-<version>.yaml  how it is served
   hack/{build-index,validate,serve}.sh
 ```
 
@@ -156,7 +157,7 @@ deliberately omit variant `values` — nothing can compose from a summary and re
 a model with half its flags missing.
 
 **Versions are published like packages and pinned by digest.** Each
-`models/<name>-<version>.yaml` is immutable — a fix is a new version — and a deploy
+`models/<name>/<name>-<version>.yaml` is immutable — a fix is a new version — and a deploy
 pins one. The plan records the version *and* a sha256 of the entry file:
 
 ```yaml

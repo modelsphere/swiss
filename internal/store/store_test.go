@@ -24,7 +24,7 @@ func testPlan(hash string) *plan.Plan {
 		APIVersion: plan.APIVersion,
 		Release:    plan.Release{Name: "glm-53", Namespace: "modelforge"},
 		Source:     plan.SourceRef{Model: "glm-5.3", Variant: "sglang-tp8-b300"},
-		Values:     values.Tree{"replicaCount": 2},
+		Layers:     map[string]values.Tree{"form": {"replicaCount": 2}},
 		Hash:       hash,
 	}
 }
@@ -45,8 +45,8 @@ func TestPlansAreImmutableAndRoundTrip(t *testing.T) {
 	if got.Source.Model != "glm-5.3" || got.Release.Name != "glm-53" {
 		t.Fatalf("round trip lost fields: %+v", got)
 	}
-	if v, _ := values.Get(got.Values, "replicaCount"); v != float64(2) && v != 2 {
-		t.Errorf("values lost: %v", got.Values)
+	if v, _ := values.Get(got.Values(), "replicaCount"); v != float64(2) && v != 2 {
+		t.Errorf("values lost: %v", got.Values())
 	}
 	if _, err := s.Plan(ctx, "sha256:missing"); err == nil {
 		t.Error("expected an error for an unknown plan")

@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/aceforeverd/swiss/internal/auth"
 	"github.com/aceforeverd/swiss/internal/cluster"
 	"github.com/aceforeverd/swiss/internal/config"
 	"github.com/aceforeverd/swiss/internal/server"
@@ -79,6 +80,24 @@ func run(configPath, addr, logLevel, webDir string) error {
 
 	srv := server.New(cfg, probe, log, version.Version)
 
+	// The login is checked here rather than at the first login attempt: a
+	// swissd whose credential Secret was never mounted should fail to start,
+	// not come up and refuse everybody.
+	if cfg.Server.Auth.Disabled {
+		log.Warn("NO LOGIN: this swissd serves its API to anyone who can reach it; server.auth.disabled is set")
+	} else {
+		creds, err := auth.Load(cfg.Server.Auth.Dir)
+		if err != nil {
+			return fmt.Errorf("login credentials: %w -- mount the Secret at %s, or set server.auth.disabled", err, cfg.Server.Auth.Dir)
+		}
+		log.Info("login enabled", "user", creds.Username, "dir", cfg.Server.Auth.Dir, "tokenTTL", cfg.Server.Auth.TokenTTL)
+	}
+
+	// swissd writes its own site profile whether or not it deploys anything,
+	// so the writer is not behind allowDeploy. What a given install may
+	// actually write is RBAC's answer.
+	srv.SetWriter(probe)
+
 	if cfg.Server.AllowDeploy {
 		if err := os.MkdirAll(filepath.Dir(cfg.Server.Database), 0o700); err != nil {
 			return err
@@ -89,7 +108,6 @@ func run(configPath, addr, logLevel, webDir string) error {
 		}
 		defer db.Close()
 		srv.SetStore(db)
-		srv.SetWriter(probe)
 		log.Info("deploy enabled", "database", cfg.Server.Database)
 	}
 

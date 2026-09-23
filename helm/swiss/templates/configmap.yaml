@@ -28,25 +28,30 @@ data:
       cacheTTL: {{ .Values.config.cacheTTL }}
       allowDeploy: {{ .Values.config.allowDeploy }}
       database: {{ .Values.config.database | quote }}
+      auth:
+        {{- if .Values.auth.disabled }}
+        disabled: true
+        {{- else }}
+        dir: /etc/swiss-auth
+        tokenTTL: {{ .Values.auth.tokenTTL }}
+        cookieSecure: {{ .Values.auth.cookieSecure | quote }}
+        {{- end }}
       {{- with .Values.config.peers }}
       peers:
         {{- toYaml . | nindent 8 }}
       {{- end }}
 ---
-{{- if .Values.profile.create }}
-{{/* The profile names the cluster it describes, so it takes that name from
-     config.cluster.name rather than repeating it. Two spellings of one fact
-     drift, and this pair drifted in the chart's own defaults. */}}
-{{- $content := deepCopy .Values.profile.content }}
-{{- $_ := set $content "name" (default .Values.config.cluster.name $content.name) }}
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{ include "swiss.fullname" . }}-profile
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "swiss.labels" . | nindent 4 }}
-data:
-  {{ .Values.config.cluster.profileKey }}: |
-    {{- toYaml $content | nindent 4 }}
-{{- end }}
+{{- /*
+No site profile here.
+
+swissd owns it: a fresh install has none, the first login lands on the setup
+page, and what is saved there is written to this ConfigMap by swissd itself.
+Two writers of one document is how a profile edited in the web UI gets silently
+reverted by the next `helm upgrade`.
+
+UPGRADING FROM A CHART THAT CREATED IT: helm deletes what it no longer renders.
+Hand the existing ConfigMap over before upgrading, or lose it --
+
+  kubectl annotate configmap <release>-profile helm.sh/resource-policy=keep
+
+*/}}

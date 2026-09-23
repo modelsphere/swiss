@@ -11,7 +11,7 @@ One document, read by both binaries. Found via `--config`, `$SWISS_CONFIG`,
 ```yaml
 catalog: https://models.example.com/swiss-catalog/
 cluster:
-  name: prod-b300
+  name: prod
   profile:
     file: ./examples/site-prod.yaml   # or configMap: swiss/site-profile
 server:
@@ -50,18 +50,12 @@ go build -o swissd ./cmd/swissd
 ```
 
 ```
+POST /api/login /api/logout        GET /api/session      (open)
 GET  /api/cluster /api/peers /api/catalog /api/catalog/{model}
 GET  /api/releases /api/nodes /api/deployments /api/runs
+PUT  /api/profile
 POST /api/plans /api/diff /api/apply /api/install     (allowDeploy only)
 ```
-
-The SPA browses the catalog and deploys: compose a plan, diff it, apply or
-install. Apply is reachable only from a diff, and it carries the live revision
-the diff saw, so a concurrent apply is refused rather than silently winning.
-
-`go build` works without node installed: `web/dist` is committed empty, and a
-binary with no UI serves an explanatory 404 while the API keeps working.
-`-web-dir` serves the SPA from disk instead.
 
 ## Deploy
 ```sh

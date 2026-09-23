@@ -11,7 +11,10 @@ import { Deploy } from "@/routes/Deploy";
 import { Upgrade } from "@/routes/Upgrade";
 import { Runs } from "@/routes/Runs";
 import { Nodes } from "@/routes/Nodes";
-import { Profile } from "@/routes/Profile";
+import { SiteProfile } from "@/routes/SiteProfile";
+import { Login } from "@/routes/Login";
+import { Setup } from "@/routes/Setup";
+import { Gate } from "@/components/Session";
 import "./index.css";
 
 const queryClient = new QueryClient({
@@ -31,11 +34,29 @@ createRoot(document.getElementById("root")!).render(
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <Routes>
-          <Route element={<Layout />}>
+          {/* Outside the gate: the login is what the gate sends you to, and
+              the setup page is what it sends you to when there is no profile
+              yet -- neither can be behind the thing that redirects to it. */}
+          <Route path="login" element={<Login />} />
+          <Route
+            path="setup"
+            element={
+              <Gate>
+                <Setup />
+              </Gate>
+            }
+          />
+          <Route
+            element={
+              <Gate>
+                <Layout />
+              </Gate>
+            }
+          >
             <Route index element={<Deployments />} />
             <Route path="deployments/:namespace/:release" element={<DeploymentDetail />} />
             <Route path="nodes" element={<Nodes />} />
-            <Route path="profile" element={<Profile />} />
+            <Route path="site-profile" element={<SiteProfile />} />
             <Route path="runs" element={<Runs />} />
             <Route path="catalog" element={<Catalog />} />
             <Route path="catalog/:name" element={<Model />} />

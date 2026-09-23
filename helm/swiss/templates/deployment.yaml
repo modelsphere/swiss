@@ -56,6 +56,13 @@ spec:
           args:
             - --config=/etc/swiss/swiss.yaml
             - --log-level={{ .Values.logLevel }}
+          env:
+            # A profile naming route.auth.secretRef by bare name means a Secret
+            # in this namespace, so swissd has to know which one it is.
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           ports:
             - name: http
               containerPort: 8080
@@ -76,6 +83,11 @@ spec:
             # workspace; the root filesystem is read-only.
             - name: tmp
               mountPath: /tmp
+            {{- if not .Values.auth.disabled }}
+            - name: auth
+              mountPath: /etc/swiss-auth
+              readOnly: true
+            {{- end }}
             {{- if .Values.config.allowDeploy }}
             - name: data
               mountPath: {{ dir .Values.config.database }}
@@ -87,6 +99,12 @@ spec:
         - name: tmp
           emptyDir:
             sizeLimit: {{ .Values.tmpSizeLimit }}
+        {{- if not .Values.auth.disabled }}
+        - name: auth
+          secret:
+            secretName: {{ include "swiss.authSecretName" . }}
+            defaultMode: 0400
+        {{- end }}
         {{- if .Values.config.allowDeploy }}
         - name: data
           {{- if or .Values.persistence.enabled .Values.persistence.existingClaim }}

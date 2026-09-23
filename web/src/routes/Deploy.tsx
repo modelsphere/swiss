@@ -20,13 +20,12 @@ export function Deploy() {
     queryFn: () => api.model(name, version || undefined),
   });
   const cluster = useQuery({ queryKey: ["cluster"], queryFn: api.cluster });
+  const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
 
   const [form, setForm] = useState<Form>({ ...EMPTY, serviceId: name });
-  // serviceId is the identity everything else is named after: the release, the
-  // openresty route, the LLMScaler and the LLMSLORequirement. The release name
-  // follows it until someone types their own.
-  const [releaseEdited, setReleaseEdited] = useState(false);
-  const release = releaseEdited ? form.release : form.serviceId;
+  // serviceId is the identity everything else is named after: the helm release,
+  // the openresty route, the LLMScaler and the LLMSLORequirement.
+  const release = form.serviceId;
 
   const [plan, setPlan] = useState<Plan | null>(null);
   const [diff, setDiff] = useState<DiffResult | null>(null);
@@ -37,7 +36,6 @@ export function Deploy() {
   // invalidates both, and the pipeline walks back to Plan rather than leaving a
   // pane open over a plan that no longer exists.
   const update = (patch: Partial<Form>) => {
-    if (patch.release !== undefined) setReleaseEdited(true);
     setForm({ ...form, ...patch });
     setPlan(null);
     setDiff(null);
@@ -47,9 +45,7 @@ export function Deploy() {
 
   const planM = useMutation({
     mutationFn: () =>
-      deployApi.plan(
-        planRequest({ ...form, release }, { model: name, version, variant: variantId }),
-      ),
+      deployApi.plan(planRequest(form, { model: name, version, variant: variantId })),
     onSuccess: (p) => {
       setPlan(p);
       setDiff(null);
@@ -94,11 +90,13 @@ export function Deploy() {
           them, so they sit below as tabs rather than holding the form inside
           one of them. */}
       <DeploySettings
-        form={{ ...form, release }}
+        form={form}
         onChange={update}
         cluster={cluster.data}
         serviceIdPlaceholder={name}
-        releaseHint={releaseEdited ? "helm release name" : "follows the service ID"}
+        localPathPlaceholder={model.data.localPath ?? model.data.pathTemplate}
+        supportedGPUs={variant?.requires.gpuProduct}
+        clusterGPUs={nodes.data?.nodes.map((n) => n.GPUProduct)}
       />
 
       <Pipeline

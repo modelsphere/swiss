@@ -22,6 +22,8 @@ import (
 type fakeWriter struct {
 	written map[string]map[string]string
 	deleted []string
+	secrets map[string]map[string]string
+	labels  map[string]map[string]string
 }
 
 func (f *fakeWriter) PutConfigMap(_ context.Context, ref string, data map[string]string) error {
@@ -29,6 +31,20 @@ func (f *fakeWriter) PutConfigMap(_ context.Context, ref string, data map[string
 		f.written = map[string]map[string]string{}
 	}
 	f.written[ref] = data
+	return nil
+}
+
+func (f *fakeWriter) PutSecret(_ context.Context, ref string, data, labels map[string]string) error {
+	if f.secrets == nil {
+		f.secrets, f.labels = map[string]map[string]string{}, map[string]map[string]string{}
+	}
+	f.secrets[ref], f.labels[ref] = data, labels
+	return nil
+}
+
+func (f *fakeWriter) DeleteSecret(_ context.Context, ref string) error {
+	f.deleted = append(f.deleted, ref)
+	delete(f.secrets, ref)
 	return nil
 }
 
@@ -47,18 +63,21 @@ func deployServer(t *testing.T, allow bool) (*httptest.Server, *Server) {
 // release. Tests seed the cluster with this rather than the database, because
 // the ConfigMap is where a release's plan lives -- seeding a table would test a
 // path nothing reads.
-func livePlan(t *testing.T, req planRequest) (*plan.Plan, []byte) {
+// livePlan composes a plan and renders the directory an apply leaves beside the
+// release -- which is what the plan ConfigMap holds, so tests seed the cluster
+// with the same thing the cluster would have.
+func livePlan(t *testing.T, req planRequest) (*plan.Plan, map[string]string) {
 	t.Helper()
 	s := New(testConfig("prod-b300"), fakeProbe(), discardLogger(), "test")
 	p, err := s.compose(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	doc, err := p.YAML()
+	files, err := p.Files("")
 	if err != nil {
 		t.Fatal(err)
 	}
-	return p, doc
+	return p, files
 }
 
 func deployServerWith(t *testing.T, probe cluster.Probe, allow bool) (*httptest.Server, *Server) {
@@ -253,6 +272,14 @@ func (failingWriter) DeleteConfigMap(context.Context, string) error {
 	return errors.New("forbidden")
 }
 
+func (failingWriter) PutSecret(context.Context, string, map[string]string, map[string]string) error {
+	return errors.New("forbidden")
+}
+
+func (failingWriter) DeleteSecret(context.Context, string) error {
+	return errors.New("forbidden")
+}
+
 // A closed browser tab must not reach the cluster. helmfile runs under
 // exec.CommandContext, so an apply on the request's context is killed
 // mid-upgrade when the client goes away -- and a half-applied helm upgrade
@@ -279,21 +306,34 @@ func TestApplyOutlivesTheRequest(t *testing.T) {
 	}
 }
 
+// A diff changes nothing, so it is not an operation and gets no row: one entry
+// per preview buried the applies. The apply is audited, failure included --
+// that entry is the only record that anything was attempted.
 func TestRunsAreRecorded(t *testing.T) {
 	srv, s := deployServer(t, true)
-	post(t, srv, "/api/plans", map[string]any{"model": "modelforge", "release": "glm-53"})
-	// No helmfile in the test environment, so diff fails -- the audit entry must
-	// still exist, carrying the error.
+	_, p := post(t, srv, "/api/plans", map[string]any{"model": "modelforge", "release": "glm-53"})
 	post(t, srv, "/api/diff", map[string]any{"model": "modelforge", "release": "glm-53"})
 
 	runs, err := s.store.Runs(context.Background(), 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(runs) == 0 {
-		t.Fatal("a failed diff must still be audited")
+	if len(runs) != 0 {
+		t.Fatalf("a diff must not be audited: %+v", runs)
 	}
-	if runs[0].Action != "diff" || runs[0].Error == "" {
+
+	// No chart source in the test profile, so the apply fails -- the audit
+	// entry must still exist, carrying the error.
+	post(t, srv, "/api/apply", map[string]any{"planHash": p["hash"]})
+
+	runs, err = s.store.Runs(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) == 0 {
+		t.Fatal("a failed apply must still be audited")
+	}
+	if runs[0].Action != "apply" || runs[0].Error == "" {
 		t.Errorf("unexpected run: %+v", runs[0])
 	}
 }
@@ -309,7 +349,7 @@ func TestServiceIDAndLocalPathAreFirstClassFormFields(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, body)
 	}
-	vals := body["values"].(map[string]any)
+	vals := planValues(body)
 	if vals["serviceId"] != "fallback-modelforge-01" {
 		t.Errorf("serviceId = %v", vals["serviceId"])
 	}
@@ -317,18 +357,17 @@ func TestServiceIDAndLocalPathAreFirstClassFormFields(t *testing.T) {
 	if model["localPath"] != "/mnt/disk1/models/moved" {
 		t.Errorf("localPath = %v", model["localPath"])
 	}
-	prov := body["provenance"].(map[string]any)
-	if prov["serviceId"] != "form" || prov["model.localPath"] != "form" {
-		t.Errorf("both must be attributed to the form: %v / %v", prov["serviceId"], prov["model.localPath"])
+	if layerOf(body, "serviceId") != "form" || layerOf(body, "model.localPath") != "form" {
+		t.Errorf("both must be attributed to the form: %v / %v",
+			layerOf(body, "serviceId"), layerOf(body, "model.localPath"))
 	}
 }
 
 func TestLocalPathFallsBackToTheSiteTemplate(t *testing.T) {
 	srv, _ := deployServer(t, true)
 	_, body := post(t, srv, "/api/plans", map[string]any{"model": "kimi-k2.5"})
-	prov := body["provenance"].(map[string]any)
-	if prov["model.localPath"] != "site" {
-		t.Errorf("the template default must be attributed to the site, got %v", prov["model.localPath"])
+	if got := layerOf(body, "model.localPath"); got != "site" {
+		t.Errorf("the template default must be attributed to the site, got %v", got)
 	}
 }
 
@@ -338,7 +377,7 @@ func TestDeploymentsSurfaceTheApplyPhase(t *testing.T) {
 	probe.Rel = []cluster.Release{{
 		Name: "glm-53", Namespace: "modelforge", Chart: "sglang-0.8.0",
 		Status: "deployed", Revision: 4,
-		SwissPlan:   []byte("source:\n  model: modelforge\n"),
+		SwissFiles:  map[string]string{"plan.yaml": "source:\n  model: modelforge\n"},
 		SwissStatus: []byte("phase: failed\nrevision: 4\nerror: chart not found\n"),
 	}}
 	srv := testServer(t, probe)
@@ -362,7 +401,7 @@ func TestUpgradeCarriesTheFormLayerForward(t *testing.T) {
 	probe := liveProbe()
 	probe.Rel = append(probe.Rel, cluster.Release{
 		Name: "fallback-modelforge-01", Namespace: "modelforge",
-		Status: "deployed", Revision: 1, SwissPlan: doc,
+		Status: "deployed", Revision: 1, SwissFiles: doc,
 	})
 	srv, _ := deployServerWith(t, probe, true)
 
@@ -370,7 +409,7 @@ func TestUpgradeCarriesTheFormLayerForward(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, up)
 	}
-	vals := up["values"].(map[string]any)
+	vals := planValues(up)
 	if vals["serviceId"] != "fallback-modelforge-01" || vals["replicaCount"] != float64(3) {
 		t.Fatalf("form layer not carried: %v", vals)
 	}
@@ -388,7 +427,7 @@ func TestReleasePlanEndpoint(t *testing.T) {
 	probe := liveProbe()
 	probe.Rel = append(probe.Rel, cluster.Release{
 		Name: "kimi-k25", Namespace: "modelforge",
-		Status: "deployed", Revision: 2, SwissPlan: doc,
+		Status: "deployed", Revision: 2, SwissFiles: doc,
 	})
 	srv, _ := deployServerWith(t, probe, true)
 
@@ -417,7 +456,7 @@ func TestWebFeatureTogglesLandInThePlan(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, body)
 	}
-	vals := body["values"].(map[string]any)
+	vals := planValues(body)
 	for feature, want := range map[string]bool{
 		"cart": false, "sloRequirement": true, "modelRoute": true, "scaler": true,
 	} {
@@ -426,9 +465,8 @@ func TestWebFeatureTogglesLandInThePlan(t *testing.T) {
 			t.Errorf("%s.enabled = %v, want %v", feature, got, want)
 		}
 	}
-	prov := body["provenance"].(map[string]any)
-	if prov["cart.enabled"] != "form" {
-		t.Errorf("an explicit choice belongs to the form, got %v", prov["cart.enabled"])
+	if got := layerOf(body, "cart.enabled"); got != "form" {
+		t.Errorf("an explicit choice belongs to the form, got %v", got)
 	}
 }
 
@@ -449,7 +487,7 @@ func TestEveryToggledFeatureIsFormSettable(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, body)
 	}
-	vals := body["values"].(map[string]any)
+	vals := planValues(body)
 	if vals["serviceMonitor"].(map[string]any)["enabled"] != true {
 		t.Errorf("serviceMonitor.enabled did not take: %v", vals["serviceMonitor"])
 	}
@@ -466,14 +504,14 @@ func TestAdvancedOverridesYAML(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, body)
 	}
-	vals := body["values"].(map[string]any)
+	vals := planValues(body)
 	if vals["nodeSelector"].(map[string]any)["pool"] != "gpu" {
 		t.Errorf("nodeSelector not merged: %v", vals["nodeSelector"])
 	}
 	if len(vals["tolerations"].([]any)) != 1 || vals["priorityClassName"] != "high" {
 		t.Errorf("advanced fragment not merged: %v", vals)
 	}
-	if body["provenance"].(map[string]any)["priorityClassName"] != "form" {
+	if layerOf(body, "priorityClassName") != "form" {
 		t.Error("hand-typed overrides belong to the form layer")
 	}
 }
@@ -523,7 +561,7 @@ func TestProbeNeedsAnEntrypointAndARoute(t *testing.T) {
 	_, doc := livePlan(t, planRequest{Model: "glm5.1", Release: "r", ServiceID: "r"})
 	probe := liveProbe()
 	probe.Rel = append(probe.Rel, cluster.Release{
-		Name: "r", Namespace: "modelforge", Status: "deployed", Revision: 1, SwissPlan: doc,
+		Name: "r", Namespace: "modelforge", Status: "deployed", Revision: 1, SwissFiles: doc,
 	})
 	srv, _ := deployServerWith(t, probe, true)
 	// profileYAML names no route.nginxService.
@@ -548,7 +586,7 @@ func TestUpgradeNeedsNoDatabase(t *testing.T) {
 	probe := fakeProbe()
 	probe.Rel = []cluster.Release{{
 		Name: "glm-53", Namespace: "modelforge", Chart: "sglang-0.7.0",
-		Status: "deployed", Revision: 4, SwissPlan: planYAML,
+		Status: "deployed", Revision: 4, SwissFiles: planYAML,
 	}}
 	cfg := testConfig("prod-b300")
 	cfg.Server.AllowDeploy = true
@@ -568,7 +606,7 @@ func TestUpgradeNeedsNoDatabase(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("upgrade must recompose with no database rows: %d %v", code, up)
 	}
-	vals := up["values"].(map[string]any)
+	vals := planValues(up)
 	if vals["replicaCount"] != float64(3) || vals["serviceId"] != "glm-53" {
 		t.Fatalf("the form layer did not survive the cluster round trip: %v", vals)
 	}
@@ -586,7 +624,7 @@ func TestTheClusterWinsOverTheDatabase(t *testing.T) {
 	probe := fakeProbe()
 	probe.Rel = []cluster.Release{{
 		Name: "glm-53", Namespace: "modelforge", Chart: "sglang-0.8.0",
-		Status: "deployed", Revision: 4, SwissPlan: running,
+		Status: "deployed", Revision: 4, SwissFiles: running,
 	}}
 	srv, s := deployServerWith(t, probe, true)
 
@@ -603,13 +641,13 @@ func TestTheClusterWinsOverTheDatabase(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, cur)
 	}
-	if got := cur["values"].(map[string]any)["replicaCount"]; got != float64(3) {
+	if got := planValues(cur)["replicaCount"]; got != float64(3) {
 		t.Fatalf("replicaCount = %v, want the cluster's 3 -- the database was read as truth", got)
 	}
 
 	// And the recompose an upgrade starts from must be the running plan too.
 	_, up := post(t, srv, "/api/plans", map[string]any{"fromRelease": "glm-53"})
-	if got := up["values"].(map[string]any)["replicaCount"]; got != float64(3) {
+	if got := planValues(up)["replicaCount"]; got != float64(3) {
 		t.Fatalf("upgrade carried forward %v, want the cluster's 3", got)
 	}
 }

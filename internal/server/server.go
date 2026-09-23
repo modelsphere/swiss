@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aceforeverd/swiss/internal/auth"
 	"github.com/aceforeverd/swiss/internal/catalog"
 	"github.com/aceforeverd/swiss/internal/cluster"
 	"github.com/aceforeverd/swiss/internal/config"
@@ -28,9 +29,17 @@ type Server struct {
 	probe   cluster.Probe
 	log     *slog.Logger
 	version string
-	web     fs.FS
-	store   *store.Store
-	writer  cluster.Writer
+	// namespace is swissd's own, which is where a site profile naming a Secret
+	// by bare name means.
+	namespace string
+	web       fs.FS
+	store     *store.Store
+	writer    cluster.Writer
+
+	// creds overrides where the login is read from. Nil is the real thing: the
+	// mounted Secret named by the config.
+	creds  func() (auth.Credentials, error)
+	logins failures
 
 	mu        sync.Mutex
 	cat       *catalog.Catalog
@@ -40,7 +49,7 @@ type Server struct {
 }
 
 func New(cfg *config.Config, probe cluster.Probe, log *slog.Logger, version string) *Server {
-	return &Server{cfg: cfg, probe: probe, log: log, version: version}
+	return &Server{cfg: cfg, probe: probe, log: log, version: version, namespace: cluster.SelfNamespace()}
 }
 
 // cached returns what has already been fetched, without fetching.
@@ -54,7 +63,14 @@ func (s *Server) cached() (*catalog.Catalog, *site.Profile) {
 func (s *Server) SetStore(st *store.Store) { s.store = st }
 
 // SetWriter enables the endpoints that change a cluster.
+//
+// Set whatever allowDeploy says: swissd writes its own site profile even when
+// it deploys nothing, and which of the two a given install may actually do is
+// RBAC's answer rather than this flag's.
 func (s *Server) SetWriter(w cluster.Writer) { s.writer = w }
+
+// SetCredentials overrides where the login comes from, for tests.
+func (s *Server) SetCredentials(f func() (auth.Credentials, error)) { s.creds = f }
 
 // Catalog returns the opened catalog, refetching once the TTL has passed.
 //
@@ -135,6 +151,9 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
+	mux.HandleFunc("POST /api/login", s.handleLogin)
+	mux.HandleFunc("POST /api/logout", s.handleLogout)
+	mux.HandleFunc("GET /api/session", s.handleSession)
 	mux.HandleFunc("GET /api/cluster", s.handleCluster)
 	mux.HandleFunc("GET /api/peers", s.handlePeers)
 	mux.HandleFunc("GET /api/catalog", s.handleCatalog)
@@ -143,10 +162,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/deployments", s.handleDeployments)
 	mux.HandleFunc("GET /api/nodes", s.handleNodes)
 	mux.HandleFunc("GET /api/profile", s.handleProfile)
+	// swissd owns the profile now: the chart no longer writes one, so this is
+	// both the first-run setup and every later edit. One endpoint, because a
+	// setup path that writes through different code is one that drifts from
+	// the editor.
+	mux.HandleFunc("PUT /api/profile", s.handleSaveProfile)
+	mux.HandleFunc("GET /api/profile/template", s.handleProfileTemplate)
 	mux.HandleFunc("GET /api/runs", s.handleRuns)
 	mux.HandleFunc("GET /api/runs/{id}", s.handleRun)
 	mux.HandleFunc("GET /api/releases/{namespace}/{release}/plan", s.handleReleasePlan)
 	mux.HandleFunc("GET /api/releases/{namespace}/{release}/status", s.handleStatus)
+	mux.HandleFunc("GET /api/releases/{namespace}/{release}/revisions", s.handleRevisions)
+	mux.HandleFunc("GET /api/releases/{namespace}/{release}/revisions/{revision}/values", s.handleRevisionValues)
 	mux.HandleFunc("POST /api/releases/{namespace}/{release}/probe", s.handleProbe)
 	// Not behind allowDeploy: it changes nothing in the cluster. It spends a few
 	// tokens of GPU time, which is the same bargain as the /v1/models probe.
@@ -158,10 +185,14 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("POST /api/apply", s.handleApply(exec.Upgrade))
 		mux.HandleFunc("POST /api/install", s.handleApply(exec.Install))
 		mux.HandleFunc("DELETE /api/releases/{namespace}/{release}", s.handleUninstall)
+		mux.HandleFunc("POST /api/releases/{namespace}/{release}/revisions/{revision}/diff", s.handleRevisionDiff)
+		mux.HandleFunc("POST /api/releases/{namespace}/{release}/rollback", s.handleRollback)
 	} else {
 		for _, p := range []string{
 			"POST /api/plans", "POST /api/diff", "POST /api/apply", "POST /api/install",
 			"DELETE /api/releases/{namespace}/{release}",
+			"POST /api/releases/{namespace}/{release}/rollback",
+			"POST /api/releases/{namespace}/{release}/revisions/{revision}/diff",
 		} {
 			mux.HandleFunc(p, func(w http.ResponseWriter, _ *http.Request) {
 				writeError(w, http.StatusForbidden, "this swissd is read-only: set server.allowDeploy and grant rbac.allowDeploy")
@@ -170,7 +201,7 @@ func (s *Server) Handler() http.Handler {
 	}
 	// Least specific, so it only sees what the routes above did not match.
 	mux.HandleFunc("GET /", s.spa)
-	return s.recover(s.logRequests(mux))
+	return s.recover(s.logRequests(s.requireAuth(mux)))
 }
 
 // Run serves until ctx is cancelled, then drains.

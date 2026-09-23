@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft } from "lucide-react";
 import { api, type Node, type Variant } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
+import { gpuCount, vendorLabel } from "@/lib/gpu";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ErrorState, Loading } from "@/components/States";
@@ -132,22 +133,25 @@ function VariantCard({
       </CardHeader>
       <CardContent className="space-y-2 text-sm">
         <div className="text-muted-foreground">
-          {v.requires.nodes && v.requires.nodes > 1
-            ? `${v.requires.gpus} GPU × ${v.requires.nodes} nodes`
-            : `${v.requires.gpus} GPU`}
+          {gpuCount(v.requires)}
+          {" · "}
+          {vendorLabel(v.requires.vendor)}
           {" · "}
           {v.requires.topology ?? "single-node"}
           {v.requires.rdma && " · RDMA"}
           {" · "}
           chart {v.chart.name}-{v.chart.version}
         </div>
-        {v.requires.gpuProduct && (
-          <div className="flex flex-wrap gap-1">
-            {v.requires.gpuProduct.map((p) => (
+        <div className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
+          Runs on
+          {v.requires.gpuProduct?.length ? (
+            v.requires.gpuProduct.map((p) => (
               <Badge key={p} variant="outline">{p}</Badge>
-            ))}
-          </div>
-        )}
+            ))
+          ) : (
+            <Badge variant="outline">any {vendorLabel(v.requires.vendor)}</Badge>
+          )}
+        </div>
         <div className="flex flex-wrap items-center gap-2 pt-1">
           {fit && <Badge variant={fit.ok ? "success" : "warning"}>{fit.text}</Badge>}
           <Link

@@ -27,6 +27,14 @@ export function Upgrade() {
   });
   const catalog = useQuery({ queryKey: ["catalog"], queryFn: api.catalog });
   const cluster = useQuery({ queryKey: ["cluster"], queryFn: api.cluster });
+  const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
+  // For the model path default, which is the site's template resolved against
+  // this model's hf -- the same value the deploy page shows.
+  const entry = useQuery({
+    queryKey: ["model", current.data?.source.model ?? "", version],
+    queryFn: () => api.model(current.data!.source.model, version || undefined),
+    enabled: !!current.data,
+  });
 
   const [form, setForm] = useState<Form>(EMPTY);
   const [plan, setPlan] = useState<Plan | null>(null);
@@ -145,7 +153,15 @@ export function Upgrade() {
           here means the upgrade moves the catalog and the settings together,
           which is two changes in one diff -- so the diff is the thing that has
           to be read, and the pipeline below is the same one. */}
-      <DeploySettings form={form} onChange={update} cluster={cluster.data} lockIdentity />
+      <DeploySettings
+        form={form}
+        onChange={update}
+        cluster={cluster.data}
+        supportedGPUs={variants.find((v) => v.id === (variant || cur.source.variant))?.requires.gpuProduct}
+        clusterGPUs={nodes.data?.nodes.map((n) => n.GPUProduct)}
+        localPathPlaceholder={entry.data?.localPath ?? entry.data?.pathTemplate}
+        lockIdentity
+      />
 
       <Pipeline
         namespace={namespace}

@@ -40,6 +40,9 @@ scaler:
   serverAddress: http://decision-gen.llm-scaler.svc:80
 
 route:
+  # Where callers reach openresty from outside. Display only: swissd shows a
+  # model's URL as <gateway>/<route>, and its own checks still go in-cluster.
+  gateway: https://llm.example.com
   nginxConfigMap: llm-route/openresty-conf
   monitorConfigMap: llm-route/monitor-conf
 

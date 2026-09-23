@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/aceforeverd/swiss/internal/cluster"
+	"github.com/aceforeverd/swiss/internal/values"
 )
 
 // Each API is a different request shape and a different place to find the
@@ -111,7 +112,7 @@ func TestChatNeedsAnEntrypoint(t *testing.T) {
 	_, doc := livePlan(t, planRequest{Model: "glm5.1", Release: "r", ServiceID: "r"})
 	probe := liveProbe()
 	probe.Rel = append(probe.Rel, cluster.Release{
-		Name: "r", Namespace: "modelforge", Status: "deployed", Revision: 1, SwissPlan: doc,
+		Name: "r", Namespace: "modelforge", Status: "deployed", Revision: 1, SwissFiles: doc,
 	})
 	srv, _ := deployServerWith(t, probe, true)
 
@@ -150,7 +151,7 @@ func TestStatusCarriesThePlanPhase(t *testing.T) {
 	probe := liveProbe()
 	probe.Rel = append(probe.Rel, cluster.Release{
 		Name: "stuck", Namespace: "modelforge", Status: "pending-upgrade", Revision: 2,
-		SwissPlan:   []byte("source:\n  model: modelforge\n"),
+		SwissFiles:  map[string]string{"plan.yaml": "source:\n  model: modelforge\n"},
 		SwissStatus: []byte("phase: applying\naction: apply\nstartedAt: 2026-09-21T10:00:00Z\n"),
 	})
 	srv := testServer(t, probe)
@@ -180,5 +181,31 @@ func TestStatusOmitsThePhaseWhenNoneWasRecorded(t *testing.T) {
 	}
 	if _, present := body["planStatus"]; present {
 		t.Errorf("an untracked release has no phase: %v", body)
+	}
+}
+
+// The status page shows where a model is reached from outside, which is the
+// site's gateway and the route it publishes -- a fact no check needs and an
+// operator always does.
+func TestStatusCarriesTheGatewayURL(t *testing.T) {
+	probe := liveProbe()
+	probe.Maps["swiss/site-profile"] = map[string]string{"profile.yaml": profileYAML + "route:\n  gateway: https://llm.example.com\n"}
+	// Routing on: a release that publishes no route has no outside URL, which
+	// TestNoURLWhenRoutingIsOff covers.
+	_, doc := livePlan(t, planRequest{
+		Model: "glm5.1", Release: "r", ServiceID: "r",
+		Overrides: values.Tree{"modelRoute": values.Tree{"enabled": true}},
+	})
+	probe.Rel = append(probe.Rel, cluster.Release{
+		Name: "r", Namespace: "modelforge", Status: "deployed", Revision: 1, SwissFiles: doc,
+	})
+	srv := testServer(t, probe)
+
+	code, body := get(t, srv, "/api/releases/modelforge/r/status")
+	if code != 200 {
+		t.Fatalf("status %d: %v", code, body)
+	}
+	if body["url"] != "https://llm.example.com/r" {
+		t.Errorf("url = %v, want the gateway and the route", body["url"])
 	}
 }

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aceforeverd/swiss/internal/catalog"
@@ -31,9 +33,14 @@ type planRequest struct {
 	// key off, and LocalPath overrides the site's path template. Both are form
 	// values; they are named here rather than left to Overrides because a
 	// deploy form should not have to know the key path.
-	ServiceID string      `json:"serviceId,omitempty"`
-	LocalPath string      `json:"localPath,omitempty"`
-	Overrides values.Tree `json:"overrides,omitempty"`
+	ServiceID string `json:"serviceId,omitempty"`
+	LocalPath string `json:"localPath,omitempty"`
+	// GPUProducts narrows the deploy to these accelerator products, any one of
+	// which will do. Named here rather than left to Overrides because the node
+	// label they match on depends on the variant's vendor, which is the
+	// catalog's business and not the form's.
+	GPUProducts []string    `json:"gpuProducts,omitempty"`
+	Overrides   values.Tree `json:"overrides,omitempty"`
 	// OverridesYAML is the advanced section: a values fragment typed by hand.
 	// Parsed here rather than in the browser so there is one parser, and the
 	// ownership check still decides what it may contain.
@@ -111,7 +118,13 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 	if err != nil {
 		return nil, err
 	}
+	// The release is named after the service by default: serviceId is the
+	// identity the route, the scaler and the SLO all carry, and a release under
+	// a different name is one more name for the same thing.
 	release := req.Release
+	if release == "" {
+		release = req.ServiceID
+	}
 	if release == "" {
 		release = entry.Name
 	}
@@ -132,6 +145,25 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 	}
 	if req.LocalPath != "" {
 		if err := values.Set(overrides, "model.localPath", req.LocalPath); err != nil {
+			return nil, err
+		}
+	}
+	// Affinity rather than nodeSelector: nodeSelector ANDs its labels, so it
+	// cannot say "any of these products". A single term with one In expression
+	// is the OR. Set at the nodeSelectorTerms path so a preferred rule sitting
+	// beside it survives.
+	if len(req.GPUProducts) > 0 {
+		vals := make([]any, 0, len(req.GPUProducts))
+		for _, p := range req.GPUProducts {
+			vals = append(vals, p)
+		}
+		terms := []any{values.Tree{"matchExpressions": []any{values.Tree{
+			"key":      v.Requires.ProductLabel(),
+			"operator": "In",
+			"values":   vals,
+		}}}}
+		const path = "affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms"
+		if err := values.Set(overrides, path, terms); err != nil {
 			return nil, err
 		}
 	}
@@ -182,7 +214,7 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 		Variant:   prev.Source.Variant,
 		Release:   prev.Release.Name,
 		Namespace: prev.Release.Namespace,
-		Overrides: prev.Overrides,
+		Overrides: prev.Layers[values.LayerForm],
 	}
 	if req.Variant != "" {
 		out.Variant = req.Variant
@@ -197,8 +229,8 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 	// of being dropped by a form that never knew about it. Edits do replace:
 	// the form shows them, so an empty box means the operator emptied it.
 	if len(req.Overrides) == 0 {
-		if len(prev.Edits) > 0 {
-			out.EditsYAML = mustYAML(prev.Edits)
+		if edits := prev.Layers[values.LayerEdit]; len(edits) > 0 {
+			out.EditsYAML = mustYAML(edits)
 		}
 		return out, nil
 	}
@@ -209,6 +241,9 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 	}
 	if req.LocalPath != "" {
 		out.LocalPath = req.LocalPath
+	}
+	if len(req.GPUProducts) > 0 {
+		out.GPUProducts = req.GPUProducts
 	}
 	return out, nil
 }
@@ -229,10 +264,10 @@ func (s *Server) currentPlan(ctx context.Context, namespace, release string) (*p
 	if rel == nil {
 		return nil, fmt.Errorf("no release %q", release)
 	}
-	if rel.SwissPlan == nil {
+	if len(rel.SwissFiles) == 0 {
 		return nil, fmt.Errorf("release %q has no plan beside it -- swiss did not deploy it", release)
 	}
-	return plan.ParseYAML(rel.SwissPlan)
+	return plan.FromFiles(rel.SwissFiles)
 }
 
 // releaseRecord is the live release and whatever swiss recorded beside it, or
@@ -278,9 +313,10 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	started := time.Now()
+	// Not audited: a diff changes nothing, and one row per preview buried the
+	// applies. What it would have recorded is in the apply's own output, which
+	// is helmfile's diff.
 	res, err := s.runner().Diff(ctx, p)
-	s.record(ctx, "diff", p, res, err, started)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -315,68 +351,84 @@ func (s *Server) handleApply(mode exec.Mode) http.HandlerFunc {
 			return
 		}
 
-		st, err := exec.Lookup(ctx, s.probe, p.Release.Namespace, p.Release.Name)
-		if err != nil {
-			writeError(w, http.StatusBadGateway, err.Error())
-			return
-		}
-		if err := exec.Check(st, mode, p); err != nil {
-			writeError(w, http.StatusConflict, err.Error())
-			return
-		}
-		if err := exec.CheckRevision(st, req.ExpectRevision); err != nil {
-			writeError(w, http.StatusConflict, err.Error())
-			return
-		}
-
-		// Write-ahead: the plan is recorded before the cluster changes, so a
-		// permissions or quota failure costs nothing. A live release with no
-		// plan beside it reads as hand-installed, which is the one thing the
-		// reconciliation view must never say about swissd's own work.
-		started := time.Now()
-		if err := s.writePlan(ctx, p, planStatus{
-			Phase: phaseApplying, Action: actionName(mode), StartedAt: stamp(started),
-		}); err != nil {
-			writeError(w, http.StatusInternalServerError, "plan not recorded, nothing applied: "+err.Error())
-			return
-		}
-
-		// Everything past the write-ahead outlives the request.
-		ctx, cancel = detach(ctx)
-		defer cancel()
-
-		res, applyErr := s.runner().Apply(ctx, p)
-		s.record(ctx, actionName(mode), p, res, applyErr, started)
-
-		after, _ := exec.Lookup(ctx, s.probe, p.Release.Namespace, p.Release.Name)
-
-		status := planStatus{
-			Phase: phaseApplied, Action: actionName(mode),
-			StartedAt: stamp(started), UpdatedAt: stamp(time.Now()),
-			Revision: after.Revision,
-		}
-		if applyErr != nil {
-			status.Phase, status.Error = phaseFailed, applyErr.Error()
-		}
-		// Best effort: the plan is already recorded, only the phase goes stale.
-		var statusErr string
-		if err := s.writePlan(ctx, p, status); err != nil {
-			statusErr = err.Error()
-			s.log.ErrorContext(ctx, "plan status not updated", "release", p.Release.Name, "err", err)
-		}
-		if applyErr != nil {
-			writeError(w, http.StatusInternalServerError, applyErr.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"planHash":    p.Hash,
-			"release":     p.Release.Name,
-			"revision":    after.Revision,
-			"output":      res.Output,
-			"status":      phaseApplied,
-			"statusError": statusErr,
-		})
+		s.applyPlan(ctx, w, p, mode, req.ExpectRevision, actionName(mode))
 	}
+}
+
+// applyPlan is the cluster-changing half, shared by apply, install and
+// rollback. They differ in where the plan came from and in nothing after that.
+func (s *Server) applyPlan(ctx context.Context, w http.ResponseWriter, p *plan.Plan, mode exec.Mode, expectRevision int, action string) {
+	st, err := exec.Lookup(ctx, s.probe, p.Release.Namespace, p.Release.Name)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	if err := exec.Check(st, mode, p); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if err := exec.CheckRevision(st, expectRevision); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+
+	// The plan that produced the live revision is archived before it is
+	// overwritten, so every applied revision stays reproducible from the
+	// cluster -- which is what rollback reads, and what a lost database must
+	// not cost.
+	if st.Exists {
+		if err := s.archivePlan(ctx, p.Release.Namespace, p.Release.Name, st.Revision); err != nil {
+			s.log.WarnContext(ctx, "previous plan not archived", "release", p.Release.Name, "err", err)
+		}
+	}
+
+	// Write-ahead: the plan is recorded before the cluster changes, so a
+	// permissions or quota failure costs nothing. A live release with no
+	// plan beside it reads as hand-installed, which is the one thing the
+	// reconciliation view must never say about swissd's own work.
+	started := time.Now()
+	if err := s.writePlan(ctx, p, planStatus{
+		Phase: phaseApplying, Action: action, StartedAt: stamp(started),
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "plan not recorded, nothing applied: "+err.Error())
+		return
+	}
+
+	// Everything past the write-ahead outlives the request.
+	ctx, cancel := detach(ctx)
+	defer cancel()
+
+	res, applyErr := s.runner().Apply(ctx, p)
+	s.record(ctx, action, p, res, applyErr, started)
+
+	after, _ := exec.Lookup(ctx, s.probe, p.Release.Namespace, p.Release.Name)
+
+	status := planStatus{
+		Phase: phaseApplied, Action: action,
+		StartedAt: stamp(started), UpdatedAt: stamp(time.Now()),
+		Revision: after.Revision,
+	}
+	if applyErr != nil {
+		status.Phase, status.Error = phaseFailed, applyErr.Error()
+	}
+	// Best effort: the plan is already recorded, only the phase goes stale.
+	var statusErr string
+	if err := s.writePlan(ctx, p, status); err != nil {
+		statusErr = err.Error()
+		s.log.ErrorContext(ctx, "plan status not updated", "release", p.Release.Name, "err", err)
+	}
+	if applyErr != nil {
+		writeError(w, http.StatusInternalServerError, applyErr.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"planHash":    p.Hash,
+		"release":     p.Release.Name,
+		"revision":    after.Revision,
+		"output":      res.Output,
+		"status":      phaseApplied,
+		"statusError": statusErr,
+	})
 }
 
 // handleUninstall removes a release and the plan recorded beside it.
@@ -427,8 +479,16 @@ func (s *Server) handleUninstall(w http.ResponseWriter, r *http.Request) {
 	// as a plan with no release rather than as anything dangerous.
 	var planErr string
 	if s.writer != nil {
-		ref := ns + "/" + cluster.PlanConfigMapPrefix + release
-		if err := s.writer.DeleteConfigMap(ctx, ref); err != nil {
+		// The history goes with it: one Secret per revision would otherwise be
+		// left behind for a release that no longer exists.
+		if revs, err := s.archivedRevisions(ctx, ns, release); err == nil {
+			for _, r := range revs {
+				if err := s.writer.DeleteSecret(ctx, archiveRef(ns, release, r)); err != nil {
+					s.log.WarnContext(ctx, "archived plan not removed", "release", release, "revision", r, "err", err)
+				}
+			}
+		}
+		if err := s.writer.DeleteConfigMap(ctx, planRef(ns, release)); err != nil {
 			planErr = err.Error()
 			s.log.ErrorContext(ctx, "plan configmap not removed", "release", release, "err", err)
 		}
@@ -479,11 +539,93 @@ type planStatus struct {
 
 func stamp(t time.Time) string { return t.UTC().Format(time.RFC3339) }
 
+// planRef is the live workspace beside a release -- a ConfigMap, because that
+// one is mounted. History is a Secret per revision, named and labelled the way
+// helm names and labels its own: an archive is read, never mounted.
+func planRef(namespace, release string) string {
+	return namespace + "/" + cluster.PlanConfigMapPrefix + release
+}
+
+func archiveRef(namespace, release string, revision int) string {
+	return fmt.Sprintf("%s/%s%s.v%d", namespace, cluster.PlanSecretPrefix, release, revision)
+}
+
+func archiveLabels(release string, revision int) map[string]string {
+	return map[string]string{
+		"owner":                        "swiss",
+		"name":                         release,
+		"version":                      strconv.Itoa(revision),
+		"app.kubernetes.io/managed-by": "swiss",
+	}
+}
+
+func archiveSelector(release string) string { return "owner=swiss,name=" + release }
+
+// archivePlan copies the live workspace to the revision it produced, then drops
+// whatever has fallen out of retention.
+func (s *Server) archivePlan(ctx context.Context, namespace, release string, revision int) error {
+	if s.writer == nil || revision <= 0 {
+		return nil
+	}
+	data, err := s.probe.ConfigMap(ctx, planRef(namespace, release))
+	if err != nil {
+		return err
+	}
+	if len(data) == 0 {
+		// Nothing beside the release: it was not deployed by swiss, so there is
+		// no workspace to keep.
+		return nil
+	}
+	if err := s.writer.PutSecret(ctx, archiveRef(namespace, release, revision), data, archiveLabels(release, revision)); err != nil {
+		return err
+	}
+	return s.pruneArchives(ctx, namespace, release, revision)
+}
+
+// pruneArchives keeps the newest planHistory revisions. It lists rather than
+// deleting revision-N, because revisions are not always contiguous: a failed
+// apply still advances helm's counter.
+func (s *Server) pruneArchives(ctx context.Context, namespace, release string, newest int) error {
+	keep := s.cfg.Server.PlanHistory
+	revs, err := s.archivedRevisions(ctx, namespace, release)
+	if err != nil || len(revs) <= keep {
+		return err
+	}
+	for _, r := range revs[keep:] {
+		if err := s.writer.DeleteSecret(ctx, archiveRef(namespace, release, r)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// archivedRevisions is every revision with a plan beside it, newest first.
+func (s *Server) archivedRevisions(ctx context.Context, namespace, release string) ([]int, error) {
+	names, err := s.probe.SecretNames(ctx, namespace, archiveSelector(release))
+	if err != nil {
+		return nil, err
+	}
+	prefix := cluster.PlanSecretPrefix + release + ".v"
+	var out []int
+	for _, name := range names {
+		n, err := strconv.Atoi(strings.TrimPrefix(name, prefix))
+		if err != nil {
+			continue
+		}
+		out = append(out, n)
+	}
+	sort.Sort(sort.Reverse(sort.IntSlice(out)))
+	return out, nil
+}
+
 func (s *Server) writePlan(ctx context.Context, p *plan.Plan, st planStatus) error {
 	if s.writer == nil {
 		return fmt.Errorf("no cluster writer")
 	}
-	doc, err := p.YAML()
+	// The ConfigMap is the workspace: mounted, its keys are exactly the files
+	// helmfile is run against. status.yaml is the one addition -- how the last
+	// apply ended, which no file helmfile reads would carry.
+	files, err := p.Files("")
 	if err != nil {
 		return err
 	}
@@ -491,11 +633,8 @@ func (s *Server) writePlan(ctx context.Context, p *plan.Plan, st planStatus) err
 	if err != nil {
 		return err
 	}
-	ref := p.Release.Namespace + "/" + cluster.PlanConfigMapPrefix + p.Release.Name
-	return s.writer.PutConfigMap(ctx, ref, map[string]string{
-		"plan.yaml":   string(doc),
-		"status.yaml": string(status),
-	})
+	files["status.yaml"] = string(status)
+	return s.writer.PutConfigMap(ctx, planRef(p.Release.Namespace, p.Release.Name), files)
 }
 
 func (s *Server) planFromRequest(ctx context.Context, r *http.Request) (*plan.Plan, error) {

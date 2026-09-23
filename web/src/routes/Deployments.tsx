@@ -28,7 +28,7 @@ export function Deployments() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-lg font-semibold">Deployments</h1>
+        <h1 className="text-lg font-semibold">LLM deployments</h1>
         <Link to="/catalog">
           <Button size="sm">
             <Plus className="size-4" /> Deploy a model
@@ -58,6 +58,7 @@ export function Deployments() {
                 <TableHead>Release</TableHead>
                 <TableHead>Namespace</TableHead>
                 <TableHead>Model</TableHead>
+                <TableHead>Route</TableHead>
                 <TableHead>Chart</TableHead>
                 <TableHead>Rev</TableHead>
                 <TableHead>Status</TableHead>
@@ -99,6 +100,9 @@ function Row({ d }: { d: Deployment }) {
         ) : (
           <Badge variant="warning">untracked</Badge>
         )}
+      </TableCell>
+      <TableCell className="font-mono text-xs text-muted-foreground">
+        {d.route || "—"}
       </TableCell>
       <TableCell className="text-muted-foreground">{d.chart}</TableCell>
       <TableCell className="tabular-nums">{d.revision}</TableCell>

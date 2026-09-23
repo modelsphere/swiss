@@ -9,11 +9,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/aceforeverd/swiss/internal/plan"
-	"github.com/aceforeverd/swiss/internal/values"
-	"gopkg.in/yaml.v3"
 )
 
 type Runner struct {
@@ -62,43 +61,32 @@ func (w Workspace) Close() {
 // Materialize writes the plan to a temp directory. helmfile needs files, not a
 // repository, so the server can produce them per operation and discard them.
 func (r Runner) Materialize(p *plan.Plan) (Workspace, error) {
-	doc, err := p.RenderHelmfile(r.ChartRoot)
+	// The same directory the plan ConfigMap holds, so a mounted ConfigMap and a
+	// temp workspace are the same tree rather than two renderings of one plan.
+	files, err := p.Files(r.ChartRoot)
 	if err != nil {
 		return Workspace{}, err
+	}
+	if _, ok := files[plan.HelmfileFile]; !ok {
+		return Workspace{}, fmt.Errorf("no chart source: set chartRepo or chartPath in the site profile, or pass --chart-root")
 	}
 
 	dir, err := os.MkdirTemp("", "swiss-"+p.Release.Name+"-")
 	if err != nil {
 		return Workspace{}, err
 	}
-	ws := Workspace{Dir: dir, Helmfile: filepath.Join(dir, "helmfile.yaml")}
+	ws := Workspace{Dir: dir, Helmfile: filepath.Join(dir, plan.HelmfileFile)}
 	ws.cleanup = func() {
 		if !r.KeepWorkspace {
 			os.RemoveAll(dir)
 		}
 	}
 
-	// One document per layer, in merge order, so the workspace shows the
-	// layering rather than a flattened result helm would have produced anyway.
-	layers := p.LayerValues()
-	if len(layers) == 0 {
-		layers = map[string]values.Tree{"values": p.Values}
-	}
-	for name, tree := range layers {
-		vals, err := yaml.Marshal(tree)
-		if err != nil {
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
 			ws.Close()
 			return Workspace{}, err
 		}
-		if err := os.WriteFile(filepath.Join(dir, name+".yaml"), vals, 0o600); err != nil {
-			ws.Close()
-			return Workspace{}, err
-		}
-	}
-
-	if err := os.WriteFile(ws.Helmfile, []byte(doc), 0o600); err != nil {
-		ws.Close()
-		return Workspace{}, err
 	}
 	return ws, nil
 }
@@ -133,6 +121,10 @@ const (
 	Install
 )
 
+// Apply leaves helmfile's own diff in the output rather than suppressing it.
+// An apply already computes one to decide what to send; printing it makes the
+// audit entry say what changed, which is the only record of it once the
+// workspace is gone.
 func (r Runner) Apply(ctx context.Context, p *plan.Plan) (Result, error) {
 	ws, err := r.Materialize(p)
 	if err != nil {
@@ -140,7 +132,7 @@ func (r Runner) Apply(ctx context.Context, p *plan.Plan) (Result, error) {
 	}
 	defer ws.Close()
 
-	out, _, err := r.run(ctx, ws, "apply", "--suppress-diff")
+	out, _, err := r.run(ctx, ws, "apply")
 	return Result{Output: out, Changed: err == nil}, err
 }
 
@@ -154,6 +146,20 @@ func (r Runner) Apply(ctx context.Context, p *plan.Plan) (Result, error) {
 func (r Runner) Uninstall(ctx context.Context, namespace, release string) (Result, error) {
 	out, err := r.runHelm(ctx, "uninstall", release, "--namespace", namespace)
 	return Result{Output: out, Changed: err == nil}, err
+}
+
+// Values reads back what helm itself holds for a revision, chart defaults
+// included, as the yaml it would print.
+//
+// Direct through helm rather than from the archived plan beside the release:
+// the plan is what swiss composed, and this is what the cluster was actually
+// given. The two disagreeing is the thing worth being able to see.
+func (r Runner) Values(ctx context.Context, namespace, release string, revision int) (string, error) {
+	args := []string{"get", "values", release, "--namespace", namespace, "--all", "--output", "yaml"}
+	if revision > 0 {
+		args = append(args, "--revision", strconv.Itoa(revision))
+	}
+	return r.runHelm(ctx, args...)
 }
 
 func (r Runner) runHelm(ctx context.Context, args ...string) (string, error) {
@@ -176,8 +182,7 @@ func (r Runner) run(ctx context.Context, ws Workspace, args ...string) (string, 
 	err := cmd.Run()
 
 	code := 0
-	var ee *exec.ExitError
-	if errors.As(err, &ee) {
+	if ee, ok := errors.AsType[*exec.ExitError](err); ok {
 		code = ee.ExitCode()
 		if code == 2 {
 			return buf.String(), code, nil

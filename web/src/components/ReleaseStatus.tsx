@@ -1,26 +1,16 @@
-import { useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { CircleCheck, CircleX, Loader2 } from "lucide-react";
-import { api, deployApi, type EntrypointAuth, type ProbeResult } from "@/lib/api";
-import { AuthFields, SentHeaders } from "@/components/EntrypointAuth";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Endpoint } from "@/components/Endpoint";
 import { ErrorState, Loading } from "@/components/States";
 
 export function ReleaseStatus({ namespace, release }: { namespace: string; release: string }) {
-  const [probe, setProbe] = useState<ProbeResult | null>(null);
-  const [auth, setAuth] = useState<EntrypointAuth>({});
-
   const status = useQuery({
     queryKey: ["status", namespace, release],
     queryFn: () => api.status(namespace, release),
     refetchInterval: 10_000,
-  });
-  const probeM = useMutation({
-    mutationFn: () => deployApi.probe(namespace, release, auth),
-    onSuccess: setProbe,
   });
 
   if (status.isPending) return <Loading what="status" />;
@@ -30,6 +20,8 @@ export function ReleaseStatus({ namespace, release }: { namespace: string; relea
 
   return (
     <div className="space-y-4">
+      <Endpoint namespace={namespace} release={release} status={s} />
+
       <div className="grid gap-3 sm:grid-cols-3">
         <Stat label="Revision" value={s.exists ? String(s.revision) : "not installed"} />
         <Stat label="Helm" value={s.helmStatus ?? "—"} />
@@ -88,71 +80,6 @@ export function ReleaseStatus({ namespace, release }: { namespace: string; relea
             ))}
           </TableBody>
         </Table>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex flex-wrap items-center gap-2 text-base">
-            Serving check
-            {s.route && <Badge variant="outline">{s.route}</Badge>}
-          </CardTitle>
-          <p className="text-sm text-muted-foreground">
-            Asks the openresty entrypoint for this route, not the pod. A ready pod behind a
-            route that was never published serves nobody.
-          </p>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <AuthFields value={auth} onChange={setAuth} />
-
-          <Button size="sm" onClick={() => probeM.mutate()} disabled={probeM.isPending}>
-            {probeM.isPending ? (
-              <>
-                <Loader2 className="size-4 animate-spin" /> Checking…
-              </>
-            ) : (
-              "Check service"
-            )}
-          </Button>
-
-          {probeM.error && <ErrorState what="the check" error={probeM.error} />}
-
-          {probe && (
-            <div className="space-y-2 text-sm">
-              <div className="flex flex-wrap items-center gap-2">
-                {probe.ok && probe.models?.length ? (
-                  <>
-                    <CircleCheck className="size-4 text-success" />
-                    <span className="font-medium">Serving</span>
-                  </>
-                ) : (
-                  <>
-                    <CircleX className="size-4 text-destructive" />
-                    <span className="font-medium">Not serving yet</span>
-                  </>
-                )}
-                {probe.status ? <Badge variant="muted">HTTP {probe.status}</Badge> : null}
-                <span className="text-xs text-muted-foreground">{probe.latencyMs} ms</span>
-                <SentHeaders names={probe.sentHeaders} />
-              </div>
-              <div className="font-mono text-xs break-all text-muted-foreground">{probe.url}</div>
-              {probe.models?.length ? (
-                <div className="flex flex-wrap gap-1">
-                  {probe.models.map((m) => (
-                    <Badge key={m} variant="success">
-                      {m}
-                    </Badge>
-                  ))}
-                </div>
-              ) : null}
-              {probe.error && <p className="text-destructive">{probe.error}</p>}
-              {probe.body && (
-                <pre className="overflow-x-auto rounded-md border bg-muted/40 p-2 text-xs">
-                  {probe.body}
-                </pre>
-              )}
-            </div>
-          )}
-        </CardContent>
       </Card>
     </div>
   );

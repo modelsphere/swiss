@@ -60,15 +60,31 @@ func Compose(in Input) (*plan.Plan, error) {
 		return nil, fmt.Errorf("overrides: %w", err)
 	}
 
-	out := values.Tree{}
-	prov := values.Provenance{}
-	values.Merge(out, catalogVals, values.LayerCatalog, prov)
-	values.Merge(out, siteVals, values.LayerSite, prov)
-	if err := applyDefaults(out, prov, in); err != nil {
+	// base is only what the defaults need to see: whether the site already set
+	// a value one of them would otherwise compute.
+	base := values.Tree{}
+	values.Merge(base, catalogVals, values.LayerCatalog, nil)
+	values.Merge(base, siteVals, values.LayerSite, nil)
+
+	derivedVals := values.Tree{}
+	if err := applyDefaults(siteVals, derivedVals, base, in); err != nil {
 		return nil, err
 	}
-	values.Merge(out, in.Overrides, values.LayerForm, prov)
-	values.Merge(out, in.Edits, values.LayerEdit, prov)
+	// The layers, each the document it actually is. Merging them in order is
+	// what produces the values, so the outcome is determined by the order and
+	// nothing needs a separate record of which one won.
+	layers := map[string]values.Tree{}
+	for name, tree := range map[string]values.Tree{
+		values.LayerCatalog: catalogVals,
+		values.LayerSite:    siteVals,
+		values.LayerDerived: derivedVals,
+		values.LayerForm:    in.Overrides,
+		values.LayerEdit:    in.Edits,
+	} {
+		if len(tree) > 0 {
+			layers[name] = tree
+		}
+	}
 
 	p := &plan.Plan{
 		APIVersion: plan.APIVersion,
@@ -90,10 +106,7 @@ func Compose(in Input) (*plan.Plan, error) {
 		Engine:          in.Variant.Engine,
 		Profile:         in.Profile.Name,
 		CreateNamespace: in.Profile.CreateNamespace,
-		Overrides:       in.Overrides,
-		Edits:           in.Edits,
-		Values:          out,
-		Provenance:      prov,
+		Layers:          layers,
 	}
 	if err := p.ComputeHash(); err != nil {
 		return nil, err
@@ -193,17 +206,31 @@ func siteLayer(p site.Profile, e catalog.Entry, v catalog.Variant) (values.Tree,
 // Every rule is listed here by name -- that is what keeps it from being magic --
 // and each one lands in provenance, so it shows up in a plan rather than
 // appearing in a cluster from nowhere.
-func applyDefaults(out values.Tree, prov values.Provenance, in Input) error {
+func applyDefaults(site, derived, base values.Tree, in Input) error {
 	// model.localPath from the site's path template. Owned by the form because
 	// weights move and a deploy has to be able to say so.
 	localPath, err := in.Profile.LocalPath(in.Entry.Source.HF, in.Entry.Name)
 	if err != nil {
 		return err
 	}
-	if err := values.Set(out, "model.localPath", localPath); err != nil {
+	if err := values.Set(site, "model.localPath", localPath); err != nil {
 		return err
 	}
-	prov["model.localPath"] = values.LayerSite
+
+	// The scheduler and priority class a GPU workload lands on are a property of
+	// the cluster, not of the model. Set only when the profile names one, so an
+	// unset profile still leaves the chart's default alone.
+	for path, v := range map[string]string{
+		"priorityClassName": in.Profile.Schedule.PriorityClassName,
+		"schedulerName":     in.Profile.Schedule.SchedulerName,
+	} {
+		if v == "" {
+			continue
+		}
+		if err := values.Set(site, path, v); err != nil {
+			return err
+		}
+	}
 
 	// Every feature's enabled flag is written down, never left to the chart:
 	// scaler, sloRequirement, cart and serviceMonitor all default to ENABLED in
@@ -229,10 +256,9 @@ func applyDefaults(out values.Tree, prov values.Provenance, in Input) error {
 		if touched(in.Overrides, feature) {
 			want = true
 		}
-		if err := values.Set(out, feature+".enabled", want); err != nil {
+		if err := values.Set(derived, feature+".enabled", want); err != nil {
 			return err
 		}
-		prov[feature+".enabled"] = values.LayerDerived
 	}
 
 	// cache.maxSlotsPerNode: how many pods of this model can share a node's
@@ -244,12 +270,11 @@ func applyDefaults(out values.Tree, prov values.Provenance, in Input) error {
 	// file carrying a section the chart has never heard of is rejected by its
 	// schema rather than ignored.
 	if in.Profile.Cache.Enabled && in.Profile.Nodes.GPUsPerNode > 0 && in.Variant.Requires.GPUs > 0 {
-		if _, set := values.Get(out, "cache.maxSlotsPerNode"); !set {
+		if _, set := values.Get(base, "cache.maxSlotsPerNode"); !set {
 			slots := max(in.Profile.Nodes.GPUsPerNode/in.Variant.Requires.GPUs, 1)
-			if err := values.Set(out, "cache.maxSlotsPerNode", slots); err != nil {
+			if err := values.Set(derived, "cache.maxSlotsPerNode", slots); err != nil {
 				return err
 			}
-			prov["cache.maxSlotsPerNode"] = values.LayerDerived
 		}
 	}
 	return nil

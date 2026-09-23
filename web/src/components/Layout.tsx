@@ -1,9 +1,10 @@
-import { NavLink, Outlet } from "react-router";
-import { useQuery } from "@tanstack/react-query";
+import { NavLink, Outlet, useNavigate } from "react-router";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Boxes, Server } from "lucide-react";
 import { api } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { useSession } from "@/components/Session";
 
 export function Layout() {
   const { data: cluster } = useQuery({ queryKey: ["cluster"], queryFn: api.cluster });
@@ -18,15 +19,16 @@ export function Layout() {
           </div>
 
           <nav className="flex gap-1 text-sm">
-            <Tab to="/">Deployments</Tab>
+            <Tab to="/">LLM deployments</Tab>
             <Tab to="/catalog">Catalog</Tab>
             <Tab to="/nodes">Nodes</Tab>
             <Tab to="/runs">Operations</Tab>
-            <Tab to="/profile">Profile</Tab>
+            <Tab to="/site-profile">Site profile</Tab>
           </nav>
 
-          <div className="ml-auto flex items-center gap-2 text-sm">
+          <div className="ml-auto flex items-center gap-3 text-sm">
             <ClusterSwitcher />
+            <SignOut />
           </div>
         </div>
 
@@ -44,6 +46,40 @@ export function Layout() {
       <main className="mx-auto max-w-6xl px-4 py-6">
         <Outlet />
       </main>
+    </div>
+  );
+}
+
+// A swissd running with no login has nobody to sign out, and an account name
+// that is not an account reads as one.
+function SignOut() {
+  const session = useSession();
+  const qc = useQueryClient();
+  const navigate = useNavigate();
+
+  const out = useMutation({
+    mutationFn: api.logout,
+    onSettled: () => {
+      // Everything cached was read as this user.
+      qc.clear();
+      navigate("/login", { replace: true });
+    },
+  });
+
+  if (session.authDisabled) {
+    return <Badge variant="warning">no login</Badge>;
+  }
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-muted-foreground">{session.user}</span>
+      <button
+        type="button"
+        onClick={() => out.mutate()}
+        disabled={out.isPending}
+        className="text-muted-foreground underline hover:text-foreground"
+      >
+        sign out
+      </button>
     </div>
   );
 }

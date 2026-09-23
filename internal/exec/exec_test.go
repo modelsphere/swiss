@@ -17,7 +17,10 @@ func testPlan() *plan.Plan {
 		Release:    plan.Release{Name: "glm-53", Namespace: "modelforge"},
 		Chart:      plan.ChartRef{Name: "sglang", Version: "0.8.0", Repo: "oci://harbor.4pd.io/hardcore-tech"},
 		Engine:     "sglang",
-		Values:     values.Tree{"replicaCount": 2, "extraArgs": []any{"--tp-size=8"}},
+		Layers: map[string]values.Tree{
+			"form":    {"replicaCount": 2},
+			"catalog": {"extraArgs": []any{"--tp-size=8"}},
+		},
 	}
 }
 
@@ -28,7 +31,14 @@ func TestMaterializeWritesAValuesFileAndAOneReleaseHelmfile(t *testing.T) {
 	}
 	defer ws.Close()
 
-	vals, err := os.ReadFile(filepath.Join(ws.Dir, "values.yaml"))
+	// One file per layer, not one flattened document: the workspace shows the
+	// layering, and helm merging them back lands on what compose produced.
+	for _, name := range []string{"form.yaml", "catalog.yaml"} {
+		if _, err := os.Stat(filepath.Join(ws.Dir, name)); err != nil {
+			t.Fatalf("%s not written: %v", name, err)
+		}
+	}
+	vals, err := os.ReadFile(filepath.Join(ws.Dir, "form.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
