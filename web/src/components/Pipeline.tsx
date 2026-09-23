@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { Field, Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { Tabs } from "@/components/ui/tabs";
 import { DiffView } from "@/components/DiffView";
 import { Provenance } from "@/components/Provenance";
@@ -66,6 +67,7 @@ export function Pipeline({
   // Why, in the operator's own words. Recorded with the run and written beside
   // the release: the diff says what moved, and nothing but this says why.
   const [note, setNote] = useState("");
+  const [createNamespace, setCreateNamespace] = useState(false);
   const [open, setOpen] = useState(false);
   // Set when the compose button is clicked, so the dialog opens on the plan
   // that click produced rather than on whatever was lying around. Composing is
@@ -126,7 +128,7 @@ export function Pipeline({
             note.trim(),
           )
         : install
-          ? deployApi.install(plan!.hash, note.trim())
+          ? deployApi.install(plan!.hash, note.trim(), createNamespace)
           : // expectRevision is the optimistic lock the dry run computed. It
             // always exists here: nothing reaches this call without one.
             deployApi.apply(plan!.hash, diff?.revision, note.trim()),
@@ -240,6 +242,8 @@ export function Pipeline({
               applied={applied}
               note={note}
               onNote={setNote}
+              createNamespace={createNamespace}
+              onCreateNamespace={setCreateNamespace}
               diffPending={diffM.isPending}
               applyPending={applyM.isPending}
               dryRunDone={dryRunDone}
@@ -355,6 +359,8 @@ function Action({
   applied,
   note,
   onNote,
+  createNamespace,
+  onCreateNamespace,
   diffPending,
   applyPending,
   dryRunDone,
@@ -371,6 +377,8 @@ function Action({
   applied: ApplyResult | null;
   note: string;
   onNote: (v: string) => void;
+  createNamespace: boolean;
+  onCreateNamespace: (v: boolean) => void;
   diffPending: boolean;
   applyPending: boolean;
   dryRunDone: boolean;
@@ -400,6 +408,22 @@ function Action({
           className="max-w-xl"
         />
       </Field>
+
+      {install && !rollbackTo && (
+        <div className="flex items-start gap-2">
+          <Switch
+            checked={createNamespace}
+            onChange={onCreateNamespace}
+            label="Create the namespace"
+          />
+          <span className="text-sm">
+            Create the namespace
+            <span className="block text-xs text-muted-foreground">
+              if it does not exist yet — needs swissd to hold namespaces create
+            </span>
+          </span>
+        </div>
+      )}
 
       <div className="flex flex-wrap items-center gap-3">
         {!dryRunDone ? (

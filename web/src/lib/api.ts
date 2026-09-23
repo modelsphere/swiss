@@ -566,8 +566,8 @@ export const deployApi = {
   // nothing rather than as revision zero.
   apply: (planHash: string, expectRevision?: number, note?: string) =>
     post<ApplyResult>("/api/apply", { planHash, expectRevision, note }),
-  install: (planHash: string, note?: string) =>
-    post<ApplyResult>("/api/install", { planHash, note }),
+  install: (planHash: string, note?: string, createNamespace?: boolean) =>
+    post<ApplyResult>("/api/install", { planHash, note, createNamespace }),
   probe: (ns: string, release: string, auth: EntrypointAuth = {}) =>
     post<ProbeResult>(
       `/api/releases/${encodeURIComponent(ns)}/${encodeURIComponent(release)}/probe`,

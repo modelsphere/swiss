@@ -66,6 +66,9 @@ type applyRequest struct {
 	// recorded in the audit log and beside the release, and read by nothing --
 	// a diff says what changed, and only a person can say why.
 	Note string `json:"note,omitempty"`
+	// CreateNamespace is honoured on install only: an upgrade's namespace holds
+	// the live release already.
+	CreateNamespace bool `json:"createNamespace,omitempty"`
 }
 
 func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
@@ -386,6 +389,9 @@ func (s *Server) handleApply(mode exec.Mode) http.HandlerFunc {
 		if err != nil {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
+		}
+		if mode == exec.Install && req.CreateNamespace {
+			p.CreateNamespace = true
 		}
 
 		s.applyPlan(ctx, w, p, mode, req.ExpectRevision, actionName(mode), req.Note)

@@ -22,6 +22,7 @@ type deployFlags struct {
 	keepWorkspace                                           bool
 	yes                                                     bool
 	revision                                                int
+	createNamespace                                         bool
 }
 
 func (d *deployFlags) bind(c *cobra.Command) {
@@ -110,6 +111,8 @@ func applyCmd(mode exec.Mode) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			p.CreateNamespace = p.CreateNamespace || d.createNamespace
+
 			pr, err := probe()
 			if err != nil {
 				return err
@@ -140,5 +143,8 @@ func applyCmd(mode exec.Mode) *cobra.Command {
 	}
 	d.bind(c)
 	c.Flags().IntVar(&d.revision, "expect-revision", 0, "refuse if the live release is not at this revision")
+	if mode == Install {
+		c.Flags().BoolVar(&d.createNamespace, "create-namespace", false, "create the release's namespace if it does not exist")
+	}
 	return c
 }

@@ -207,6 +207,59 @@ func TestApplyOnAMissingReleaseIsAConflict(t *testing.T) {
 	}
 }
 
+// The apply fails here -- the test profile names no chart source -- but the
+// plan is written before the cluster is touched, and that is what helmfile runs.
+func TestInstallMayCreateTheNamespace(t *testing.T) {
+	srv, s := deployServer(t, true)
+	code, body := post(t, srv, "/api/plans", map[string]any{"model": "kimi-k2.5", "release": "not-live"})
+	hash, _ := body["hash"].(string)
+	if code != 200 || hash == "" {
+		t.Fatalf("plan failed: %d %v", code, body)
+	}
+	post(t, srv, "/api/install", map[string]any{"planHash": hash, "createNamespace": true})
+
+	p := writtenPlan(t, s, "modelforge", "not-live")
+	if !p.CreateNamespace {
+		t.Fatal("the install asked for the namespace to be created")
+	}
+	doc, err := p.HelmfileDocument("charts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !doc.HelmDefaults.CreateNS {
+		t.Error("it must reach helmDefaults, which is the only thing helm reads")
+	}
+}
+
+func TestApplyIgnoresCreateNamespace(t *testing.T) {
+	srv, s := deployServer(t, true)
+	_, body := post(t, srv, "/api/plans", map[string]any{"model": "modelforge", "release": "glm-53"})
+	hash, _ := body["hash"].(string)
+	post(t, srv, "/api/apply", map[string]any{"planHash": hash, "createNamespace": true})
+
+	if writtenPlan(t, s, "modelforge", "glm-53").CreateNamespace {
+		t.Error("an upgrade must not ask to create a namespace it is already in")
+	}
+}
+
+func writtenPlan(t *testing.T, s *Server, namespace, release string) *plan.Plan {
+	t.Helper()
+	w, ok := s.writer.(*fakeWriter)
+	if !ok {
+		t.Fatalf("writer is %T", s.writer)
+	}
+	ref := namespace + "/" + cluster.PlanConfigMapPrefix + release
+	data, ok := w.written[ref]
+	if !ok {
+		t.Fatalf("no plan written at %s: %v", ref, w.written)
+	}
+	p, err := plan.ParseYAML([]byte(data["plan.yaml"]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
 func TestPlanConfigMapRefIsBesideTheRelease(t *testing.T) {
 	cfg := testConfig("prod")
 	cfg.Server.AllowDeploy = true

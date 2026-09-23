@@ -46,6 +46,37 @@ subjects:
     name: {{ $sa }}
     namespace: {{ .Release.Namespace }}
 ---
+{{- if and .Values.rbac.createNamespace .Values.config.allowDeploy }}
+# Namespaces are cluster-scoped, so an install that creates one needs a
+# ClusterRole whichever rbac.scope is in use. patch as well as create: helm v4
+# applies the Namespace object server-side, and that is a PATCH.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fullName }}-namespaces
+  labels:
+    {{- include "swiss.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $fullName }}-namespaces
+  labels:
+    {{- include "swiss.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $fullName }}-namespaces
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sa }}
+    namespace: {{ .Release.Namespace }}
+---
+{{- end }}
 # ---------------------------------------------------------------------------
 # swissd's own namespace: the site profile ConfigMap, and the entrypoint Secret
 # when the profile names one by bare name. Granted whichever scope is in use,
