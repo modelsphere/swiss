@@ -194,13 +194,6 @@ func (e Entry) Validate() error {
 			return fmt.Errorf("%s: requires.vendor %q is not a known accelerator", where, v.Requires.Vendor)
 		}
 
-		// The catalog layer may only write keys it owns. This is the check that
-		// makes a public catalog safe to merge: a namespace, a host path or a
-		// registry in an entry is refused here rather than rendered.
-		if err := values.CheckOwnership(v.Values, values.LayerCatalog); err != nil {
-			return fmt.Errorf("%s: %w", where, err)
-		}
-
 		// lws.size and requires.nodes describe one group. A disagreement does
 		// not fail -- the group hangs at rendezvous waiting for a peer that was
 		// never scheduled -- so it has to be caught before it is rendered.

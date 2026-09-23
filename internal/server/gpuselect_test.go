@@ -1,7 +1,6 @@
 package server
 
 import (
-	"net/http"
 	"testing"
 )
 
@@ -100,22 +99,19 @@ func TestSchedulingDefaultsComeFromTheProfile(t *testing.T) {
 }
 
 // nodeSelector, affinity and tolerations arrive as a YAML fragment, parsed on
-// the server so there is one parser and ownership still applies.
-func TestSchedulingYAMLIsOwnershipChecked(t *testing.T) {
+// the server so there is one parser for it.
+func TestSchedulingYAMLIsAccepted(t *testing.T) {
 	srv, _ := deployServer(t, true)
-	code, _ := post(t, srv, "/api/plans", map[string]any{
-		"model": "modelforge", "serviceId": "r",
-		"overridesYAML": "tolerations:\n  - key: gpu\n    operator: Exists\n",
-	})
-	if code != 200 {
-		t.Fatalf("tolerations are form-owned and must be accepted, got %d", code)
-	}
-	bad, _ := post(t, srv, "/api/plans", map[string]any{
-		"model": "modelforge", "serviceId": "r",
-		"overridesYAML": "extraArgs: [--tp-size=8]\n",
-	})
-	if bad != http.StatusBadRequest {
-		t.Fatalf("a catalog-owned key in the box must be refused, got %d", bad)
+	for _, frag := range []string{
+		"tolerations:\n  - key: gpu\n    operator: Exists\n",
+		"extraArgs: [--tp-size=8]\n", // the model entry set this too; the form wins
+	} {
+		code, body := post(t, srv, "/api/plans", map[string]any{
+			"model": "modelforge", "serviceId": "r", "overridesYAML": frag,
+		})
+		if code != 200 {
+			t.Fatalf("%q: status %d: %v", frag, code, body)
+		}
 	}
 }
 

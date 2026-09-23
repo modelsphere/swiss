@@ -203,11 +203,6 @@ func Parse(raw []byte, origin string) (*Profile, error) {
 	if p.Model.PathTemplate == "" {
 		return nil, fmt.Errorf("%s: model.pathTemplate is required -- the catalog gives an identity, not a path", origin)
 	}
-	if p.Extra != nil {
-		if err := values.CheckOwnership(p.Extra, values.LayerSite); err != nil {
-			return nil, fmt.Errorf("%s: extra: %w", origin, err)
-		}
-	}
 	return &p, nil
 }
 

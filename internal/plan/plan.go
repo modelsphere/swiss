@@ -155,6 +155,49 @@ func (p *Plan) LayerOf(path string) string {
 	return ""
 }
 
+// Shadow is one value that a layer set and a later layer overrode. It is not an
+// error: the merge order is the rule, and a later layer overriding an earlier
+// one is the mechanism working. It is worth showing because the layer that lost
+// is usually the one the reader thought they were configuring -- an edit that
+// silently replaces extraArgs from the model entry is the case this exists for.
+type Shadow struct {
+	Path string `json:"path"`
+	// By is the layer whose value is in the rendered document.
+	By string `json:"by"`
+	// Under lists the layers it overrode, in merge order.
+	Under []string `json:"under"`
+}
+
+// Shadowed lists every path more than one layer set, in path order. Derived
+// rather than stored: it is a view of Layers, so it cannot disagree with them,
+// and it stays out of the plan hash.
+//
+// Leaf paths, which means a list counts as one value -- helm replaces a list
+// wholesale rather than appending, so an extraArgs in a later layer really does
+// drop every flag the earlier one set. That is the most important row this
+// report ever prints.
+func (p *Plan) Shadowed() []Shadow {
+	setters := map[string][]string{}
+	for _, layer := range Layers {
+		tree, ok := p.Layers[layer]
+		if !ok {
+			continue
+		}
+		for _, path := range values.Paths(tree) {
+			setters[path] = append(setters[path], layer)
+		}
+	}
+	var out []Shadow
+	for path, layers := range setters {
+		if len(layers) < 2 {
+			continue
+		}
+		out = append(out, Shadow{Path: path, By: layers[len(layers)-1], Under: layers[:len(layers)-1]})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	return out
+}
+
 // ByLayer lists the paths each layer set, for display.
 func (p *Plan) ByLayer() map[string][]string {
 	out := map[string][]string{}

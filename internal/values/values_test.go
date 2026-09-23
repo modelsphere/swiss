@@ -30,50 +30,6 @@ func TestSetRefusesToTunnelThroughScalar(t *testing.T) {
 	}
 }
 
-func TestOwnerLongestPrefixWins(t *testing.T) {
-	for path, want := range map[string]string{
-		"cache.hostPath": LayerSite,
-		// Derived is a provenance label, not an owner: the site owns cache.*
-		// and can therefore override what the derived rule computes.
-		"cache.maxSlotsPerNode": LayerSite,
-		"image.tag":             LayerCatalog,
-		"image.repository":      LayerSite,
-		"model.gpus":            LayerCatalog,
-		// Site-defaulted from the path template, but the form owns it: weights
-		// move, and a deploy has to be able to say where they are.
-		"model.localPath":     LayerForm,
-		"serviceId":           LayerForm,
-		"scaler.maxReplicas":  LayerForm, // unmatched -> form
-		"somethingNewInChart": LayerForm,
-	} {
-		if got := Owner(path); got != want {
-			t.Errorf("Owner(%q) = %q, want %q", path, got, want)
-		}
-	}
-}
-
-func TestCheckOwnershipRejectsSiteKeyInCatalogLayer(t *testing.T) {
-	for _, tree := range []Tree{
-		{"model": map[string]any{"localPath": "/mnt/x"}},
-		{"cache": map[string]any{"hostPath": "/mnt/cache"}},
-	} {
-		if err := CheckOwnership(tree, LayerCatalog); err == nil {
-			t.Errorf("a public catalog must not be able to set %v", LeafPaths(tree))
-		}
-	}
-}
-
-// Both are central to a deploy, so both must be settable from the form.
-func TestFormOwnsServiceIDAndLocalPath(t *testing.T) {
-	tree := Tree{
-		"serviceId": "modelforge-01-glm",
-		"model":     map[string]any{"localPath": "/mnt/disk1/models/x"},
-	}
-	if err := CheckOwnership(tree, LayerForm); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestParseSetInfersTypes(t *testing.T) {
 	tr, err := ParseSet("scaler.maxReplicas=8")
 	if err != nil {

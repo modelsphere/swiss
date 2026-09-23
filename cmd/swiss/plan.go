@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/aceforeverd/swiss/internal/catalog"
 	"github.com/aceforeverd/swiss/internal/compose"
@@ -201,7 +202,7 @@ func printExplain(p *plan.Plan) {
 	fmt.Printf("chart %s-%s   engine %s   profile %s\n%s\n\n", p.Chart.Name, p.Chart.Version, p.Engine, p.Profile, p.Hash)
 
 	byLayer := p.ByLayer()
-	for _, layer := range []string{values.LayerCatalog, values.LayerSite, values.LayerDerived, values.LayerForm} {
+	for _, layer := range []string{values.LayerCatalog, values.LayerSite, values.LayerDerived, values.LayerForm, values.LayerEdit} {
 		paths := byLayer[layer]
 		if len(paths) == 0 {
 			continue
@@ -214,4 +215,21 @@ func printExplain(p *plan.Plan) {
 		}
 		fmt.Println()
 	}
+	printShadowed(p)
+}
+
+// printShadowed names the values a later layer took over. Never an error -- the
+// merge order is the rule -- but the layer that lost is usually the one the
+// reader thought they were configuring, so it is the last thing printed rather
+// than something to go looking for.
+func printShadowed(p *plan.Plan) {
+	sh := p.Shadowed()
+	if len(sh) == 0 {
+		return
+	}
+	fmt.Printf("shadowed (%d)\n", len(sh))
+	for _, s := range sh {
+		fmt.Printf("  %-40s %s -> %s\n", s.Path, strings.Join(s.Under, " -> "), s.By)
+	}
+	fmt.Println()
 }

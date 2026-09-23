@@ -42,21 +42,6 @@ about precedence.
 | **user form** | how much, where, how routed: `serviceId`, `replicaCount`, `scaler.*`, `modelRoute.*`, scheduling |
 | **plan editor** | the escape hatch, applied last — any key, exempt from ownership, labelled `edit` |
 
-`internal/values/ownership.go` maps every values path to exactly one layer and
-checks each layer before anything merges, so a rejected key never half-applies.
-Unmatched paths default to the form layer, so a new chart key becomes settable
-with no code change.
-
-Two consequences worth stating outright:
-
-- **The catalog may not own site keys.** It is a public repo, so a namespace or a
-  harbor URL in an entry is wrong for every reader. Its CI enforces this, and that
-  check is what keeps the layering honest.
-- **Feature flags are always written down.** `scaler`, `sloRequirement`, `cart` and
-  `serviceMonitor` default to *enabled* in the charts, so compose emits every flag
-  explicitly rather than letting a chart default decide for a release that never
-  asked.
-
 ## The pipeline
 
 ```

@@ -155,18 +155,21 @@ func TestUpgradeFormCanClearTheEdits(t *testing.T) {
 	}
 }
 
-// Ownership still decides what the upgrade form may set. The page is editable
-// now; "select, don't edit" is enforced by the same check either way.
-func TestUpgradeFormStillObeysOwnership(t *testing.T) {
+// The upgrade form may set a key the model entry set, the same as the deploy
+// form. Nothing is fenced off; the merge order decides, and the plan says so.
+func TestUpgradeFormMaySetACatalogKey(t *testing.T) {
 	probe := deployed(t, planRequest{Model: "modelforge", Release: "r", ServiceID: "r"})
 	srv, _ := deployServerWith(t, probe, true)
 
-	code, _ := post(t, srv, "/api/plans", map[string]any{
+	code, body := post(t, srv, "/api/plans", map[string]any{
 		"fromRelease": "r",
 		"overrides":   map[string]any{"extraArgs": []string{"--tp-size=8"}},
 	})
-	if code != http.StatusBadRequest {
-		t.Fatalf("a catalog-owned key must be refused from the upgrade form too, got %d", code)
+	if code != 200 {
+		t.Fatalf("status %d: %v", code, body)
+	}
+	if layerOf(body, "extraArgs") != "form" {
+		t.Errorf("extraArgs should be attributed to the form, got %q", layerOf(body, "extraArgs"))
 	}
 }
 

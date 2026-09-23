@@ -188,8 +188,11 @@ func TestStaleIndexIsDetected(t *testing.T) {
 	}
 }
 
+// A values key is no longer a way to make an entry invalid -- variants[].values
+// is the chart schema, not ours -- so this uses a chart that disagrees with its
+// engine, which still is.
 func TestEntryValidationRunsOnFetch(t *testing.T) {
-	bad := strings.Replace(testEntryV2, "extraArgs: [--tp-size=2, --mem-fraction-static=0.9]", "model: {localPath: /mnt/x}", 1)
+	bad := strings.Replace(testEntryV2, "chart: {name: sglang", "chart: {name: vllm", 1)
 	srv := serve(t, map[string]string{
 		"catalog/index.json":          index(map[string]string{"1.1.0": bad}),
 		"catalog/models/m/1.1.0.yaml": bad,
@@ -199,7 +202,7 @@ func TestEntryValidationRunsOnFetch(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = c.Entry(context.Background(), "m", "1.1.0")
-	if err == nil || !strings.Contains(err.Error(), "localPath") {
+	if err == nil || !strings.Contains(err.Error(), "does not match engine") {
 		t.Fatalf("fetched entries must be validated, got %v", err)
 	}
 }

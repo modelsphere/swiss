@@ -149,16 +149,20 @@ func TestPlanEndpointComposesAndStores(t *testing.T) {
 	}
 }
 
-// The form layer may not touch catalog-owned keys, and the server must enforce
-// that rather than trusting the UI to.
-func TestPlanEndpointRejectsCatalogOverrides(t *testing.T) {
+// The form may set a key the model entry already set. It wins, because it
+// merges later, and the plan reports it as shadowed rather than refusing it.
+func TestPlanEndpointAcceptsCatalogOverrides(t *testing.T) {
 	srv, _ := deployServer(t, true)
 	code, body := post(t, srv, "/api/plans", map[string]any{
 		"model":     "modelforge",
+		"serviceId": "r",
 		"overrides": map[string]any{"extraArgs": []string{"--tp-size=2"}},
 	})
-	if code != http.StatusBadRequest {
+	if code != 200 {
 		t.Fatalf("status %d: %v", code, body)
+	}
+	if layerOf(body, "extraArgs") != "form" {
+		t.Errorf("extraArgs should be attributed to the form, got %q", layerOf(body, "extraArgs"))
 	}
 }
 
@@ -494,7 +498,7 @@ func TestEveryToggledFeatureIsFormSettable(t *testing.T) {
 }
 
 // The advanced section is a values fragment typed by hand. It is parsed on the
-// server so there is one parser, and the ownership check still gates it.
+// server so there is one parser for it.
 func TestAdvancedOverridesYAML(t *testing.T) {
 	srv, _ := deployServer(t, true)
 	code, body := post(t, srv, "/api/plans", map[string]any{
@@ -516,14 +520,17 @@ func TestAdvancedOverridesYAML(t *testing.T) {
 	}
 }
 
-func TestAdvancedOverridesStillObeyOwnership(t *testing.T) {
+func TestAdvancedOverridesMaySetACatalogKey(t *testing.T) {
 	srv, _ := deployServer(t, true)
 	code, body := post(t, srv, "/api/plans", map[string]any{
-		"model": "glm5.1", "release": "r",
+		"model": "glm5.1", "release": "r", "serviceId": "r",
 		"overridesYAML": "extraArgs:\n  - --tp-size=8\n",
 	})
-	if code != http.StatusBadRequest {
-		t.Fatalf("a catalog key typed by hand must still be refused: %d %v", code, body)
+	if code != 200 {
+		t.Fatalf("a catalog key typed by hand is allowed now: %d %v", code, body)
+	}
+	if layerOf(body, "extraArgs") != "form" {
+		t.Errorf("extraArgs should be attributed to the form, got %q", layerOf(body, "extraArgs"))
 	}
 }
 

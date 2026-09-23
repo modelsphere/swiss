@@ -54,12 +54,6 @@ func Compose(in Input) (*plan.Plan, error) {
 	if err != nil {
 		return nil, fmt.Errorf("site layer: %w", err)
 	}
-	// The form is checked before anything is merged, so a rejected override
-	// never half-applies.
-	if err := values.CheckOwnership(in.Overrides, values.LayerForm); err != nil {
-		return nil, fmt.Errorf("overrides: %w", err)
-	}
-
 	// base is only what the defaults need to see: whether the site already set
 	// a value one of them would otherwise compute.
 	base := values.Tree{}
@@ -121,11 +115,16 @@ func Compose(in Input) (*plan.Plan, error) {
 
 // catalogLayer renders the entry and variant into chart values.
 //
-// Three fields are projected rather than copied, because the catalog schema
-// refuses a second spelling of each: model.name comes from servedName,
-// model.gpus from requires.gpus, and image.tag from the variant's image. Two
-// spellings of one fact drift, which is the same line the charts take with
-// nvidia.com/gpu.
+// No layer is restricted to a set of keys: variants[].values is the chart
+// schema, not ours, and the merge order already decides the outcome. The catalog
+// goes first, so everything after it can override what it set -- and what a
+// reader needs to see is which values that happened to, which is plan.Shadowed.
+//
+// Three fields are projected on top rather than copied, because each has a
+// first-class spelling on the variant: model.name comes from servedName,
+// model.gpus from requires.gpus, and image.tag from the variant image. The
+// projection is applied after the merge and so wins over the same key in
+// values, which is what stops two spellings of one fact from drifting.
 func catalogLayer(e catalog.Entry, v catalog.Variant) (values.Tree, error) {
 	out := values.Tree{}
 	values.Merge(out, v.Values, values.LayerCatalog, nil)
@@ -146,7 +145,7 @@ func catalogLayer(e catalog.Entry, v catalog.Variant) (values.Tree, error) {
 			}
 		}
 	}
-	return out, values.CheckOwnership(out, values.LayerCatalog)
+	return out, nil
 }
 
 // siteLayer renders the profile into chart values for this model.
@@ -196,7 +195,7 @@ func siteLayer(p site.Profile, e catalog.Entry, v catalog.Variant) (values.Tree,
 		}
 	}
 	values.Merge(out, p.Extra, values.LayerSite, nil)
-	return out, values.CheckOwnership(out, values.LayerSite)
+	return out, nil
 }
 
 // applyDefaults fills values the site can work out but the deploy may override.

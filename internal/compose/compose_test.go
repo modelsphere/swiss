@@ -110,23 +110,48 @@ func TestDerivedYieldsToAnExplicitOverride(t *testing.T) {
 	}
 }
 
-func TestFormStillCannotSetASiteKey(t *testing.T) {
+// No layer is fenced off from a key any more. A form may repoint the host cache
+// path the site set, and the merge order is what decides the outcome.
+func TestFormMaySetASiteKey(t *testing.T) {
 	in := testInput()
 	in.Overrides = values.Tree{"cache": map[string]any{"hostPath": "/tmp/whatever"}}
-	if _, err := Compose(in); err == nil {
-		t.Fatal("a deploy form must not repoint a host cache path")
+	p, err := Compose(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := values.Get(p.Values(), "cache.hostPath"); v != "/tmp/whatever" {
+		t.Errorf("the later layer wins: cache.hostPath = %v", v)
+	}
+	if p.LayerOf("cache.hostPath") != values.LayerForm {
+		t.Errorf("attributed to %q, want form", p.LayerOf("cache.hostPath"))
 	}
 }
 
-func TestComposeRejectsAFormOverrideOfACatalogKey(t *testing.T) {
+// Taking over extraArgs is the case worth reporting: helm replaces a list
+// wholesale, so this drops every flag the variant was validated with. It is
+// allowed, and it turns up in Shadowed rather than in an error.
+func TestFormOverrideOfACatalogKeyIsReportedNotRefused(t *testing.T) {
 	in := testInput()
 	in.Overrides = values.Tree{"extraArgs": []any{"--tp-size=2"}}
-	_, err := Compose(in)
-	if err == nil {
-		t.Fatal("a deploy form must not be able to change the parallelism the variant was validated for")
+	p, err := Compose(in)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "extraArgs") {
-		t.Errorf("error should name the offending key: %v", err)
+	if v, _ := values.Get(p.Values(), "extraArgs"); len(v.([]any)) != 1 {
+		t.Errorf("the later layer wins outright: %v", v)
+	}
+	var found bool
+	for _, s := range p.Shadowed() {
+		if s.Path != "extraArgs" {
+			continue
+		}
+		found = true
+		if s.By != values.LayerForm || len(s.Under) != 1 || s.Under[0] != values.LayerCatalog {
+			t.Errorf("extraArgs: %s over %v, want form over [catalog]", s.By, s.Under)
+		}
+	}
+	if !found {
+		t.Errorf("extraArgs must be reported as shadowed, got %v", p.Shadowed())
 	}
 }
 
@@ -337,14 +362,14 @@ func TestLayerValuesSplitByProvenance(t *testing.T) {
 	}
 }
 
-// The edit layer is the escape hatch: applied last, exempt from ownership, and
-// labelled so it is visible wherever the plan is.
-func TestEditLayerBypassesOwnershipAndWinsLast(t *testing.T) {
+// The edit layer is applied last and labelled, so it is visible wherever the
+// plan is.
+func TestEditLayerWinsLast(t *testing.T) {
 	in := testInput()
 	in.Overrides = values.Tree{"replicaCount": 2}
 	in.Edits = values.Tree{
 		"replicaCount": 9,
-		"extraArgs":    []any{"--tp-size=4"}, // catalog-owned; a form write is refused
+		"extraArgs":    []any{"--tp-size=4"}, // takes over the whole list from the catalog
 		"somethingNew": "value",
 	}
 	p, err := Compose(in)
