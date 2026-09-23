@@ -124,6 +124,15 @@ export function Pipeline({
   const error = diffM.error ?? applyM.error;
   const actionLabel = rollbackTo ? "Roll back" : install ? "Install" : "Apply";
 
+  // The diff is optional everywhere in this pipeline except here. An upgrade
+  // recomposes and may legitimately land on the same values; a rollback that
+  // changes nothing is not a no-op worth recording but a mistake about which
+  // revision is running, and applying it forward would write a new revision
+  // with nothing in it. So for a rollback the diff is required, and its answer
+  // is the gate.
+  const undiffedRollback = !!rollbackTo && !diff;
+  const emptyRollback = !!rollbackTo && !!diff && !diff.changed;
+
   return (
     <>
       {/* The pipeline is the button row, left to right: compose, diff, apply.
@@ -159,7 +168,14 @@ export function Pipeline({
           <Button
             variant={rollbackTo ? "destructive" : "default"}
             onClick={() => applyM.mutate()}
-            disabled={!plan || applyM.isPending || !!applied || exists === undefined}
+            disabled={
+              !plan ||
+              applyM.isPending ||
+              !!applied ||
+              exists === undefined ||
+              undiffedRollback ||
+              emptyRollback
+            }
           >
             {applyM.isPending ? "Submitting…" : actionLabel}
           </Button>
@@ -188,14 +204,22 @@ export function Pipeline({
         {plan && !install && !diff && (
           <p className="flex items-start gap-2 text-sm text-warning">
             <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-            {/* A rollback still asserts a revision without a diff -- the one
-                this page read -- so what it is missing is the preview, not the
-                lock. Saying otherwise would teach an operator to distrust a
-                warning that is right everywhere else. */}
             <span>
               {rollbackTo
-                ? `No diff was run. Nothing has shown what going back to revision ${rollbackTo} changes; it will still refuse if the release has moved since this page read it.`
+                ? `Diff first: nothing has shown what going back to revision ${rollbackTo} would change, and a rollback that changes nothing is a new revision with nothing in it. Roll back stays disabled until the diff has run.`
                 : "No diff was run. Nothing has shown what this changes, and nothing asserts the release has not moved since — if someone else applied in the meantime, this overwrites them with no signal."}
+            </span>
+          </p>
+        )}
+
+        {/* The diff came back empty: that revision is what is already running,
+            whatever the revision numbers suggest. */}
+        {emptyRollback && (
+          <p className="flex items-start gap-2 text-sm text-warning">
+            <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+            <span>
+              Revision {rollbackTo} matches what is running — nothing to roll back to. Going
+              forward with it would record a revision that changed nothing.
             </span>
           </p>
         )}
@@ -281,8 +305,9 @@ export function Pipeline({
             </Card>
           ) : (
             <Empty>
-              Optional, and the only thing that shows what this plan does to the live release.
-              Running it also pins the apply to the revision it saw.
+              {rollbackTo
+                ? `Required before a rollback: it is what shows that revision ${rollbackTo} is not already what is running, and it pins the rollback to the revision it saw.`
+                : "Optional, and the only thing that shows what this plan does to the live release. Running it also pins the apply to the revision it saw."}
             </Empty>
           )}
         </div>
@@ -295,7 +320,7 @@ export function Pipeline({
               <CardTitle className="text-base">{actionLabel}</CardTitle>
               <p className="text-sm text-muted-foreground">
                 {rollbackTo
-                  ? `Re-applying revision ${rollbackTo} as a new revision, with the image, chart and engine flags it had — not whatever the catalog says that version is today.`
+                  ? `Re-applying revision ${rollbackTo} as a new revision, with the image, chart and engine flags it had — not whatever the catalog says that version is today. Asserting the release is still at revision ${diff?.revision ?? "—"}.`
                   : install
                     ? "The release does not exist; this creates it."
                     : diff

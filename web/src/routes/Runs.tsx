@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Code } from "@/components/ui/code";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs } from "@/components/ui/tabs";
 import { Empty, ErrorState, Loading } from "@/components/States";
 
 // No "diff": a diff is not audited. Rows from before that carry the action
@@ -19,12 +20,13 @@ const ACTIONS = ["", "apply", "install", "uninstall", "rollback"];
 // *attempted* -- an apply that failed, a rollback, an uninstall -- exists only
 // here, and each entry carries the diff helmfile computed before it ran.
 //
-// Filtered to one release it is also that release's revision history, which is
-// why there is no second Revisions view: an applied revision and the run that
-// produced it are one event, and two tables describing it were two places to
-// look and two chances to disagree. The cluster is still the authority on what
-// can be rolled back to, so revisions it knows about and the log does not are
-// listed here too rather than being unreachable.
+// Filtered to one release it is also where that release's revisions live, as a
+// second tab rather than a second page: they answer one question between them
+// -- what has happened to this release -- and used to be two places to look.
+// Two tabs and not one table, because they are not the same rows: the log is
+// attempts, including the ones that changed nothing, and revisions are what the
+// cluster will let you go back to. Nothing in the cluster can rebuild the first
+// and nothing in the database can be trusted for the second.
 export function Runs() {
   const [params, setParams] = useSearchParams();
   const release = params.get("release") ?? "";
@@ -37,9 +39,8 @@ export function Runs() {
     refetchInterval: 20_000,
   });
 
-  // One release is the view that can offer a rollback: it is the only one that
-  // knows which revision is live, and rolling back to the revision already
-  // running is a new revision with nothing in it.
+  // Revisions are per release: the tab exists only when the page is looking at
+  // one, which is also the only view that knows which revision is live.
   const oneRelease = !!(namespace && release);
   const revs = useQuery({
     queryKey: ["revisions", namespace, release],
@@ -54,35 +55,38 @@ export function Runs() {
     setParams(next, { replace: true });
   };
 
+  // In the URL, so a link can open the revisions of a release directly and a
+  // reload does not drop back to the log.
+  const tab = oneRelease && params.get("tab") === "revisions" ? "revisions" : "log";
+
   if (isPending) return <Loading what="the operation log" />;
   if (error) return <ErrorState what="the operation log" error={error} />;
 
   const filtered = release || namespace || action;
   const revisions = revs.data?.revisions ?? [];
   const live = revisions.find((r) => r.current)?.revision;
-  // Revisions the log cannot account for: deployed by the CLI, applied before
-  // swissd recorded the revision on the row, or written while the database was
-  // gone. They are still rollback targets, so they are listed rather than lost.
-  const logged = new Set(data.runs.map((r) => r.revision).filter(Boolean));
-  const unlogged = revisions.filter((r) => !r.current && !logged.has(r.revision));
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-lg font-semibold">Operation log</h1>
+        <h1 className="text-lg font-semibold">{oneRelease ? release : "Operation log"}</h1>
         <div className="flex flex-wrap items-center gap-2">
-          <select
-            className="rounded-md border bg-background px-2 py-1.5 text-sm"
-            value={action}
-            onChange={(e) => setFilter("action", e.target.value)}
-            aria-label="action"
-          >
-            {ACTIONS.map((a) => (
-              <option key={a} value={a}>
-                {a || "all actions"}
-              </option>
-            ))}
-          </select>
+          {/* The action filter is the log's; revisions have no actions to
+              filter by. */}
+          {tab === "log" && (
+            <select
+              className="rounded-md border bg-background px-2 py-1.5 text-sm"
+              value={action}
+              onChange={(e) => setFilter("action", e.target.value)}
+              aria-label="action"
+            >
+              {ACTIONS.map((a) => (
+                <option key={a} value={a}>
+                  {a || "all actions"}
+                </option>
+              ))}
+            </select>
+          )}
           {filtered && (
             <button
               onClick={() => setParams(new URLSearchParams(), { replace: true })}
@@ -101,77 +105,134 @@ export function Runs() {
           {live !== undefined && ` — live at revision ${live}`}.
         </p>
       )}
-      {revs.error && <ErrorState what="the revisions" error={revs.error} />}
 
-      {/* A note rather than a branch: a swissd with no database still has
-          revisions in the cluster, and they are still rollback targets. */}
-      {!data.hasStore && (
-        <p className="text-sm text-muted-foreground">
-          This swissd has no database, so it keeps no operation log. What is deployed, and
-          what can be rolled back to, is still read from the cluster.
-        </p>
+      {oneRelease && (
+        <Tabs
+          tabs={[
+            { id: "log", label: "Log" },
+            { id: "revisions", label: "Revisions" },
+          ]}
+          active={tab}
+          onSelect={(t) => setFilter("tab", t === "log" ? "" : t)}
+        />
       )}
 
-      {data.runs.length === 0 && unlogged.length === 0 ? (
-        <Empty>{filtered ? "Nothing matches that filter." : "Nothing has been attempted yet."}</Empty>
+      {tab === "log" ? (
+        <>
+          {/* A note rather than a branch: a swissd with no database keeps no
+              log, and its revisions are still in the cluster next door. */}
+          {!data.hasStore && (
+            <p className="text-sm text-muted-foreground">
+              This swissd has no database, so it keeps no operation log. What is deployed, and
+              what can be rolled back to, is still read from the cluster.
+            </p>
+          )}
+
+          {data.runs.length === 0 ? (
+            <Empty>
+              {filtered ? "Nothing matches that filter." : "Nothing has been attempted yet."}
+            </Empty>
+          ) : (
+            <Card>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-8" />
+                    <TableHead>When</TableHead>
+                    <TableHead>Action</TableHead>
+                    <TableHead>Release</TableHead>
+                    <TableHead>Result</TableHead>
+                    <TableHead>Took</TableHead>
+                    <TableHead>Rev</TableHead>
+                    <TableHead>Plan</TableHead>
+                    {/* Last, because it is the only column whose width is
+                        somebody's prose. */}
+                    <TableHead>Note</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {data.runs.map((r) => (
+                    <Row key={r.id} run={r} live={live} />
+                  ))}
+                </TableBody>
+              </Table>
+            </Card>
+          )}
+        </>
       ) : (
-        <Card>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-8" />
-                <TableHead>When</TableHead>
-                <TableHead>Action</TableHead>
-                <TableHead>Release</TableHead>
-                <TableHead>Result</TableHead>
-                <TableHead>Took</TableHead>
-                <TableHead>Rev</TableHead>
-                <TableHead>Plan</TableHead>
-                {oneRelease && <TableHead />}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.runs.map((r) => (
-                <Row key={r.id} run={r} live={live} oneRelease={oneRelease} />
-              ))}
-              {unlogged.length > 0 && (
-                <TableRow>
-                  <TableCell colSpan={9} className="text-xs text-muted-foreground">
-                    In the cluster with no entry in this log — still what they were when they
-                    ran, and still rollback targets.
-                  </TableCell>
-                </TableRow>
-              )}
-              {unlogged.map((r) => (
-                <RevisionRow
-                  key={`rev-${r.revision}`}
-                  revision={r}
-                  namespace={namespace}
-                  release={release}
-                />
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+        <RevisionsTab
+          namespace={namespace}
+          release={release}
+          revisions={revisions}
+          pending={revs.isPending}
+          error={revs.error}
+        />
       )}
     </div>
   );
 }
 
-function Row({
-  run,
-  live,
-  oneRelease,
+// RevisionsTab is what this release can be rolled back to: one archived plan
+// per applied revision, read from the cluster rather than the log, so losing
+// the database does not cost the ability to roll back.
+function RevisionsTab({
+  namespace,
+  release,
+  revisions,
+  pending,
+  error,
 }: {
-  run: Run;
-  live?: number;
-  oneRelease: boolean;
+  namespace: string;
+  release: string;
+  revisions: Revision[];
+  pending: boolean;
+  error: unknown;
 }) {
+  if (error) return <ErrorState what="the revisions" error={error} />;
+  if (pending) return <Loading what="the revisions" />;
+  if (revisions.length === 0) {
+    return (
+      <Empty>Nothing yet — a plan is archived each time this release is applied.</Empty>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="text-sm text-muted-foreground">
+        Rolling back re-applies that revision's plan as a new one, with the image, chart and
+        engine flags it had — not whatever the catalog says that version is today.
+      </p>
+      <Card>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-8" />
+              <TableHead>Rev</TableHead>
+              <TableHead>Model</TableHead>
+              <TableHead>Variant</TableHead>
+              <TableHead>Chart</TableHead>
+              <TableHead>Plan</TableHead>
+              <TableHead />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {revisions.map((r) => (
+              <RevisionRow
+                key={r.revision}
+                revision={r}
+                namespace={namespace}
+                release={release}
+              />
+            ))}
+          </TableBody>
+        </Table>
+      </Card>
+    </div>
+  );
+}
+
+function Row({ run, live }: { run: Run; live?: number }) {
   const [open, setOpen] = useState(false);
-  // Rolling back to the revision already running would be a new revision with
-  // nothing in it, and a row that produced none -- a failed apply, an
-  // uninstall -- has nothing to go back to.
-  const target = run.revision && run.revision !== live ? run.revision : 0;
 
   // Output is fetched per row rather than with the list: a log view that drags
   // every diff it ever rendered into one response is one nobody opens.
@@ -202,8 +263,6 @@ function Row({
             {run.release}
           </Link>
           <div className="text-xs text-muted-foreground">{run.namespace}</div>
-          {/* The one thing in the row nothing else can reconstruct. */}
-          {run.note && <div className="mt-0.5 max-w-xs text-xs italic">{run.note}</div>}
         </TableCell>
         <TableCell>
           <Outcome run={run} />
@@ -228,16 +287,18 @@ function Row({
         <TableCell className="font-mono text-xs text-muted-foreground">
           {run.planHash ? run.planHash.slice(0, 12) : "—"}
         </TableCell>
-        {oneRelease && (
-          <TableCell className="pr-0 text-right whitespace-nowrap">
-            {target > 0 && <RollBack namespace={run.namespace} release={run.release} to={target} />}
-          </TableCell>
-        )}
+        {/* Truncated with the whole of it in the title and in the row below:
+            a column that grows with the longest note would push every column
+            left of it about. */}
+        <TableCell className="max-w-56 truncate text-sm" title={run.note}>
+          {run.note || <span className="text-muted-foreground">—</span>}
+        </TableCell>
       </TableRow>
 
       {open && (
         <TableRow>
           <TableCell colSpan={9} className="bg-muted/30">
+            {run.note && <p className="mb-2 text-sm italic">{run.note}</p>}
             {run.error && (
               <p className="mb-2 text-sm text-destructive break-all">{run.error}</p>
             )}
@@ -252,13 +313,6 @@ function Row({
             ) : (
               <p className="text-sm text-muted-foreground">No output recorded.</p>
             )}
-            {!!run.revision && (
-              <RevisionValues
-                namespace={run.namespace}
-                release={run.release}
-                revision={run.revision}
-              />
-            )}
           </TableCell>
         </TableRow>
       )}
@@ -266,10 +320,10 @@ function Row({
   );
 }
 
-// RevisionRow is a revision the cluster has and the log does not. It carries
-// what the archive says it was and the same rollback action, so a release
-// deployed by the CLI -- or one whose database was lost -- is still a release
-// that can be put back.
+// RevisionRow is one archived plan: what ran, and the way back to it. Opening
+// it reads what helm holds for that revision, which is not the same document as
+// the plan swiss composed -- and the two are only the same until something is
+// wrong.
 function RevisionRow({
   revision,
   namespace,
@@ -287,33 +341,32 @@ function RevisionRow({
         <TableCell className="text-muted-foreground">
           {open ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
         </TableCell>
-        <TableCell className="whitespace-nowrap text-muted-foreground">—</TableCell>
-        <TableCell>
-          <Badge variant="muted">revision</Badge>
+        <TableCell className="font-medium tabular-nums whitespace-nowrap">
+          {revision.revision}
         </TableCell>
-        <TableCell className="font-medium">
-          {release}
-          <div className="text-xs text-muted-foreground">
-            {revision.model}
-            {revision.version && ` v${revision.version}`}
-            {revision.variant && ` · ${revision.variant}`}
-            {revision.chart && ` · ${revision.chart}`}
-          </div>
+        <TableCell className="whitespace-nowrap">
+          {revision.model || <span className="text-muted-foreground">—</span>}
+          {revision.version && (
+            <span className="text-muted-foreground"> v{revision.version}</span>
+          )}
         </TableCell>
-        <TableCell className="text-sm text-muted-foreground">not in this log</TableCell>
-        <TableCell className="text-muted-foreground">—</TableCell>
-        <TableCell className="tabular-nums">{revision.revision}</TableCell>
+        <TableCell className="text-muted-foreground">{revision.variant || "—"}</TableCell>
+        <TableCell className="text-muted-foreground">{revision.chart || "—"}</TableCell>
         <TableCell className="font-mono text-xs text-muted-foreground">
           {revision.planHash ? revision.planHash.slice(0, 12) : "—"}
         </TableCell>
         <TableCell className="pr-0 text-right whitespace-nowrap">
-          <RollBack namespace={namespace} release={release} to={revision.revision} />
+          {revision.current ? (
+            <Badge variant="success">live</Badge>
+          ) : (
+            <RollBack namespace={namespace} release={release} to={revision.revision} />
+          )}
         </TableCell>
       </TableRow>
 
       {open && (
         <TableRow>
-          <TableCell colSpan={9} className="bg-muted/30">
+          <TableCell colSpan={7} className="bg-muted/30">
             <RevisionValues
               namespace={namespace}
               release={release}

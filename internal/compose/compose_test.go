@@ -253,7 +253,6 @@ func TestFeatureDefaultsAreExplicit(t *testing.T) {
 		"sloRequirement": false,
 		"scaler":         false,
 		"serviceMonitor": false,
-		"metricsMock":    false,
 	} {
 		v, ok := values.Get(p.Values(), feature+".enabled")
 		if !ok {
@@ -263,6 +262,19 @@ func TestFeatureDefaultsAreExplicit(t *testing.T) {
 		if v != want {
 			t.Errorf("%s.enabled = %v, want %v", feature, v, want)
 		}
+	}
+}
+
+// A flag swiss cannot set is not swiss's to write down. metricsMock was pinned
+// off in every plan, which put a key nothing here can change into every deploy
+// and every diff.
+func TestPlanWritesNoMetricsMock(t *testing.T) {
+	p, err := Compose(testInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := values.Get(p.Values(), "metricsMock.enabled"); ok {
+		t.Errorf("metricsMock.enabled = %v; a plan must not mention it at all", v)
 	}
 }
 

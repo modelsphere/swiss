@@ -247,7 +247,6 @@ func applyDefaults(site, derived, base values.Tree, in Input) error {
 		"sloRequirement": false,
 		"scaler":         false,
 		"serviceMonitor": false,
-		"metricsMock":    false,
 	} {
 		if _, set := values.Get(in.Overrides, feature+".enabled"); set {
 			continue // the form is explicit; its merge lands after this
