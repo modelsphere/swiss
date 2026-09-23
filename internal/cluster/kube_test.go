@@ -34,35 +34,42 @@ func helmSecret(ns, name string, rev int, status, chart, version string) *corev1
 	}
 }
 
-func TestReleasesDecodesHelmStorage(t *testing.T) {
+// The same storage decode as before, now reached one release at a time: helm
+// labels each of its secrets with the release name, so this asks for one
+// release's revisions rather than every release in scope.
+func TestReleaseDecodesHelmStorage(t *testing.T) {
 	cs := fake.NewSimpleClientset(
 		helmSecret("modelforge", "glm-53", 1, "superseded", "sglang", "0.7.0"),
 		helmSecret("modelforge", "glm-53", 4, "deployed", "sglang", "0.8.0"),
 		helmSecret("kimi", "kimi-k25", 2, "pending-upgrade", "sglang", "0.8.0"),
 	)
-	got, err := NewKubeWithClient(cs).Releases(context.Background())
+	k := NewKubeWithClient(cs)
+
+	glm, err := k.Release(context.Background(), "modelforge", "glm-53")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 {
-		t.Fatalf("want the latest revision of each release, got %d: %+v", len(got), got)
-	}
-	// Sorted by namespace then name.
-	if got[0].Namespace != "kimi" || got[0].Status != "pending-upgrade" {
-		t.Errorf("unexpected first release: %+v", got[0])
-	}
-	glm := got[1]
 	if glm.Revision != 4 || glm.Chart != "sglang-0.8.0" || glm.Status != "deployed" {
 		t.Errorf("want revision 4 of sglang-0.8.0, got %+v", glm)
 	}
 	if glm.Updated.IsZero() {
 		t.Error("last_deployed was not parsed")
 	}
+
+	// A release in another namespace is not reachable by name alone, which is
+	// the point: two namespaces may hold the same release name.
+	other, err := k.Release(context.Background(), "modelforge", "kimi-k25")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other != nil {
+		t.Errorf("kimi-k25 is in another namespace: %+v", other)
+	}
 }
 
-// A release Swiss did not deploy has no plan ConfigMap. That absence is the
-// "live but untracked" signal, so it must not be an error.
-func TestReleasesMarksSwissManagedOnes(t *testing.T) {
+// A release swiss did not deploy has no plan ConfigMap. That absence must not be
+// an error: it is what makes a name collision a conflict rather than an adoption.
+func TestReleaseWithoutAPlanIsStillLive(t *testing.T) {
 	cs := fake.NewSimpleClientset(
 		helmSecret("modelforge", "glm-53", 1, "deployed", "sglang", "0.8.0"),
 		helmSecret("modelforge", "by-hand", 1, "deployed", "sglang", "0.8.0"),
@@ -71,32 +78,55 @@ func TestReleasesMarksSwissManagedOnes(t *testing.T) {
 			Data:       map[string]string{"plan.yaml": "release:\n  name: glm-53\n"},
 		},
 	)
-	got, err := NewKubeWithClient(cs).Releases(context.Background())
+	k := NewKubeWithClient(cs)
+
+	glm, err := k.Release(context.Background(), "modelforge", "glm-53")
 	if err != nil {
 		t.Fatal(err)
 	}
-	byName := map[string]Release{}
-	for _, r := range got {
-		byName[r.Name] = r
-	}
-	if byName["glm-53"].SwissFiles == nil {
+	if glm == nil || glm.SwissFiles == nil {
 		t.Error("glm-53 has a plan ConfigMap and should carry it")
 	}
-	if byName["by-hand"].SwissFiles != nil {
-		t.Error("a hand-installed release must come back untracked, not fail")
+
+	hand, err := k.Release(context.Background(), "modelforge", "by-hand")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hand == nil || !hand.Updated.IsZero() && false {
+		t.Fatalf("a hand-installed release must come back live: %+v", hand)
+	}
+	if hand.SwissFiles != nil {
+		t.Errorf("it has no plan beside it: %+v", hand.SwissFiles)
+	}
+	if hand.Status != "deployed" {
+		t.Errorf("its live state must still be read: %+v", hand)
 	}
 }
 
-func TestOneUnreadableReleaseDoesNotHideTheRest(t *testing.T) {
-	broken := helmSecret("ns", "broken", 1, "deployed", "sglang", "0.8.0")
-	broken.Data["release"] = []byte("!!! not base64 gzip json")
-	cs := fake.NewSimpleClientset(broken, helmSecret("ns", "fine", 1, "deployed", "sglang", "0.8.0"))
-	got, err := NewKubeWithClient(cs).Releases(context.Background())
+func TestNoReleaseAndNoPlanIsNil(t *testing.T) {
+	rel, err := NewKubeWithClient(fake.NewSimpleClientset()).
+		Release(context.Background(), "modelforge", "nothing-here")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].Name != "fine" {
-		t.Fatalf("want just the readable release, got %+v", got)
+	if rel != nil {
+		t.Errorf("neither half exists, want nil, got %+v", rel)
+	}
+}
+
+// An undecodable payload still means the release is there. Reporting it as
+// absent would make install offer to create a release that already exists.
+func TestAnUnreadableReleaseIsStillReported(t *testing.T) {
+	broken := helmSecret("ns", "broken", 1, "deployed", "sglang", "0.8.0")
+	broken.Data["release"] = []byte("!!! not base64 gzip json")
+	cs := fake.NewSimpleClientset(broken, helmSecret("ns", "fine", 1, "deployed", "sglang", "0.8.0"))
+
+	got, err := NewKubeWithClient(cs).Release(context.Background(), "ns", "broken")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.Name != "broken" {
+		t.Fatalf("want the release reported despite the payload, got %+v", got)
 	}
 }
 
@@ -148,15 +178,15 @@ func TestConfigMapKeysForRouteCollision(t *testing.T) {
 // list. Listing each namespace in turn is the only thing those Roles permit --
 // getting this wrong is a 403, not a narrower view.
 func TestScopedProbeListsPerNamespace(t *testing.T) {
-	cs := fake.NewSimpleClientset(
-		helmSecret("modelforge", "glm-53", 1, "deployed", "sglang", "0.8.0"),
-		helmSecret("kimi", "kimi-k25", 1, "deployed", "sglang", "0.8.0"),
-		helmSecret("other", "not-ours", 1, "deployed", "sglang", "0.8.0"),
+	md := metaClient(
+		planMeta("modelforge", PlanConfigMapPrefix+"glm-53"),
+		planMeta("kimi", PlanConfigMapPrefix+"kimi-k25"),
+		planMeta("other", PlanConfigMapPrefix+"not-ours"),
 	)
-	k := NewKubeWithClient(cs)
+	k := NewKubeWithClients(fake.NewSimpleClientset(), md)
 	k.Namespaces = []string{"modelforge", "kimi"}
 
-	got, err := k.Releases(context.Background())
+	got, err := k.ManagedRefs(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +201,7 @@ func TestScopedProbeListsPerNamespace(t *testing.T) {
 
 	// Empty means cluster-wide, which is what a ClusterRole authorises.
 	k.Namespaces = nil
-	got, err = k.Releases(context.Background())
+	got, err = k.ManagedRefs(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

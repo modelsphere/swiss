@@ -139,47 +139,6 @@ type helmRelease struct {
 }
 
 // Releases lists the latest revision of every helm release in the cluster.
-//
-// Read from helm's own storage -- the Secrets it writes, labelled owner=helm --
-// rather than by shelling out to `helm list`. That is the same source `helm list`
-// reads, so the two cannot disagree, and it needs no helm binary in the server
-// image.
-func (k *Kube) Releases(ctx context.Context) ([]Release, error) {
-	// Several revisions of one release are stored side by side; keep the highest.
-	latest := map[string]Release{}
-	for _, ns := range k.scopes() {
-		secrets, err := k.client.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{
-			LabelSelector: "owner=helm",
-		})
-		if err != nil {
-			return nil, fmt.Errorf("list helm release secrets in %s: %w", scopeName(ns), err)
-		}
-		for i := range secrets.Items {
-			s := &secrets.Items[i]
-			rel, err := decodeRelease(s)
-			if err != nil {
-				// One unreadable release must not hide every other one.
-				continue
-			}
-			key := rel.Namespace + "/" + rel.Name
-			if prev, ok := latest[key]; ok && prev.Revision >= rel.Revision {
-				continue
-			}
-			latest[key] = *rel
-		}
-	}
-
-	out := make([]Release, 0, len(latest))
-	for _, r := range latest {
-		if files, status, err := k.planFor(ctx, r.Namespace, r.Name); err == nil {
-			r.SwissFiles, r.SwissStatus = files, status
-		}
-		out = append(out, r)
-	}
-	sortReleases(out)
-	return out, nil
-}
-
 func decodeRelease(s *corev1.Secret) (*Release, error) {
 	raw, ok := s.Data["release"]
 	if !ok {
@@ -281,19 +240,21 @@ func (k *Kube) ManagedRefs(ctx context.Context) ([]ManagedRef, error) {
 	return out, nil
 }
 
-// ManagedRelease reads one release's plan and the live helm state beside it.
+// Release reads one release: the live helm state, and the plan beside it when
+// swiss deployed it.
 //
-// The helm read is one labelled list in one namespace rather than a scan of
-// every release secret in scope: helm labels each of its secrets with the
-// release name, so the server sends back this release's revisions and nothing
-// else. Only the highest is decoded -- the older ones are whole rendered
-// manifests, gzipped, and nothing here reads them.
-func (k *Kube) ManagedRelease(ctx context.Context, namespace, name string) (*Release, error) {
-	files, status, err := k.planFor(ctx, namespace, name)
-	if err != nil {
-		return nil, err
-	}
-	rel := &Release{Namespace: namespace, Name: name, SwissFiles: files, SwissStatus: status}
+// One labelled list in one namespace rather than a scan of every release secret
+// in scope. helm labels each of its secrets with the release name, so the server
+// sends back this release's revisions and nothing else, and only the highest is
+// decoded -- the older ones are whole rendered manifests, gzipped, and nothing
+// here reads them.
+//
+// Both halves are optional. A release with no plan was installed by hand, which
+// callers still have to see: it is what makes a name collision a conflict rather
+// than an adoption. A plan with no release is an uninstall that did not finish
+// cleaning up, which is worth showing rather than hiding.
+func (k *Kube) Release(ctx context.Context, namespace, name string) (*Release, error) {
+	files, status, planErr := k.planFor(ctx, namespace, name)
 
 	secrets, err := k.client.CoreV1().Secrets(namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: "owner=helm,name=" + name,
@@ -308,19 +269,23 @@ func (k *Kube) ManagedRelease(ctx context.Context, namespace, name string) (*Rel
 			newest = s
 		}
 	}
+
 	if newest == nil {
-		// A plan with no release: an uninstall that did not finish cleaning up.
-		// The row still belongs in the view, which is how it gets noticed.
-		return rel, nil
+		if planErr != nil {
+			return nil, nil // neither half exists
+		}
+		return &Release{Namespace: namespace, Name: name, SwissFiles: files, SwissStatus: status}, nil
 	}
-	live, err := decodeRelease(newest)
+	rel, err := decodeRelease(newest)
 	if err != nil {
-		// One unreadable release must not cost the row: the plan is what names
-		// it, and that decoded fine.
-		return rel, nil
+		// An unreadable release is still a live one, and saying so is what lets
+		// it be cleaned up. The plan, if there is one, decoded fine.
+		rel = &Release{Namespace: namespace, Name: name}
 	}
-	live.SwissFiles, live.SwissStatus = files, status
-	return live, nil
+	if planErr == nil {
+		rel.SwissFiles, rel.SwissStatus = files, status
+	}
+	return rel, nil
 }
 
 // revisionOf reads the revision helm labels its secret with, falling back to
@@ -463,14 +428,6 @@ func (k *Kube) Secret(ctx context.Context, ref string) (map[string]string, error
 		out[k] = string(v)
 	}
 	return out, nil
-}
-
-func sortReleases(r []Release) {
-	for i := 1; i < len(r); i++ {
-		for j := i; j > 0 && less(r[j], r[j-1]); j-- {
-			r[j], r[j-1] = r[j-1], r[j]
-		}
-	}
 }
 
 func less(a, b Release) bool {

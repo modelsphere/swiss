@@ -286,11 +286,17 @@ func (s *Server) currentPlan(ctx context.Context, namespace, release string) (*p
 	if err != nil {
 		return nil, err
 	}
+	return planOf(rel)
+}
+
+// planOf decodes the plan beside a release record already in hand. Split out so
+// a caller holding the record does not look the release up again to get it.
+func planOf(rel *cluster.Release) (*plan.Plan, error) {
 	if rel == nil {
-		return nil, fmt.Errorf("no release %q", release)
+		return nil, fmt.Errorf("no such release")
 	}
 	if len(rel.SwissFiles) == 0 {
-		return nil, fmt.Errorf("release %q has no plan beside it -- swiss did not deploy it", release)
+		return nil, fmt.Errorf("release %q has no plan beside it -- swiss did not deploy it", rel.Name)
 	}
 	return plan.FromFiles(rel.SwissFiles)
 }
@@ -298,18 +304,24 @@ func (s *Server) currentPlan(ctx context.Context, namespace, release string) (*p
 // releaseRecord is the live release and whatever swiss recorded beside it, or
 // nil when there is no such release. Absent is not an error: callers ask about
 // releases that legitimately do not exist yet.
+//
+// An empty namespace means the site's, the same default compose applies. It
+// used to mean "search every namespace in scope for this name", which made every
+// status poll on the detail page a full cluster read -- twice over, once the
+// plan was fetched too -- and would have answered with whichever namespace
+// happened to sort first if two held the same release name.
 func (s *Server) releaseRecord(ctx context.Context, namespace, release string) (*cluster.Release, error) {
-	releases, err := s.probe.Releases(ctx)
-	if err != nil {
-		return nil, err
-	}
-	for _, r := range releases {
-		if r.Name == release && (namespace == "" || r.Namespace == namespace) {
-			found := r
-			return &found, nil
+	if namespace == "" {
+		prof, err := s.Profile(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("no namespace for release %q, and the site profile is unreadable: %w", release, err)
 		}
+		namespace = prof.Namespace
 	}
-	return nil, nil
+	if namespace == "" {
+		return nil, fmt.Errorf("no namespace for release %q: pass one, or set namespace in the site profile", release)
+	}
+	return s.probe.Release(ctx, namespace, release)
 }
 
 func (s *Server) handleReleasePlan(w http.ResponseWriter, r *http.Request) {

@@ -65,8 +65,12 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	// The chart labels engine pods app=<release>-<engine>; without a stored plan
 	// the engine is unknown, so fall back to the helm instance label.
+	//
+	// Decoded from the record already in hand rather than through currentPlan,
+	// which would look the same release up a second time. This endpoint is
+	// polled every fifteen seconds by two pages.
 	selector := "app.kubernetes.io/instance=" + release
-	if p, err := s.currentPlan(ctx, ns, release); err == nil {
+	if p, err := planOf(rel); err == nil {
 		selector = fmt.Sprintf("app=%s-%s", release, p.Engine)
 		out.Route = routeOf(p)
 		out.Model = servedName(p)

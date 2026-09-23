@@ -152,17 +152,6 @@ func (s *Server) handleCatalogModel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-func (s *Server) handleReleases(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := contextWithTimeout(r, 30*time.Second)
-	defer cancel()
-	rel, err := s.probe.Releases(ctx)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"cluster": s.cfg.Cluster.Name, "releases": rel})
-}
-
 // handleProfile serves the site profile as parsed, not as stored: what swissd
 // is actually composing against, after defaults.
 func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
@@ -436,7 +425,7 @@ func (s *Server) handleDeployments(w http.ResponseWriter, r *http.Request) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			rel, err := s.probe.ManagedRelease(ctx, ref.Namespace, ref.Name)
+			rel, err := s.probe.Release(ctx, ref.Namespace, ref.Name)
 			if err != nil {
 				// The plan named it a moment ago. Report the row with what is
 				// known rather than failing the page over one release.

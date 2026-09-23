@@ -81,7 +81,7 @@ func planCM(ns, release string) *corev1.ConfigMap {
 
 // helm keeps every revision side by side. Only the newest is live, and only it
 // is worth gunzipping -- the older ones are whole rendered manifests.
-func TestManagedReleaseTakesTheHighestRevision(t *testing.T) {
+func TestReleaseTakesTheHighestRevision(t *testing.T) {
 	cs := fake.NewSimpleClientset(
 		planCM("modelforge", "glm-53"),
 		helmSecret("modelforge", "glm-53", 1, "superseded", "sglang", "0.7.0"),
@@ -91,7 +91,7 @@ func TestManagedReleaseTakesTheHighestRevision(t *testing.T) {
 		helmSecret("modelforge", "kimi-k3", 9, "deployed", "sglang", "0.7.1"),
 	)
 
-	rel, err := NewKubeWithClient(cs).ManagedRelease(context.Background(), "modelforge", "glm-53")
+	rel, err := NewKubeWithClient(cs).Release(context.Background(), "modelforge", "glm-53")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,10 +109,10 @@ func TestManagedReleaseTakesTheHighestRevision(t *testing.T) {
 // A plan whose release is gone is an uninstall that did not finish cleaning up.
 // The row still belongs in the view -- that is how it gets noticed -- so this is
 // not an error.
-func TestManagedReleaseWithNoLiveRelease(t *testing.T) {
+func TestReleaseWithNoLiveRelease(t *testing.T) {
 	cs := fake.NewSimpleClientset(planCM("modelforge", "glm-53"))
 
-	rel, err := NewKubeWithClient(cs).ManagedRelease(context.Background(), "modelforge", "glm-53")
+	rel, err := NewKubeWithClient(cs).Release(context.Background(), "modelforge", "glm-53")
 	if err != nil {
 		t.Fatal(err)
 	}

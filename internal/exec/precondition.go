@@ -15,17 +15,20 @@ type State struct {
 	Revision int
 }
 
+// Lookup is the live state of one release. It reads helm directly and does not
+// care whether swiss deployed it: a name already taken by a hand-installed
+// release is a conflict, and that is the whole reason this exists.
 func Lookup(ctx context.Context, p cluster.Probe, namespace, name string) (State, error) {
-	releases, err := p.Releases(ctx)
+	rel, err := p.Release(ctx, namespace, name)
 	if err != nil {
 		return State{}, err
 	}
-	for _, r := range releases {
-		if r.Name == name && r.Namespace == namespace {
-			return State{Exists: true, Status: r.Status, Revision: r.Revision}, nil
-		}
+	// A plan with no live release is not an existing release: an uninstall that
+	// left its plan behind must not make install refuse.
+	if rel == nil || rel.Revision == 0 && rel.Status == "" {
+		return State{}, nil
 	}
-	return State{}, nil
+	return State{Exists: true, Status: rel.Status, Revision: rel.Revision}, nil
 }
 
 // Check refuses an apply that would do something other than what was asked.

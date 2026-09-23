@@ -82,7 +82,6 @@ type Probe interface {
 	Pods(ctx context.Context, namespace, selector string) ([]Pod, error)
 	// Ping is a cheap reachability check, for readiness probes.
 	Ping(ctx context.Context) error
-	Releases(ctx context.Context) ([]Release, error)
 	// ManagedRefs names every release swiss deployed, sorted, reading metadata
 	// only -- the plan ConfigMaps' names and nothing of their contents.
 	//
@@ -92,10 +91,14 @@ type Probe interface {
 	// Here the answer is a name list, and the expensive per-release reads happen
 	// only for the page actually being shown.
 	ManagedRefs(ctx context.Context) ([]ManagedRef, error)
-	// ManagedRelease resolves one ref into a release: its plan, and the live
-	// helm state beside it. A nil release is a plan whose release is gone --
-	// an uninstall that did not finish cleaning up, not an error.
-	ManagedRelease(ctx context.Context, namespace, name string) (*Release, error)
+	// Release is one release by name: the live helm state, and the plan beside
+	// it when swiss deployed it. Nil when neither exists.
+	//
+	// Targeted, and that is the point: every question about ONE release -- does
+	// it exist, what revision, what plan -- used to be answered by listing and
+	// decoding every release in scope. helm labels its storage with the release
+	// name, so this asks for the one.
+	Release(ctx context.Context, namespace, name string) (*Release, error)
 	Nodes(ctx context.Context) ([]Node, error)
 	// ConfigMap reads a ConfigMap given as "ns/name". Route collisions are
 	// detected from its key set before a write, rather than after two models are
@@ -156,7 +159,6 @@ type Fake struct {
 
 func (f Fake) Ping(context.Context) error                          { return f.PingErr }
 func (f Fake) Pods(context.Context, string, string) ([]Pod, error) { return f.Pod, nil }
-func (f Fake) Releases(context.Context) ([]Release, error)         { return f.Rel, nil }
 
 // ManagedRefs derives the managed set from the seeded releases the way Kube
 // derives it from plan ConfigMaps: a release with a plan beside it is managed.
@@ -176,7 +178,7 @@ func (f Fake) ManagedRefs(context.Context) ([]ManagedRef, error) {
 	return out, nil
 }
 
-func (f Fake) ManagedRelease(_ context.Context, namespace, name string) (*Release, error) {
+func (f Fake) Release(_ context.Context, namespace, name string) (*Release, error) {
 	for _, r := range f.Rel {
 		if r.Namespace == namespace && r.Name == name {
 			found := r
