@@ -117,6 +117,9 @@ function ClusterSwitcher() {
   if (isError) return <Badge variant="destructive">cluster unreachable</Badge>;
   if (!data) return <span className="text-muted-foreground">…</span>;
 
+  const currentName = data.profileName || data.name;
+  const sites = data.sites?.filter((s) => s.name !== currentName) ?? [];
+
   return (
     <div className="flex items-center gap-2">
       <Boxes className="size-4 text-muted-foreground" />
@@ -127,8 +130,8 @@ function ClusterSwitcher() {
           if (e.target.value) window.location.assign(e.target.value);
         }}
       >
-        <option value="">{data.name}</option>
-        {data.sites?.map((s) => (
+        <option value="">{currentName}</option>
+        {sites.map((s) => (
           <option key={s.name} value={s.url}>
             {s.name}
           </option>

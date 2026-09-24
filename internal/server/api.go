@@ -90,9 +90,20 @@ func (s *Server) handleCluster(w http.ResponseWriter, r *http.Request) {
 	}
 	if p, err := s.Profile(ctx); err == nil {
 		info.ProfileName, info.Namespace, info.ChartRepo = p.Name, p.Namespace, p.ChartRepo
+		if info.Name == "" {
+			info.Name = p.Name
+		}
 		info.PriorityClassName = p.Schedule.PriorityClassName
 		info.SchedulerName = p.Schedule.SchedulerName
-		info.Sites = p.Sites
+		current := p.Name
+		if current == "" {
+			current = info.Name
+		}
+		for _, st := range p.Sites {
+			if st.Name != current {
+				info.Sites = append(info.Sites, st)
+			}
+		}
 	} else {
 		info.Warnings = append(info.Warnings, "profile: "+err.Error())
 	}
@@ -111,11 +122,22 @@ func (s *Server) handleSites(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := contextWithTimeout(r, 15*time.Second)
 	defer cancel()
 
-	out := map[string]any{"self": s.cfg.Cluster.Name}
+	self := s.cfg.Cluster.Name
+	var sites []site.Site
 	if p, err := s.Profile(ctx); err == nil {
-		out["sites"] = p.Sites
+		if p.Name != "" {
+			self = p.Name
+		}
+		for _, st := range p.Sites {
+			if st.Name != self {
+				sites = append(sites, st)
+			}
+		}
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"self":  self,
+		"sites": sites,
+	})
 }
 
 func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
