@@ -515,25 +515,18 @@ export interface Revision {
 }
 
 // `helm get values --all` for one revision, as the yaml helm prints.
-// One leaf of a values document, addressed by the dotted path the rest of swiss
-// uses for a value.
-export interface ValueRow {
-  path: string;
-  value: string;
-}
-
 export interface RevisionValues {
   namespace: string;
   release: string;
   revision: number;
   // What the release was rendered from: supplied values with the chart's own
-  // defaults merged in.
-  all: ValueRow[];
+  // defaults merged in, as helm printed it.
+  all: string;
   // Only what somebody supplied. A key here is one a person chose; a key only in
   // `all` came from the chart and moves when the chart does.
-  supplied: ValueRow[];
+  supplied: string;
   // Set when the supplied read failed on its own. The merged one is the read
-  // that has to work, so this costs a table rather than the response.
+  // that has to work, so this costs a tab rather than the response.
   suppliedError?: string;
 }
 

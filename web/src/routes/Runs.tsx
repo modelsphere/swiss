@@ -2,10 +2,11 @@ import { Fragment, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Undo2 } from "lucide-react";
-import { api, type Revision, type Run, type ValueRow } from "@/lib/api";
+import { api, type Revision, type Run } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Code } from "@/components/ui/code";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs } from "@/components/ui/tabs";
 import { Empty, ErrorState, Loading } from "@/components/States";
@@ -421,6 +422,8 @@ function RevisionValues({
     staleTime: Infinity,
   });
 
+  const [which, setWhich] = useState("supplied");
+
   if (values.isPending) {
     return <p className="mt-2 text-sm text-muted-foreground">Reading values…</p>;
   }
@@ -432,77 +435,28 @@ function RevisionValues({
     );
   }
 
-  // Side by side, because the question is usually which of the two a key is in:
-  // one only in the merged table came from the chart, and moves when the chart
-  // does. Stacked on a narrow screen rather than squeezed.
-  return (
-    <div className="mt-2 grid gap-3 lg:grid-cols-2">
-      <ValueTable
-        title={`supplied · revision ${revision}`}
-        hint="what somebody set"
-        rows={values.data?.supplied ?? []}
-        empty="Nothing was supplied; the release took the chart's defaults."
-        error={values.data?.suppliedError}
-      />
-      <ValueTable
-        title={`merged · revision ${revision}`}
-        hint="what the release was rendered from"
-        rows={values.data?.all ?? []}
-        empty="helm recorded no values here."
-      />
-    </div>
-  );
-}
+  const err = which === "supplied" ? values.data?.suppliedError : undefined;
+  const doc = (which === "supplied" ? values.data?.supplied : values.data?.all) ?? "";
 
-// ValueTable is one values document as rows. Small on purpose: it sits inside an
-// expanded log row, so it scrolls rather than pushing the next entry off screen.
-function ValueTable({
-  title,
-  hint,
-  rows,
-  empty,
-  error,
-}: {
-  title: string;
-  hint: string;
-  rows: ValueRow[];
-  empty: string;
-  error?: string;
-}) {
+  // Supplied first: it is the short one, and it is what somebody actually
+  // chose. A key that shows up only under `all` came from the chart, and moves
+  // when the chart does.
   return (
-    <div className="min-w-0 space-y-1">
-      <div className="flex flex-wrap items-baseline gap-x-2">
-        <span className="text-xs tracking-wide text-muted-foreground uppercase">{title}</span>
-        <span className="text-xs text-muted-foreground">{hint}</span>
-        {rows.length > 0 && (
-          <span className="ml-auto text-xs text-muted-foreground tabular-nums">
-            {rows.length} value{rows.length === 1 ? "" : "s"}
-          </span>
-        )}
-      </div>
-      {error ? (
-        <p className="rounded-md border p-3 text-sm text-warning">{error}</p>
-      ) : rows.length === 0 ? (
-        <p className="rounded-md border p-3 text-sm text-muted-foreground">{empty}</p>
+    <div className="mt-2 space-y-2">
+      <Tabs
+        tabs={[
+          { id: "supplied", label: "Supplied" },
+          { id: "all", label: "All values" },
+        ]}
+        active={which}
+        onSelect={setWhich}
+      />
+      {err ? (
+        <p className="text-sm text-warning">{err}</p>
       ) : (
-        <div className="max-h-96 overflow-auto rounded-md border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Path</TableHead>
-                <TableHead>Value</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((r) => (
-                <TableRow key={r.path}>
-                  <TableCell className="font-mono text-xs break-all">{r.path}</TableCell>
-                  <TableCell className="font-mono text-xs break-all">{r.value}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+        <Code lang="yaml" className="max-h-96 overflow-auto">
+          {doc.trim() || "# helm recorded no values here"}
+        </Code>
       )}
     </div>
   );

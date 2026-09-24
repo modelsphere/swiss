@@ -269,19 +269,6 @@ func stubHelmValues(t *testing.T) (bin, log string) {
 	return bin, log
 }
 
-func rowsOf(t *testing.T, out map[string]any, key string) map[string]string {
-	t.Helper()
-	rows, _ := out[key].([]any)
-	got := map[string]string{}
-	for _, r := range rows {
-		row, _ := r.(map[string]any)
-		path, _ := row["path"].(string)
-		value, _ := row["value"].(string)
-		got[path] = value
-	}
-	return got
-}
-
 // What helm was given, rather than what swiss composed. The archived plan
 // answers the second question already; only helm answers the first.
 //
@@ -323,24 +310,24 @@ func TestRevisionValuesAsksHelmTwice(t *testing.T) {
 		t.Errorf("want exactly one run each way, got %d with --all and %d without", withAll, without)
 	}
 
-	// Two tables, flattened to the dotted paths the rest of swiss uses.
-	supplied := rowsOf(t, out, "supplied")
-	all := rowsOf(t, out, "all")
-	if len(supplied) != 1 || supplied["extraArgs"] != `["--tp-size=2"]` {
-		t.Errorf("supplied should hold only what was set: %v", supplied)
+	// Both documents come back as helm printed them, one per tab.
+	supplied, _ := out["supplied"].(string)
+	all, _ := out["all"].(string)
+	if !strings.Contains(supplied, "--tp-size=2") {
+		t.Errorf("supplied should hold what was set: %q", supplied)
 	}
-	if all["replicaCount"] != "1" || all["image.tag"] != "v0.5.19" {
-		t.Errorf("the merged table should carry the chart defaults: %v", all)
+	if !strings.Contains(all, "replicaCount") || !strings.Contains(all, "v0.5.19") {
+		t.Errorf("the merged document should carry the chart defaults: %q", all)
 	}
-	// The key that is in one and not the other is the whole reason for two
-	// tables: replicaCount came from the chart, not from anybody.
-	if _, ok := supplied["replicaCount"]; ok {
-		t.Error("a chart default must not appear as supplied")
+	// The key in one and not the other is the whole reason for two tabs:
+	// replicaCount came from the chart, not from anybody.
+	if strings.Contains(supplied, "replicaCount") {
+		t.Errorf("a chart default must not appear as supplied: %q", supplied)
 	}
 }
 
 // The merged read is the one that has to work. A release where nothing was
-// supplied is ordinary, so that half failing costs its table, not the response.
+// supplied is ordinary, so that half failing costs its tab, not the response.
 func TestRevisionValuesSurvivesAFailedSuppliedRead(t *testing.T) {
 	probe, _ := seedRelease(t, 6, nil)
 	srv, s := deployServerWith(t, probe, true)
@@ -360,11 +347,11 @@ func TestRevisionValuesSurvivesAFailedSuppliedRead(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("the merged read worked, so this must answer: %d %v", code, out)
 	}
-	if all := rowsOf(t, out, "all"); all["replicaCount"] != "1" {
-		t.Errorf("the merged table must still be there: %v", all)
+	if all, _ := out["all"].(string); !strings.Contains(all, "replicaCount") {
+		t.Errorf("the merged document must still be there: %q", all)
 	}
 	if out["suppliedError"] == nil {
-		t.Error("the failure must be reported rather than shown as an empty table")
+		t.Error("the failure must be reported rather than shown as an empty tab")
 	}
 }
 
