@@ -23,12 +23,14 @@ name: prod
 namespace: modelforge
 model:
   pathTemplate: /mnt/disk0/models/{{name}}
+sites:
+  - name: dev
+    url: https://swiss.dev.internal
 `
 
 func testServer(t *testing.T, probe cluster.Probe) *httptest.Server {
 	t.Helper()
 	cfg := testConfig("prod-b300")
-	cfg.Server.Peers = []config.Peer{{Name: "dev", URL: "https://swiss.dev.internal"}}
 	if err := cfg.ValidateServer(); err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +63,7 @@ func get(t *testing.T, srv *httptest.Server, path string) (int, map[string]any) 
 	return resp.StatusCode, out
 }
 
-func TestClusterEndpointCarriesProfileAndPeers(t *testing.T) {
+func TestClusterEndpointCarriesProfileAndSites(t *testing.T) {
 	srv := testServer(t, fakeProbe())
 	code, body := get(t, srv, "/api/cluster")
 	if code != 200 {
@@ -73,8 +75,10 @@ func TestClusterEndpointCarriesProfileAndPeers(t *testing.T) {
 	if body["catalogRef"] == "" || body["version"] != "test" {
 		t.Errorf("missing catalog ref or version: %v", body)
 	}
-	if len(body["peers"].([]any)) != 1 {
-		t.Errorf("peers not served: %v", body["peers"])
+	// From the profile, not the config: a new cluster becomes reachable from
+	// this one by editing the profile in the web, not by a helm upgrade here.
+	if len(body["sites"].([]any)) != 1 {
+		t.Errorf("sites not served: %v", body["sites"])
 	}
 }
 
@@ -263,9 +267,6 @@ func TestExampleConfigLoads(t *testing.T) {
 	// noticed, so assert the example's own value survived.
 	if cfg.Server.CacheTTL != 60*time.Second {
 		t.Errorf("cacheTTL = %s, want 60s -- duration parsing may be silently defaulting", cfg.Server.CacheTTL)
-	}
-	if len(cfg.Server.Peers) == 0 {
-		t.Error("the example should demonstrate peers; the switcher is not obvious otherwise")
 	}
 }
 

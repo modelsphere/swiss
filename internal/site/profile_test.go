@@ -67,3 +67,50 @@ func TestModelURLJoinsTheGatewayAndRoute(t *testing.T) {
 		t.Errorf("no route, no URL: %q", got)
 	}
 }
+
+func TestSitesValidation(t *testing.T) {
+	valid := `
+name: prod
+model:
+  pathTemplate: /models/{{name}}
+sites:
+  - name: " dev "
+    url: " https://swiss.dev.internal "
+`
+	p, err := Parse([]byte(valid), "test")
+	if err != nil {
+		t.Fatalf("valid sites must parse: %v", err)
+	}
+	if len(p.Sites) != 1 || p.Sites[0].Name != "dev" || p.Sites[0].URL != "https://swiss.dev.internal" {
+		t.Fatalf("sites not parsed/trimmed: %+v", p.Sites)
+	}
+
+	for name, raw := range map[string]string{
+		"missing name": `
+name: prod
+model:
+  pathTemplate: /models/{{name}}
+sites:
+  - url: https://swiss.dev.internal
+`,
+		"missing url": `
+name: prod
+model:
+  pathTemplate: /models/{{name}}
+sites:
+  - name: dev
+`,
+		"bad scheme": `
+name: prod
+model:
+  pathTemplate: /models/{{name}}
+sites:
+  - name: dev
+    url: swiss.dev.internal
+`,
+	} {
+		if _, err := Parse([]byte(raw), name); err == nil {
+			t.Errorf("%s: expected validation error", name)
+		}
+	}
+}

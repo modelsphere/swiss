@@ -51,7 +51,7 @@ go build -o swissd ./cmd/swissd
 
 ```
 POST /api/login /api/logout        GET /api/session      (open)
-GET  /api/cluster /api/peers /api/catalog /api/catalog/{model}
+GET  /api/cluster /api/sites /api/catalog /api/catalog/{model}
 GET  /api/releases /api/nodes /api/deployments /api/runs
 PUT  /api/profile
 POST /api/plans /api/diff /api/apply /api/install     (allowDeploy only)

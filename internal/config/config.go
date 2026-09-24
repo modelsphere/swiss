@@ -87,9 +87,6 @@ type Server struct {
 	// depends on whether a credential happens to be configured is a default
 	// that ships open.
 	Auth Auth `yaml:"auth,omitempty"`
-	// Peers are the other clusters' swissd instances, for the nav switcher.
-	// Config, not discovery.
-	Peers []Peer `yaml:"peers,omitempty"`
 }
 
 // Auth is the site login: one account, read from a mounted Secret.
@@ -113,11 +110,6 @@ type Auth struct {
 	// request arrived over TLS, which is right behind an ingress that
 	// terminates it and right in a plain-http port-forward.
 	CookieSecure string `yaml:"cookieSecure,omitempty"`
-}
-
-type Peer struct {
-	Name string `yaml:"name"`
-	URL  string `yaml:"url"`
 }
 
 // Load reads a config file. A missing file is reported as such; callers that
@@ -223,11 +215,6 @@ func (c *Config) Validate() error {
 	}
 	if err := c.Cluster.Profile.validate(c.origin()); err != nil {
 		return err
-	}
-	for i, p := range c.Server.Peers {
-		if p.Name == "" || p.URL == "" {
-			return fmt.Errorf("%s: server.peers[%d] needs both name and url", c.origin(), i)
-		}
 	}
 	return nil
 }

@@ -173,6 +173,17 @@ export function SiteProfile() {
             <Row label="Scaler server" value={p.scaler?.serverAddress} />
           </Section>
 
+          {p.sites && p.sites.length > 0 && (
+            <Section
+              title="Other sites"
+              hint="The swissd instances in other clusters, for the switcher in the header."
+            >
+              {p.sites.map((s, i) => (
+                <Row key={`${s.name}-${i}`} label={s.name} value={s.url} mono />
+              ))}
+            </Section>
+          )}
+
           {p.extra && Object.keys(p.extra).length > 0 && (
             <Card>
               <CardHeader>

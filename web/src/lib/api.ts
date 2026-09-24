@@ -14,11 +14,14 @@ export interface ClusterInfo {
   catalogRef?: string;
   version: string;
   allowDeploy: boolean;
-  peers?: Peer[];
+  // The other swissd instances this site knows about, from its profile.
+  sites?: Site[];
   warnings?: string[];
 }
 
-export interface Peer {
+// One other swissd, by name and address. The url is where a browser goes; no
+// server here ever calls it.
+export interface Site {
   name: string;
   url: string;
 }
@@ -192,6 +195,7 @@ export interface SiteProfile {
   };
   schedule?: { priorityClassName?: string; schedulerName?: string };
   nodes?: { gpusPerNode?: number };
+  sites?: Site[];
   extra?: Record<string, unknown>;
 }
 
@@ -295,6 +299,7 @@ export const api = {
     post<Session & { token: string }>("/api/login", { username, password }),
   logout: () => post<{ ok: boolean }>("/api/logout", {}),
   cluster: () => get<ClusterInfo>("/api/cluster"),
+  sites: () => get<{ self: string; sites?: Site[] }>("/api/sites"),
   deployments: (page = 1, perPage = 25) =>
     get<DeploymentsResponse>(`/api/deployments?page=${page}&perPage=${perPage}`),
   catalog: () => get<CatalogResponse>("/api/catalog"),

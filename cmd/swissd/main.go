@@ -2,7 +2,7 @@
 //
 // One instance per cluster, running inside the cluster it manages: in-cluster
 // ServiceAccount, its own profile, its own view. The "one web across clusters"
-// is a nav switcher over `peers` in the config, not a central server holding
+// is a nav switcher over `sites` in the profile, not a central server holding
 // credentials to every cluster.
 //
 // This is the read path. It writes nothing -- to a cluster or anywhere else.

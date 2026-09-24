@@ -98,11 +98,14 @@ func TestAnUnparseableProfileIsRefusedAndNotStored(t *testing.T) {
 	srv, _, w := profileServer(t, liveProbe())
 
 	for name, body := range map[string]string{
-		"not yaml":         "name: [unclosed\n",
-		"no name":          "model:\n  pathTemplate: /weights/{{name}}\n",
-		"no path template": "name: prod-b300\n",
-		"unknown key":      "name: prod-b300\nmodel:\n  pathTemplate: /w\nnemspace: typo\n",
-		"empty":            "   \n",
+		"not yaml":           "name: [unclosed\n",
+		"no name":            "model:\n  pathTemplate: /weights/{{name}}\n",
+		"no path template":   "name: prod-b300\n",
+		"unknown key":        "name: prod-b300\nmodel:\n  pathTemplate: /w\nnemspace: typo\n",
+		"empty":              "   \n",
+		"sites without url":  "name: prod-b300\nmodel:\n  pathTemplate: /w\nsites:\n  - name: dev\n",
+		"sites without name": "name: prod-b300\nmodel:\n  pathTemplate: /w\nsites:\n  - url: https://swiss.dev.internal\n",
+		"sites bad url":      "name: prod-b300\nmodel:\n  pathTemplate: /w\nsites:\n  - name: dev\n    url: swiss.dev.internal\n",
 	} {
 		code, out := put(t, srv, "/api/profile", map[string]string{"yaml": body})
 		if code != http.StatusBadRequest {
@@ -158,6 +161,9 @@ func TestSavingTheProfileAsAnObjectRendersIt(t *testing.T) {
 			"namespace": "modelforge",
 			"model":     map[string]any{"pathTemplate": "/weights/{{name}}"},
 			"route":     map[string]any{"nginxConfigMap": "llm-route/openresty-conf"},
+			"sites": []map[string]string{
+				{"name": "dev", "url": "https://swiss.dev.internal"},
+			},
 		},
 	})
 	if code != 200 {
@@ -181,6 +187,9 @@ func TestSavingTheProfileAsAnObjectRendersIt(t *testing.T) {
 	}
 	if p.Namespace != "modelforge" || p.Route.NginxConfigMap == "" {
 		t.Errorf("swissd is not composing against what was saved: %+v", p)
+	}
+	if len(p.Sites) != 1 || p.Sites[0].Name != "dev" || p.Sites[0].URL != "https://swiss.dev.internal" {
+		t.Errorf("sites not saved: %+v", p.Sites)
 	}
 }
 

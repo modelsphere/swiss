@@ -71,4 +71,9 @@ route:
 nodes:
   # A full GPU node, used to derive cache.maxSlotsPerNode.
   gpusPerNode: 8
+
+# The other clusters' swissd instances, for the nav switcher.
+# sites:
+#   - name: prod-h100
+#     url: https://swiss.h100.internal
 `

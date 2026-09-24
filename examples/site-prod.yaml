@@ -48,3 +48,16 @@ route:
 
 nodes:
   gpusPerNode: 8
+
+# The other clusters' swissd instances, for the nav switcher. Config, not
+# discovery: a list you keep, and every instance serves the same switcher, so
+# any one of them is a valid entry point.
+#
+# Here rather than in swissd's own config because it is a fact about the estate
+# and this is the half an operator can edit from the web -- a new cluster should
+# not need a helm upgrade of every other one to become reachable from them.
+sites:
+  - name: prod-h100
+    url: https://swiss.h100.internal
+  - name: dev
+    url: https://swiss.dev.internal

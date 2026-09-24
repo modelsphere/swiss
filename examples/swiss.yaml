@@ -65,12 +65,3 @@ server:
     # No login at all. For a laptop: an unauthenticated swissd reachable from a
     # Service is a deploy button for whoever finds it.
     # disabled: true
-
-  # The other clusters' swissd instances, for the nav switcher. Config, not
-  # discovery: a list you deploy. Every instance serves the same switcher, so
-  # any one of them is a valid entry point.
-  peers:
-    - name: prod-h100
-      url: https://swiss.h100.internal
-    - name: dev
-      url: https://swiss.dev.internal

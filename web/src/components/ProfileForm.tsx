@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Plus, X } from "lucide-react";
-import { type SiteProfile } from "@/lib/api";
+import { type Site, type SiteProfile } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -235,6 +235,66 @@ export function ProfileForm({
           onChange={(serverHeaders) => setIn("scaler", { serverHeaders })}
         />
       </Group>
+
+      <Group
+        title="Other sites"
+        hint="The swissd instances in other clusters, for the switcher in the header. A list you keep — there is no registry of swissd instances — and every one of them serves the same switcher, so any is a valid entry point."
+      >
+        <Sites value={value.sites ?? []} onChange={(sites) => set("sites", sites)} />
+      </Group>
+    </div>
+  );
+}
+
+// Sites is the switcher's list: a name to show and an address to go to. Both
+// are required -- a row missing either is a dead entry in a dropdown -- and
+// swissd refuses the profile rather than rendering one, so the empty state is
+// flagged here instead of at save.
+function Sites({ value, onChange }: { value: Site[]; onChange: (v: Site[]) => void }) {
+  const patch = (i: number, p: Partial<Site>) =>
+    onChange(value.map((s, j) => (i === j ? { ...s, ...p } : s)));
+
+  return (
+    <div className="space-y-2">
+      {value.map((s, i) => (
+        <div key={i} className="flex flex-wrap items-center gap-2">
+          <Input
+            className="w-40"
+            value={s.name}
+            onChange={(e) => patch(i, { name: e.target.value })}
+            placeholder="cluster name"
+            aria-label="site name"
+          />
+          <Input
+            className="min-w-0 flex-1 font-mono text-xs"
+            value={s.url}
+            onChange={(e) => patch(i, { url: e.target.value })}
+            placeholder="https://swiss.other.internal"
+            aria-label="site url"
+          />
+          <button
+            type="button"
+            onClick={() => onChange(value.filter((_, j) => j !== i))}
+            aria-label={`remove ${s.name || "site"}`}
+            className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+      ))}
+      {value.some((s) => !s.name.trim() || !s.url.trim() || (!s.url.trim().startsWith("http://") && !s.url.trim().startsWith("https://"))) && (
+        <p className="text-xs text-warning">
+          Every site needs a name and a url starting with http:// or https://; swissd will refuse the profile otherwise.
+        </p>
+      )}
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        onClick={() => onChange([...value, { name: "", url: "" }])}
+      >
+        <Plus className="size-4" /> Add site
+      </Button>
     </div>
   );
 }

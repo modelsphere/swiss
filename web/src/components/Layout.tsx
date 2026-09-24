@@ -101,9 +101,13 @@ function Tab({ to, children }: { to: string; children: React.ReactNode }) {
   );
 }
 
-// Peers are other clusters' swissd instances, each a separate origin. Switching
+// Sites are other clusters' swissd instances, each a separate origin. Switching
 // is a real navigation, not client-side routing -- and every instance serves
 // this same switcher, so any one of them is a valid entry point.
+//
+// The list comes from this site's profile, which is editable from the web: a
+// new cluster becomes reachable from here by adding it on the Site profile
+// page, not by redeploying this one.
 //
 // The swissd version is shown deliberately: N instances drift, and seeing that
 // here beats debugging a bug report that is really a stale deploy.
@@ -124,9 +128,9 @@ function ClusterSwitcher() {
         }}
       >
         <option value="">{data.name}</option>
-        {data.peers?.map((p) => (
-          <option key={p.name} value={p.url}>
-            {p.name}
+        {data.sites?.map((s) => (
+          <option key={s.name} value={s.url}>
+            {s.name}
           </option>
         ))}
       </select>

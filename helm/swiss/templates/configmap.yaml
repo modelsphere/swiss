@@ -36,10 +36,6 @@ data:
         tokenTTL: {{ .Values.auth.tokenTTL }}
         cookieSecure: {{ .Values.auth.cookieSecure | quote }}
         {{- end }}
-      {{- with .Values.config.peers }}
-      peers:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
 ---
 {{- /*
 No site profile here.

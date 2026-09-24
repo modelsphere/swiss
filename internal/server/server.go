@@ -155,7 +155,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/logout", s.handleLogout)
 	mux.HandleFunc("GET /api/session", s.handleSession)
 	mux.HandleFunc("GET /api/cluster", s.handleCluster)
-	mux.HandleFunc("GET /api/peers", s.handlePeers)
+	mux.HandleFunc("GET /api/sites", s.handleSites)
 	mux.HandleFunc("GET /api/catalog", s.handleCatalog)
 	mux.HandleFunc("GET /api/catalog/{model}", s.handleCatalogModel)
 	mux.HandleFunc("GET /api/deployments", s.handleDeployments)

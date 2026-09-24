@@ -38,13 +38,6 @@ config:
     profile: ""
     profileKey: profile.yaml
 
-  # The other clusters' swissd instances, for the nav switcher. Config, not
-  # discovery -- a list you deploy, and every instance serves the same switcher,
-  # so any one of them is a valid entry point.
-  peers: []
-    # - name: prod-h100
-    #   url: https://swiss.h100.internal
-
   # How long a fetched catalog or profile is reused before refetching.
   cacheTTL: 60s
 

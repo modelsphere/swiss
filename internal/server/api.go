@@ -12,7 +12,6 @@ import (
 
 	"github.com/modelsphere/swiss/internal/catalog"
 	"github.com/modelsphere/swiss/internal/cluster"
-	"github.com/modelsphere/swiss/internal/config"
 	"github.com/modelsphere/swiss/internal/plan"
 	"github.com/modelsphere/swiss/internal/site"
 	"gopkg.in/yaml.v3"
@@ -62,16 +61,16 @@ type clusterInfo struct {
 	ProfileName string `json:"profileName,omitempty"`
 	// The scheduling defaults this cluster applies, so a deploy form can show
 	// what it will get rather than an empty box.
-	PriorityClassName string        `json:"priorityClassName,omitempty"`
-	SchedulerName     string        `json:"schedulerName,omitempty"`
-	Namespace         string        `json:"namespace,omitempty"`
-	ChartRepo         string        `json:"chartRepo,omitempty"`
-	Catalog           string        `json:"catalog"`
-	CatalogRef        string        `json:"catalogRef,omitempty"`
-	Version           string        `json:"version"`
-	AllowDeploy       bool          `json:"allowDeploy"`
-	Peers             []config.Peer `json:"peers,omitempty"`
-	Warnings          []string      `json:"warnings,omitempty"`
+	PriorityClassName string      `json:"priorityClassName,omitempty"`
+	SchedulerName     string      `json:"schedulerName,omitempty"`
+	Namespace         string      `json:"namespace,omitempty"`
+	ChartRepo         string      `json:"chartRepo,omitempty"`
+	Catalog           string      `json:"catalog"`
+	CatalogRef        string      `json:"catalogRef,omitempty"`
+	Version           string      `json:"version"`
+	AllowDeploy       bool        `json:"allowDeploy"`
+	Sites             []site.Site `json:"sites,omitempty"`
+	Warnings          []string    `json:"warnings,omitempty"`
 }
 
 // handleCluster is what the nav header renders: which cluster this is, what it
@@ -88,12 +87,12 @@ func (s *Server) handleCluster(w http.ResponseWriter, r *http.Request) {
 		Catalog:     s.cfg.Catalog,
 		Version:     s.version,
 		AllowDeploy: s.cfg.Server.AllowDeploy,
-		Peers:       s.cfg.Server.Peers,
 	}
 	if p, err := s.Profile(ctx); err == nil {
 		info.ProfileName, info.Namespace, info.ChartRepo = p.Name, p.Namespace, p.ChartRepo
 		info.PriorityClassName = p.Schedule.PriorityClassName
 		info.SchedulerName = p.Schedule.SchedulerName
+		info.Sites = p.Sites
 	} else {
 		info.Warnings = append(info.Warnings, "profile: "+err.Error())
 	}
@@ -105,11 +104,18 @@ func (s *Server) handleCluster(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, info)
 }
 
-func (s *Server) handlePeers(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
-		"self":  s.cfg.Cluster.Name,
-		"peers": s.cfg.Server.Peers,
-	})
+// handleSites is the switcher's list: the other swissd instances this site
+// knows about, from the profile. Each is an origin a browser navigates to, not
+// one this server calls.
+func (s *Server) handleSites(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := contextWithTimeout(r, 15*time.Second)
+	defer cancel()
+
+	out := map[string]any{"self": s.cfg.Cluster.Name}
+	if p, err := s.Profile(ctx); err == nil {
+		out["sites"] = p.Sites
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {

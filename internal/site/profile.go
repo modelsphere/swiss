@@ -42,7 +42,25 @@ type Profile struct {
 	Route    Route      `yaml:"route,omitempty" json:"route"`
 	Nodes    Nodes      `yaml:"nodes,omitempty" json:"nodes"`
 
+	// Sites are the other clusters' swissd instances, for the nav switcher.
+	//
+	// In the profile rather than swissd's config because it is a fact about the
+	// estate, and the profile is the half an operator can edit from the web --
+	// a new cluster should not need a helm upgrade of every other one to become
+	// reachable from them.
+	//
+	// Config, not discovery: there is no registry of swissd instances, and each
+	// one serves this same switcher, so any of them is a valid entry point.
+	Sites []Site `yaml:"sites,omitempty" json:"sites,omitempty"`
+
 	Extra values.Tree `yaml:"extra,omitempty" json:"extra,omitempty"`
+}
+
+// Site is one other swissd, by name and address. The URL is where a browser
+// goes, so it is an origin this one links to and never calls.
+type Site struct {
+	Name string `yaml:"name" json:"name"`
+	URL  string `yaml:"url" json:"url"`
 }
 
 // Schedule is what this cluster puts a GPU workload on by default. Both are
@@ -196,6 +214,20 @@ func Parse(raw []byte, origin string) (*Profile, error) {
 	}
 	if p.Model.PathTemplate == "" {
 		return nil, fmt.Errorf("%s: model.pathTemplate is required -- the catalog gives an identity, not a path", origin)
+	}
+	// A half-filled site is a dead entry in the switcher: a name that goes
+	// nowhere, or an address with nothing to click. Refused here rather than
+	// rendered, because the web writes this list now.
+	for i, s := range p.Sites {
+		s.Name = strings.TrimSpace(s.Name)
+		s.URL = strings.TrimSpace(s.URL)
+		p.Sites[i] = s
+		if s.Name == "" || s.URL == "" {
+			return nil, fmt.Errorf("%s: sites[%d] needs both name and url", origin, i)
+		}
+		if !strings.HasPrefix(s.URL, "http://") && !strings.HasPrefix(s.URL, "https://") {
+			return nil, fmt.Errorf("%s: sites[%d] url %q must start with http:// or https://", origin, i, s.URL)
+		}
 	}
 	return &p, nil
 }
