@@ -36,7 +36,7 @@ export interface Form {
   scaler: boolean;
   replicaCount: string;
   route: string;
-  // image is a repository for this deploy alone. Empty is the site's answer,
+  // image is repository:tag for this deploy alone. Empty is the site's answer,
   // which is the mirror when one is configured -- the switch beside the field
   // is a view of this one value, so the two cannot name different registries.
   image: string;
@@ -188,35 +188,6 @@ export function DeploySettings({
             />
           </Row>
 
-          {/* The site rewrites the catalog's image to its own registry, which
-              is right until the one deploy that has to pull the original. The
-              switch is that escape hatch: off fills the field with the
-              catalog's repository, on empties it again. An empty field is the
-              site's answer, and the placeholder is that answer rather than a
-              description of it. */}
-          {image && (
-            <Row
-              label="Image"
-              note="where the engine image is pulled from; the catalog pins the tag"
-              toggle={
-                image.site !== image.catalog ? (
-                  <Switch
-                    checked={!form.image.trim()}
-                    onChange={(v) => onChange({ image: v ? "" : image.catalog })}
-                    label="use the site's registry mirror"
-                  />
-                ) : undefined
-              }
-            >
-              <Suggest
-                value={form.image}
-                onChange={(v) => onChange({ image: v })}
-                suggestion={image.site}
-                placeholder={image.site}
-              />
-            </Row>
-          )}
-
           <Row
             label="Autoscale"
             note="an LLMScaler owns the replica count, bounds included"
@@ -278,27 +249,68 @@ export function DeploySettings({
       <details className="rounded-lg border">
         <summary className="cursor-pointer px-4 py-3 text-sm font-medium">Advanced</summary>
         <div className="divide-y border-t px-4">
-          <Row
-            label="CART"
-            note="cache-aware router in front of the backends"
-            toggle={<Switch checked={form.cart} onChange={toggle("cart")} label="CART" />}
-          />
-          <Row
-            label="SLO requirement"
-            note="an LLMSLORequirement for this service"
-            toggle={<Switch checked={form.slo} onChange={toggle("slo")} label="SLO requirement" />}
-          />
-          <Row
-            label="ServiceMonitor"
-            note="scrape metrics into Prometheus"
-            toggle={
-              <Switch
+          {/* One row rather than three: these are three independent objects the
+              release either gets or does not, each a single bit, and three
+              labelled rows read as three decisions to weigh rather than a set
+              to glance at. Each still says what it is -- a switch whose only
+              explanation is a tooltip is a switch nobody reads. */}
+          <Row label="Components" note="objects rendered alongside the release">
+            <div className="grid w-full gap-x-6 gap-y-3 sm:grid-cols-3">
+              <Flag
+                checked={form.cart}
+                onChange={toggle("cart")}
+                label="CART"
+                hint="Cache-aware router"
+              />
+              <Flag
+                checked={form.slo}
+                onChange={toggle("slo")}
+                label="SLO requirement"
+                hint="LLMSLORequirement"
+              />
+              <Flag
                 checked={form.serviceMonitor}
                 onChange={toggle("serviceMonitor")}
                 label="ServiceMonitor"
+                hint="Prometheus metrics"
               />
-            }
-          />
+            </div>
+          </Row>
+
+          {/* Off is the answer almost always: the catalog pins the tag and the
+              site rewrites the repository to its mirror, and between them the
+              image is already decided. The switch is the escape hatch for the
+              one deploy that has to pull something else -- a release-candidate
+              engine build, or the original registry when the mirror is behind.
+
+              Off empties the field, so turning it off puts the inherited answer
+              back rather than leaving a stale override behind. */}
+          {image && (
+            <Row
+              label="Image"
+              note="repository:tag — off inherits the catalog's tag and the site's mirror"
+              toggle={
+                <Switch
+                  checked={!!form.image.trim()}
+                  onChange={(v) => onChange({ image: v ? image.site : "" })}
+                  label="override"
+                />
+              }
+            >
+              {form.image.trim() ? (
+                <Suggest
+                  value={form.image}
+                  onChange={(v) => onChange({ image: v })}
+                  suggestion={image.catalog}
+                  placeholder={image.site}
+                />
+              ) : (
+                <span className="truncate font-mono text-xs text-muted-foreground" title={image.site}>
+                  {image.site}
+                </span>
+              )}
+            </Row>
+          )}
           <Row label="GPU product" note="restricts scheduling to these products; any one will do">
             <Products
               selected={form.gpuProducts}
@@ -361,6 +373,27 @@ export function DeploySettings({
 // up on one right-hand edge instead of being indented by the switch beside it.
 // The control column keeps the input's height either way, so toggling a row
 // grows it sideways and never moves what is below.
+// Flag is one feature switch with its explanation under it, so several can sit
+// on one row without any of them becoming a mystery.
+function Flag({
+  checked,
+  onChange,
+  label,
+  hint,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  label: string;
+  hint: string;
+}) {
+  return (
+    <div className="min-w-0 space-y-1">
+      <Switch checked={checked} onChange={onChange} label={label} />
+      <p className="text-xs leading-snug text-muted-foreground">{hint}</p>
+    </div>
+  );
+}
+
 function Row({
   label,
   note,
@@ -691,16 +724,40 @@ extraArgs:
 
 const num = (v: string) => (v.trim() === "" ? undefined : Number(v));
 
-// imageOf pairs the repository the catalog pins with the one the site mirrors
-// it to. Undefined when the variant carries no image: there is then nothing to
-// show and nothing to choose between.
+// imageOf pairs the image the catalog pins with the one the site mirrors it to,
+// both as repository:tag. Undefined when the variant carries no image: there is
+// then nothing to show and nothing to choose between.
+//
+// The site rewrites only the repository -- the tag is the catalog's, and is
+// carried through -- so the same tag goes on both halves.
 export function imageOf(
   variant?: Variant,
   mirrored?: Record<string, string>,
 ): { catalog: string; site: string } | undefined {
   const repo = variant?.image?.repository;
   if (!repo) return undefined;
-  return { catalog: repo, site: mirrored?.[variant.id] ?? repo };
+  const tag = variant.image?.tag ?? "";
+  return {
+    catalog: joinImage(repo, tag),
+    site: joinImage(mirrored?.[variant.id] ?? repo, tag),
+  };
+}
+
+// splitImage turns what was typed into the two values the chart takes. The last
+// colon separates the tag only when it comes after the last slash:
+// harbor.example.com:5000/sglang is a registry port, not a tag.
+//
+// Only repository and tag. A digest pin is not expressible here on purpose --
+// it would need a third field and the plan editor already takes one.
+export function splitImage(ref: string): { repository: string; tag?: string } {
+  const s = ref.trim();
+  const colon = s.lastIndexOf(":");
+  if (colon === -1 || colon < s.lastIndexOf("/")) return { repository: s };
+  return { repository: s.slice(0, colon), tag: s.slice(colon + 1) };
+}
+
+function joinImage(repository: string, tag: string): string {
+  return repository && tag ? `${repository}:${tag}` : repository;
 }
 
 // Naming a route turns routing on, so the toggle and the request cannot
@@ -750,7 +807,10 @@ export function planRequest(
 
   // Only the repository: the tag and digest are the catalog's, and a form that
   // wrote the whole image section would drop them.
-  if (f.image.trim()) overrides.image = { repository: f.image.trim() };
+  // The tag lands in the form layer, which merges after the catalog's -- so it
+  // wins, and the plan reports it as shadowed rather than the two disagreeing
+  // quietly.
+  if (f.image.trim()) overrides.image = splitImage(f.image);
 
   if (f.priorityClassName.trim()) overrides.priorityClassName = f.priorityClassName.trim();
   if (f.schedulerName.trim()) overrides.schedulerName = f.schedulerName.trim();
@@ -808,7 +868,7 @@ export function formFromPlan(plan: Plan): Form {
     tolerations: tolerationsOf(o),
     replicaCount: str("replicaCount"),
     route: str("modelRoute.nginx.route"),
-    image: str("image.repository"),
+    image: joinImage(str("image.repository"), str("image.tag")),
     cart: bool("cart.enabled", true),
     modelRoute: bool("modelRoute.enabled"),
     slo: bool("sloRequirement.enabled"),
