@@ -54,9 +54,12 @@ config:
   #   rbac                      roles, rolebindings   (the cart subchart)
   #   monitoring.coreos.com     servicemonitors
   #   leaderworkerset.x-k8s.io  leaderworkersets
-  #   autoscaling.4pd.io        llmscalers
-  #   inference.x-k8s.io        llmslorequirements
-  #   routing.gpucluster.io     modelroutes
+  #   autoscaling.4pd.io        llmscalers           (and autoscaling.modelsphere.dev)
+  #   inference.x-k8s.io        llmslorequirements   (and inference.modelsphere.dev)
+  #   routing.gpucluster.io     modelroutes          (and routing.modelsphere.dev)
+  #
+  # Each type is granted under both its current group and the modelsphere.dev
+  # group the published charts moved to, so swissd can deploy either.
   #
   # roles/rolebindings means swissd can create RBAC. Kubernetes bounds that to
   # what swissd already holds -- which is why the grant also includes
