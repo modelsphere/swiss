@@ -245,4 +245,11 @@ type Writer interface {
 	// one Secret per revision, the way helm stores its own.
 	PutSecret(ctx context.Context, ref string, data, labels map[string]string) error
 	DeleteSecret(ctx context.Context, ref string) error
+	// EnsureNamespace creates a namespace, and succeeds when it already exists.
+	//
+	// swiss records a release's plan in the release's own namespace, before it
+	// applies anything. With createNamespace that namespace is helm's to create
+	// -- which happens after, so the write-ahead would land in a namespace that
+	// does not exist yet and the apply would never run.
+	EnsureNamespace(ctx context.Context, name string) error
 }

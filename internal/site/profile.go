@@ -42,13 +42,7 @@ type Profile struct {
 	Route    Route      `yaml:"route,omitempty" json:"route"`
 	Nodes    Nodes      `yaml:"nodes,omitempty" json:"nodes"`
 
-	// CreateNamespace passes --create-namespace. Off by default: under helm v4
-	// that applies the Namespace object server-side, so it needs patch on
-	// namespaces even when the namespace already exists -- a cluster-scoped
-	// privilege swissd has no other reason to hold, for namespaces an admin
-	// already created for it.
-	CreateNamespace bool        `yaml:"createNamespace,omitempty" json:"createNamespace,omitempty"`
-	Extra           values.Tree `yaml:"extra,omitempty" json:"extra,omitempty"`
+	Extra values.Tree `yaml:"extra,omitempty" json:"extra,omitempty"`
 }
 
 // Schedule is what this cluster puts a GPU workload on by default. Both are

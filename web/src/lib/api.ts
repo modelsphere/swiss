@@ -10,8 +10,6 @@ export interface ClusterInfo {
   schedulerName?: string;
   namespace?: string;
   chartRepo?: string;
-  // The site's own answer, which a deploy can add to but not take away.
-  createNamespace?: boolean;
   catalog: string;
   catalogRef?: string;
   version: string;
@@ -194,7 +192,6 @@ export interface SiteProfile {
   };
   schedule?: { priorityClassName?: string; schedulerName?: string };
   nodes?: { gpusPerNode?: number };
-  createNamespace?: boolean;
   extra?: Record<string, unknown>;
 }
 

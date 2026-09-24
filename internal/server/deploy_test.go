@@ -13,6 +13,9 @@ import (
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
 	"github.com/modelsphere/swiss/internal/cluster"
 	"github.com/modelsphere/swiss/internal/plan"
 	"github.com/modelsphere/swiss/internal/store"
@@ -24,9 +27,42 @@ type fakeWriter struct {
 	deleted []string
 	secrets map[string]map[string]string
 	labels  map[string]map[string]string
+	// namespaces that exist. Consulted only when strictNS is set, so the tests
+	// that do not care about namespaces are unaffected.
+	namespaces map[string]bool
+	strictNS   bool
+	ensured    []string
+}
+
+// missingNS is the apiserver's own answer, so a test exercises the error the
+// server actually gets rather than one shaped like it.
+func (f *fakeWriter) missingNS(ref string) error {
+	if !f.strictNS {
+		return nil
+	}
+	ns, _, err := cluster.SplitRef(ref)
+	if err != nil {
+		return err
+	}
+	if f.namespaces[ns] {
+		return nil
+	}
+	return apierrors.NewNotFound(schema.GroupResource{Resource: "namespaces"}, ns)
+}
+
+func (f *fakeWriter) EnsureNamespace(_ context.Context, name string) error {
+	if f.namespaces == nil {
+		f.namespaces = map[string]bool{}
+	}
+	f.namespaces[name] = true
+	f.ensured = append(f.ensured, name)
+	return nil
 }
 
 func (f *fakeWriter) PutConfigMap(_ context.Context, ref string, data map[string]string) error {
+	if err := f.missingNS(ref); err != nil {
+		return err
+	}
 	if f.written == nil {
 		f.written = map[string]map[string]string{}
 	}
@@ -35,6 +71,9 @@ func (f *fakeWriter) PutConfigMap(_ context.Context, ref string, data map[string
 }
 
 func (f *fakeWriter) PutSecret(_ context.Context, ref string, data, labels map[string]string) error {
+	if err := f.missingNS(ref); err != nil {
+		return err
+	}
 	if f.secrets == nil {
 		f.secrets, f.labels = map[string]map[string]string{}, map[string]map[string]string{}
 	}
@@ -341,6 +380,10 @@ func TestApplyRefusesWhenThePlanCannotBeRecorded(t *testing.T) {
 }
 
 type failingWriter struct{}
+
+func (failingWriter) EnsureNamespace(context.Context, string) error {
+	return errors.New("forbidden")
+}
 
 func (failingWriter) PutConfigMap(context.Context, string, map[string]string) error {
 	return errors.New("forbidden")

@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/modelsphere/swiss/internal/catalog"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+
 	"github.com/modelsphere/swiss/internal/cluster"
 	"github.com/modelsphere/swiss/internal/compose"
 	"github.com/modelsphere/swiss/internal/exec"
@@ -423,6 +425,21 @@ func (s *Server) applyPlan(ctx context.Context, w http.ResponseWriter, p *plan.P
 		}
 	}
 
+	// The plan is recorded in the release's own namespace, so with
+	// createNamespace that namespace has to exist first. helm creates it during
+	// the apply, which is too late: the write-ahead below would fail into a
+	// namespace that is not there yet and nothing would ever be applied.
+	//
+	// Creating it here rather than dropping the write-ahead: an empty namespace
+	// is the one cluster change that costs nothing if the apply then fails, and
+	// helm still applies its own Namespace object afterwards.
+	if p.CreateNamespace && s.writer != nil {
+		if err := s.writer.EnsureNamespace(ctx, p.Release.Namespace); err != nil {
+			writeError(w, http.StatusInternalServerError, "namespace not created, nothing applied: "+err.Error())
+			return
+		}
+	}
+
 	// Write-ahead: the plan is recorded before the cluster changes, so a
 	// permissions or quota failure costs nothing. A live release with no
 	// plan beside it reads as hand-installed, which is the one thing the
@@ -431,7 +448,11 @@ func (s *Server) applyPlan(ctx context.Context, w http.ResponseWriter, p *plan.P
 	if err := s.writePlan(ctx, p, planStatus{
 		Phase: phaseApplying, Action: action, StartedAt: stamp(started), Note: note,
 	}); err != nil {
-		writeError(w, http.StatusInternalServerError, "plan not recorded, nothing applied: "+err.Error())
+		msg := "plan not recorded, nothing applied: " + err.Error()
+		if !p.CreateNamespace && apierrors.IsNotFound(err) {
+			msg += "\n\nThe namespace does not exist. Recompose with createNamespace to have it created, or ask an admin for it -- createNamespace has to be in the plan, so setting it on the apply does nothing."
+		}
+		writeError(w, http.StatusInternalServerError, msg)
 		return
 	}
 

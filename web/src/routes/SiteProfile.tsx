@@ -69,7 +69,6 @@ export function SiteProfile() {
             hint="The scheduler and priority class are applied before the deploy form merges, so a deploy overrides either."
           >
             <Row label="Namespace" value={p.namespace} fallback="the chart's default" />
-            <Row label="Create namespace" value={p.createNamespace ? "yes" : "no"} />
             <Row label="GPUs per node" value={p.nodes?.gpusPerNode} />
             <Row
               label="Scheduler"

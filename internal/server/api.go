@@ -62,19 +62,16 @@ type clusterInfo struct {
 	ProfileName string `json:"profileName,omitempty"`
 	// The scheduling defaults this cluster applies, so a deploy form can show
 	// what it will get rather than an empty box.
-	PriorityClassName string `json:"priorityClassName,omitempty"`
-	SchedulerName     string `json:"schedulerName,omitempty"`
-	Namespace         string `json:"namespace,omitempty"`
-	ChartRepo         string `json:"chartRepo,omitempty"`
-	// CreateNamespace is the site's own answer, which a deploy can add to but
-	// not take away.
-	CreateNamespace bool          `json:"createNamespace,omitempty"`
-	Catalog         string        `json:"catalog"`
-	CatalogRef      string        `json:"catalogRef,omitempty"`
-	Version         string        `json:"version"`
-	AllowDeploy     bool          `json:"allowDeploy"`
-	Peers           []config.Peer `json:"peers,omitempty"`
-	Warnings        []string      `json:"warnings,omitempty"`
+	PriorityClassName string        `json:"priorityClassName,omitempty"`
+	SchedulerName     string        `json:"schedulerName,omitempty"`
+	Namespace         string        `json:"namespace,omitempty"`
+	ChartRepo         string        `json:"chartRepo,omitempty"`
+	Catalog           string        `json:"catalog"`
+	CatalogRef        string        `json:"catalogRef,omitempty"`
+	Version           string        `json:"version"`
+	AllowDeploy       bool          `json:"allowDeploy"`
+	Peers             []config.Peer `json:"peers,omitempty"`
+	Warnings          []string      `json:"warnings,omitempty"`
 }
 
 // handleCluster is what the nav header renders: which cluster this is, what it
@@ -97,7 +94,6 @@ func (s *Server) handleCluster(w http.ResponseWriter, r *http.Request) {
 		info.ProfileName, info.Namespace, info.ChartRepo = p.Name, p.Namespace, p.ChartRepo
 		info.PriorityClassName = p.Schedule.PriorityClassName
 		info.SchedulerName = p.Schedule.SchedulerName
-		info.CreateNamespace = p.CreateNamespace
 	} else {
 		info.Warnings = append(info.Warnings, "profile: "+err.Error())
 	}

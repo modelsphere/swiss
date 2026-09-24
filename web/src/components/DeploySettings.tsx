@@ -262,19 +262,12 @@ export function DeploySettings({
               note="helm creates it during install — helmDefaults.createNamespace in the plan's helmfile"
               toggle={
                 <Switch
-                  checked={form.createNamespace || !!cluster?.createNamespace}
+                  checked={form.createNamespace}
                   onChange={(v) => onChange({ createNamespace: v })}
-                  disabled={cluster?.createNamespace}
                   label="create the namespace"
                 />
               }
-            >
-              {cluster?.createNamespace && (
-                <span className="text-xs text-muted-foreground">
-                  the site profile already asks for this on every deploy
-                </span>
-              )}
-            </Row>
+            />
           )}
         </CardContent>
       </Card>

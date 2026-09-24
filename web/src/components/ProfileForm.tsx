@@ -64,12 +64,6 @@ export function ProfileForm({
             onChange={(e) => setIn("nodes", { gpusPerNode: num(e.target.value) })}
           />
         </Field>
-        <Toggle
-          label="Create namespace"
-          hint="Off by default: under helm v4 this needs patch on namespaces cluster-wide, for namespaces an admin already created."
-          checked={!!value.createNamespace}
-          onChange={(v) => set("createNamespace", v)}
-        />
       </Group>
 
       <Group title="Charts and images" hint="The registry the catalog deliberately does not name.">

@@ -522,6 +522,24 @@ func (k *Kube) DeleteSecret(ctx context.Context, ref string) error {
 	return err
 }
 
+// EnsureNamespace creates a namespace if it is not there.
+//
+// Create and swallow AlreadyExists rather than get-then-create: the get would be
+// a second round trip that answers a question the create already answers, and
+// two callers racing on the same namespace would both pass the get anyway.
+func (k *Kube) EnsureNamespace(ctx context.Context, name string) error {
+	_, err := k.client.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+	}, metav1.CreateOptions{})
+	if apierrors.IsAlreadyExists(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("create namespace %s: %w", name, err)
+	}
+	return nil
+}
+
 // PlanRef is where a release's plan is stored.
 func (k *Kube) PlanRef(namespace, release string) string {
 	return namespace + "/" + k.SwissPlanPrefix + release
