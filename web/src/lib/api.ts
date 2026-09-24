@@ -326,8 +326,9 @@ export const api = {
     get<RevisionsResponse>(
       `/api/releases/${encodeURIComponent(ns)}/${encodeURIComponent(release)}/revisions`,
     ),
-  // What helm holds for a revision, chart defaults included. The plan beside
-  // the release says what swiss composed; this says what helm was given.
+  // What helm holds for a revision, as two documents: everything it merged, and
+  // only what was supplied. The plan beside the release says what swiss
+  // composed; these say what helm was given.
   revisionValues: (ns: string, release: string, revision: number) =>
     get<RevisionValues>(
       `/api/releases/${encodeURIComponent(ns)}/${encodeURIComponent(release)}/revisions/${revision}/values`,
@@ -514,11 +515,26 @@ export interface Revision {
 }
 
 // `helm get values --all` for one revision, as the yaml helm prints.
+// One leaf of a values document, addressed by the dotted path the rest of swiss
+// uses for a value.
+export interface ValueRow {
+  path: string;
+  value: string;
+}
+
 export interface RevisionValues {
   namespace: string;
   release: string;
   revision: number;
-  values: string;
+  // What the release was rendered from: supplied values with the chart's own
+  // defaults merged in.
+  all: ValueRow[];
+  // Only what somebody supplied. A key here is one a person chose; a key only in
+  // `all` came from the chart and moves when the chart does.
+  supplied: ValueRow[];
+  // Set when the supplied read failed on its own. The merged one is the read
+  // that has to work, so this costs a table rather than the response.
+  suppliedError?: string;
 }
 
 export interface RevisionsResponse {

@@ -148,14 +148,25 @@ func (r Runner) Uninstall(ctx context.Context, namespace, release string) (Resul
 	return Result{Output: out, Changed: err == nil}, err
 }
 
-// Values reads back what helm itself holds for a revision, chart defaults
-// included, as the yaml it would print.
+// Values reads back what helm itself holds for a revision, as the yaml it would
+// print.
+//
+// all decides which of two different answers this is. Without it, helm reports
+// only the values somebody supplied -- the overrides, a handful of lines. With
+// it, the chart's own defaults are merged in, which is what the release was
+// actually rendered from. Neither is a superset worth deriving from the other by
+// eye: the interesting question is usually which of the two a given key is in,
+// because a key present only under --all came from the chart and moves when the
+// chart does.
 //
 // Direct through helm rather than from the archived plan beside the release:
 // the plan is what swiss composed, and this is what the cluster was actually
 // given. The two disagreeing is the thing worth being able to see.
-func (r Runner) Values(ctx context.Context, namespace, release string, revision int) (string, error) {
-	args := []string{"get", "values", release, "--namespace", namespace, "--all", "--output", "yaml"}
+func (r Runner) Values(ctx context.Context, namespace, release string, revision int, all bool) (string, error) {
+	args := []string{"get", "values", release, "--namespace", namespace, "--output", "yaml"}
+	if all {
+		args = append(args, "--all")
+	}
 	if revision > 0 {
 		args = append(args, "--revision", strconv.Itoa(revision))
 	}

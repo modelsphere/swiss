@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -248,22 +250,121 @@ func TestRevisionsCarryTheChart(t *testing.T) {
 	}
 }
 
+// stubHelmValues records every invocation and answers `get values` with a
+// different document depending on --all, which is the whole point: helm reports
+// only what was supplied without it, and the chart's defaults merged in with it.
+func stubHelmValues(t *testing.T) (bin, log string) {
+	t.Helper()
+	dir := t.TempDir()
+	bin, log = filepath.Join(dir, "helm"), filepath.Join(dir, "calls.log")
+	script := "#!/bin/sh\n" +
+		"echo \"$*\" >> " + log + "\n" +
+		"case \"$*\" in\n" +
+		"  *--all*) printf 'replicaCount: 1\\nextraArgs:\\n  - \"--tp-size=2\"\\nimage:\\n  tag: v0.5.19\\n' ;;\n" +
+		"  *) printf 'extraArgs:\\n  - \"--tp-size=2\"\\n' ;;\n" +
+		"esac\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin, log
+}
+
+func rowsOf(t *testing.T, out map[string]any, key string) map[string]string {
+	t.Helper()
+	rows, _ := out[key].([]any)
+	got := map[string]string{}
+	for _, r := range rows {
+		row, _ := r.(map[string]any)
+		path, _ := row["path"].(string)
+		value, _ := row["value"].(string)
+		got[path] = value
+	}
+	return got
+}
+
 // What helm was given, rather than what swiss composed. The archived plan
 // answers the second question already; only helm answers the first.
-func TestRevisionValuesAsksHelmForThatRevision(t *testing.T) {
+//
+// Two runs, because helm will not answer both questions at once: one asks what
+// was supplied, the other what that merged to.
+func TestRevisionValuesAsksHelmTwice(t *testing.T) {
 	probe, _ := seedRelease(t, 6, nil)
 	srv, s := deployServerWith(t, probe, true)
-	s.cfg.Server.HelmBin = stubHelm(t, 0)
+	bin, log := stubHelmValues(t)
+	s.cfg.Server.HelmBin = bin
 
 	code, out := get(t, srv, "/api/releases/modelforge/glm-53/revisions/4/values")
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, out)
 	}
-	got, _ := out["values"].(string)
-	for _, want := range []string{"get values", "glm-53", "--namespace modelforge", "--revision 4", "--all"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("helm was not asked for %q:\n%s", want, got)
+
+	raw, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(calls) != 2 {
+		t.Fatalf("want one run per question, got %d: %q", len(calls), calls)
+	}
+	var withAll, without int
+	for _, c := range calls {
+		for _, want := range []string{"get values", "glm-53", "--namespace modelforge", "--revision 4"} {
+			if !strings.Contains(c, want) {
+				t.Errorf("helm was not asked for %q: %s", want, c)
+			}
 		}
+		if strings.Contains(c, "--all") {
+			withAll++
+		} else {
+			without++
+		}
+	}
+	if withAll != 1 || without != 1 {
+		t.Errorf("want exactly one run each way, got %d with --all and %d without", withAll, without)
+	}
+
+	// Two tables, flattened to the dotted paths the rest of swiss uses.
+	supplied := rowsOf(t, out, "supplied")
+	all := rowsOf(t, out, "all")
+	if len(supplied) != 1 || supplied["extraArgs"] != `["--tp-size=2"]` {
+		t.Errorf("supplied should hold only what was set: %v", supplied)
+	}
+	if all["replicaCount"] != "1" || all["image.tag"] != "v0.5.19" {
+		t.Errorf("the merged table should carry the chart defaults: %v", all)
+	}
+	// The key that is in one and not the other is the whole reason for two
+	// tables: replicaCount came from the chart, not from anybody.
+	if _, ok := supplied["replicaCount"]; ok {
+		t.Error("a chart default must not appear as supplied")
+	}
+}
+
+// The merged read is the one that has to work. A release where nothing was
+// supplied is ordinary, so that half failing costs its table, not the response.
+func TestRevisionValuesSurvivesAFailedSuppliedRead(t *testing.T) {
+	probe, _ := seedRelease(t, 6, nil)
+	srv, s := deployServerWith(t, probe, true)
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "helm")
+	script := "#!/bin/sh\n" +
+		"case \"$*\" in\n" +
+		"  *--all*) printf 'replicaCount: 1\\n' ;;\n" +
+		"  *) echo 'boom' >&2; exit 1 ;;\n" +
+		"esac\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s.cfg.Server.HelmBin = bin
+
+	code, out := get(t, srv, "/api/releases/modelforge/glm-53/revisions/4/values")
+	if code != 200 {
+		t.Fatalf("the merged read worked, so this must answer: %d %v", code, out)
+	}
+	if all := rowsOf(t, out, "all"); all["replicaCount"] != "1" {
+		t.Errorf("the merged table must still be there: %v", all)
+	}
+	if out["suppliedError"] == nil {
+		t.Error("the failure must be reported rather than shown as an empty table")
 	}
 }
 

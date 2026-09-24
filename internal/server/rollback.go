@@ -7,10 +7,13 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/modelsphere/swiss/internal/exec"
 	"github.com/modelsphere/swiss/internal/plan"
+	"github.com/modelsphere/swiss/internal/values"
+	"gopkg.in/yaml.v3"
 )
 
 type rollbackRequest struct {
@@ -103,14 +106,85 @@ func (s *Server) handleRevisionValues(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "revision must be a number")
 		return
 	}
-	out, err := s.runner().Values(ctx, ns, release, rev)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+	// Two runs, because helm answers two different questions and will not answer
+	// both at once. In parallel: they are independent, and one helm invocation of
+	// latency is enough for opening a row.
+	var (
+		wg              sync.WaitGroup
+		allRaw, suppRaw string
+		allErr, suppErr error
+	)
+	wg.Add(2)
+	go func() { defer wg.Done(); allRaw, allErr = s.runner().Values(ctx, ns, release, rev, true) }()
+	go func() { defer wg.Done(); suppRaw, suppErr = s.runner().Values(ctx, ns, release, rev, false) }()
+	wg.Wait()
+
+	// The merged read is the one that has to work: it is what the release was
+	// rendered from. A release with no supplied values at all is ordinary, so
+	// that half failing costs its table and not the response.
+	if allErr != nil {
+		writeError(w, http.StatusBadGateway, allErr.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"namespace": ns, "release": release, "revision": rev, "values": out,
-	})
+	out := map[string]any{
+		"namespace": ns, "release": release, "revision": rev,
+		"all":      valueRows(allRaw),
+		"supplied": valueRows(suppRaw),
+	}
+	if suppErr != nil {
+		s.log.WarnContext(ctx, "supplied values unreadable",
+			"namespace", ns, "release", release, "revision", rev, "err", suppErr)
+		out["suppliedError"] = suppErr.Error()
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// valueRow is one leaf of a values document, addressed the way every other view
+// here addresses one.
+type valueRow struct {
+	Path  string `json:"path"`
+	Value string `json:"value"`
+}
+
+// valueRows flattens a values document into sorted leaf rows.
+//
+// Flattened rather than handed over as yaml because the two documents are meant
+// to be compared, and comparing two nested blocks by eye is the thing a reader
+// gets wrong. A dotted path is also what the rest of swiss calls a value, so the
+// key in this table is the key a plan, a diff and an override all use.
+//
+// helm prints "null" for a release with no supplied values; that parses to an
+// empty document, which is the honest empty table.
+func valueRows(raw string) []valueRow {
+	var tree values.Tree
+	if err := yaml.Unmarshal([]byte(raw), &tree); err != nil || tree == nil {
+		return []valueRow{}
+	}
+	paths := values.LeafPaths(tree)
+	rows := make([]valueRow, 0, len(paths))
+	for _, p := range paths {
+		v, _ := values.Get(tree, p)
+		rows = append(rows, valueRow{Path: p, Value: renderValue(v)})
+	}
+	return rows
+}
+
+// renderValue prints a leaf. Scalars as themselves; a list or an empty map as
+// compact JSON, because "[--tp-size=8 --mem-fraction-static=0.85]" is Go's
+// formatting rather than anything the reader typed.
+func renderValue(v any) string {
+	switch t := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return t
+	case bool, int, int64, float64:
+		return fmt.Sprint(t)
+	}
+	if b, err := json.Marshal(v); err == nil {
+		return string(b)
+	}
+	return fmt.Sprint(v)
 }
 
 // handleRevisionPlan answers with the plan that produced a revision, read from
