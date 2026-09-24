@@ -27,6 +27,11 @@ type Input struct {
 	Namespace string
 	Overrides values.Tree
 	Edits     values.Tree
+	// CreateNamespace asks helm to create the namespace this lands in, on top
+	// of whatever the profile says. It is composed into the plan rather than
+	// passed to the apply, so the helmfile the plan carries is the one that
+	// runs -- helm does the creating, and the plan is where that is declared.
+	CreateNamespace bool
 }
 
 // Compose resolves an entry, a variant, a profile and a set of overrides into a
@@ -97,7 +102,7 @@ func Compose(in Input) (*plan.Plan, error) {
 		},
 		Engine:          in.Variant.Engine,
 		Profile:         in.Profile.Name,
-		CreateNamespace: in.Profile.CreateNamespace,
+		CreateNamespace: in.Profile.CreateNamespace || in.CreateNamespace,
 		Layers:          layers,
 	}
 	if err := p.ComputeHash(); err != nil {

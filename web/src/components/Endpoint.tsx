@@ -329,28 +329,24 @@ function ChatOutcome({ result }: { result: ChatResult }) {
 
 // What swissd sent, rendered by swissd rather than rebuilt here: a check that
 // fails is usually asking whether the entrypoint is unreachable or the request
-// was wrong, and only the sender can answer that. The key is a shell variable
-// in it, so this is runnable and carries no credential.
+// was wrong, and only the sender can answer that. Shown with the result rather
+// than behind a disclosure -- it is the first thing wanted when a check fails,
+// and it replaces the bare URL line that used to sit here. The key is a shell
+// variable in it, so this is runnable and carries no credential.
 function Sent({ url, curl }: { url: string; curl?: string }) {
   if (!curl) return <div className="font-mono text-xs break-all text-muted-foreground">{url}</div>;
   return (
-    <details className="rounded-md border">
-      <summary className="flex cursor-pointer flex-wrap items-center gap-2 px-3 py-2">
-        <span className="text-xs text-muted-foreground">Request sent</span>
-        <span className="min-w-0 font-mono text-xs break-all text-muted-foreground">{url}</span>
-      </summary>
-      <div className="space-y-1.5 border-t p-3">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-xs text-muted-foreground">
-            Runnable from a debug pod once {KEY} is exported.
-          </span>
-          <CopyButton value={curl} />
-        </div>
-        <Code lang="sh" className="whitespace-pre-wrap">
-          {curl}
-        </Code>
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-xs text-muted-foreground">
+          Request sent — runnable from a debug pod once {KEY} is exported.
+        </span>
+        <CopyButton value={curl} />
       </div>
-    </details>
+      <Code lang="sh" className="whitespace-pre-wrap">
+        {curl}
+      </Code>
+    </div>
   );
 }
 

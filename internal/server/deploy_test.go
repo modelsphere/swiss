@@ -207,38 +207,59 @@ func TestApplyOnAMissingReleaseIsAConflict(t *testing.T) {
 	}
 }
 
-// The apply fails here -- the test profile names no chart source -- but the
-// plan is written before the cluster is touched, and that is what helmfile runs.
-func TestInstallMayCreateTheNamespace(t *testing.T) {
-	srv, s := deployServer(t, true)
-	code, body := post(t, srv, "/api/plans", map[string]any{"model": "kimi-k2.5", "release": "not-live"})
+// helm creates the namespace, so the request to create it is composed into the
+// plan rather than passed to the install: the helmfile the plan carries is the
+// one helmfile runs, and a toggle on the apply would make the reviewed document
+// disagree with it.
+func TestCreateNamespaceIsComposedIntoThePlan(t *testing.T) {
+	// A profile naming a chart repo, so the plan renders its helmfile: that
+	// rendered document is what the plan view shows.
+	probe := liveProbe()
+	probe.Maps["swiss/site-profile"] = map[string]string{
+		"profile.yaml": profileYAML + "chartRepo: oci://harbor.example.com/charts\n",
+	}
+	srv, s := deployServerWith(t, probe, true)
+
+	code, body := post(t, srv, "/api/plans", map[string]any{
+		"model": "kimi-k2.5", "release": "not-live", "createNamespace": true,
+	})
 	hash, _ := body["hash"].(string)
 	if code != 200 || hash == "" {
 		t.Fatalf("plan failed: %d %v", code, body)
 	}
-	post(t, srv, "/api/install", map[string]any{"planHash": hash, "createNamespace": true})
-
-	p := writtenPlan(t, s, "modelforge", "not-live")
-	if !p.CreateNamespace {
-		t.Fatal("the install asked for the namespace to be created")
+	if body["createNamespace"] != true {
+		t.Errorf("the composed plan must carry it: %v", body["createNamespace"])
 	}
-	doc, err := p.HelmfileDocument("charts")
+	// The rendered helmfile is what the plan view shows and what helm reads.
+	if doc, _ := body["helmfile"].(string); !strings.Contains(doc, "createNamespace: true") {
+		t.Errorf("the plan's helmfile must say so: %q", doc)
+	}
+
+	// And the stored plan an install runs from is that same document: the
+	// workspace is materialised from it, helmDefaults included.
+	stored, err := s.store.Plan(context.Background(), hash)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !doc.HelmDefaults.CreateNS {
+	rendered, err := stored.HelmfileDocument("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rendered.HelmDefaults.CreateNS {
 		t.Error("it must reach helmDefaults, which is the only thing helm reads")
 	}
 }
 
-func TestApplyIgnoresCreateNamespace(t *testing.T) {
+// Nothing asks for it unless the plan does: no flag on the apply, and no
+// carrying one forward from a form.
+func TestCreateNamespaceIsOffUnlessComposed(t *testing.T) {
 	srv, s := deployServer(t, true)
 	_, body := post(t, srv, "/api/plans", map[string]any{"model": "modelforge", "release": "glm-53"})
 	hash, _ := body["hash"].(string)
 	post(t, srv, "/api/apply", map[string]any{"planHash": hash, "createNamespace": true})
 
 	if writtenPlan(t, s, "modelforge", "glm-53").CreateNamespace {
-		t.Error("an upgrade must not ask to create a namespace it is already in")
+		t.Error("an apply must not be able to turn it on behind the plan's back")
 	}
 }
 

@@ -42,13 +42,22 @@ func (d *deployFlags) bind(c *cobra.Command) {
 
 func (d *deployFlags) plan(cmd *cobra.Command) (*plan.Plan, error) {
 	if d.planFile != "" {
+		// The plan already answers this, and helm reads the helmfile the plan
+		// renders -- not the flags this process was given.
+		if d.createNamespace {
+			return nil, fmt.Errorf("--create-namespace composes into a plan: recompose with `swiss plan --create-namespace`, or apply %s as it stands", d.planFile)
+		}
 		return readPlan(d.planFile)
 	}
 	if d.model == "" {
 		return nil, fmt.Errorf("pass --model, or --plan with an existing plan")
 	}
-	return buildPlan(cmd.Context(), d.model, d.modelVersion, d.variant, d.release, d.namespace,
-		append(d.sets, kv("serviceId", d.serviceID), kv("model.localPath", d.localPath)))
+	return buildPlan(cmd.Context(), planInput{
+		model: d.model, modelVersion: d.modelVersion, variant: d.variant,
+		release: d.release, namespace: d.namespace,
+		sets:            append(d.sets, kv("serviceId", d.serviceID), kv("model.localPath", d.localPath)),
+		createNamespace: d.createNamespace,
+	})
 }
 
 func (d *deployFlags) runner() exec.Runner {
@@ -111,8 +120,6 @@ func applyCmd(mode exec.Mode) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			p.CreateNamespace = p.CreateNamespace || d.createNamespace
-
 			pr, err := probe()
 			if err != nil {
 				return err
@@ -144,7 +151,8 @@ func applyCmd(mode exec.Mode) *cobra.Command {
 	d.bind(c)
 	c.Flags().IntVar(&d.revision, "expect-revision", 0, "refuse if the live release is not at this revision")
 	if mode == Install {
-		c.Flags().BoolVar(&d.createNamespace, "create-namespace", false, "create the release's namespace if it does not exist")
+		c.Flags().BoolVar(&d.createNamespace, "create-namespace", false,
+			"compose helmfile's createNamespace into the plan, so helm creates the namespace")
 	}
 	return c
 }

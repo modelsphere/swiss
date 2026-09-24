@@ -10,6 +10,8 @@ export interface ClusterInfo {
   schedulerName?: string;
   namespace?: string;
   chartRepo?: string;
+  // The site's own answer, which a deploy can add to but not take away.
+  createNamespace?: boolean;
   catalog: string;
   catalogRef?: string;
   version: string;
@@ -405,6 +407,10 @@ export interface PlanRequest {
   overrides?: Record<string, unknown>;
   overridesYAML?: string;
   editsYAML?: string;
+  // Composed into the plan as helmfile's createNamespace, on top of the site
+  // profile's own setting. helm creates the namespace; this is the plan saying
+  // it may.
+  createNamespace?: boolean;
 }
 
 export interface Pod {
@@ -578,8 +584,8 @@ export const deployApi = {
   // nothing rather than as revision zero.
   apply: (planHash: string, expectRevision?: number, note?: string) =>
     post<ApplyResult>("/api/apply", { planHash, expectRevision, note }),
-  install: (planHash: string, note?: string, createNamespace?: boolean) =>
-    post<ApplyResult>("/api/install", { planHash, note, createNamespace }),
+  install: (planHash: string, note?: string) =>
+    post<ApplyResult>("/api/install", { planHash, note }),
   probe: (ns: string, release: string, auth: EntrypointAuth = {}) =>
     post<ProbeResult>(
       `/api/releases/${encodeURIComponent(ns)}/${encodeURIComponent(release)}/probe`,

@@ -22,15 +22,19 @@ func planCmd() *cobra.Command {
 		model, variant, release, namespace, out string
 		modelVersion, serviceID, localPath      string
 		sets                                    []string
-		explain                                 bool
+		explain, createNamespace                bool
 	)
 	c := &cobra.Command{
 		Use:   "plan",
 		Short: "Compose a model, a site profile and overrides into a plan",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			p, err := buildPlan(cmd.Context(), model, modelVersion, variant, release, namespace,
-				append(sets, kv("serviceId", serviceID), kv("model.localPath", localPath)))
+			p, err := buildPlan(cmd.Context(), planInput{
+				model: model, modelVersion: modelVersion, variant: variant,
+				release: release, namespace: namespace,
+				sets:            append(sets, kv("serviceId", serviceID), kv("model.localPath", localPath)),
+				createNamespace: createNamespace,
+			})
 			if err != nil {
 				return err
 			}
@@ -60,6 +64,7 @@ func planCmd() *cobra.Command {
 	c.Flags().StringArrayVar(&sets, "set", nil, "deploy-time override, key=value (repeatable)")
 	c.Flags().StringVarP(&out, "output", "o", "-", "write the plan here")
 	c.Flags().BoolVar(&explain, "explain", false, "print which layer set each value instead of the plan")
+	c.Flags().BoolVar(&createNamespace, "create-namespace", false, "compose helmfile's createNamespace into the plan, so helm creates the namespace on install")
 	_ = c.MarkFlagRequired("model")
 	return c
 }
@@ -80,7 +85,10 @@ func renderCmd() *cobra.Command {
 			if planFile != "" {
 				p, err = readPlan(planFile)
 			} else {
-				p, err = buildPlan(cmd.Context(), model, modelVersion, variant, release, namespace, sets)
+				p, err = buildPlan(cmd.Context(), planInput{
+					model: model, modelVersion: modelVersion, variant: variant,
+					release: release, namespace: namespace, sets: sets,
+				})
 			}
 			if err != nil {
 				return err
@@ -104,7 +112,15 @@ func renderCmd() *cobra.Command {
 	return c
 }
 
-func buildPlan(ctx context.Context, model, modelVersion, variant, release, namespace string, sets []string) (*plan.Plan, error) {
+// planInput is what composing a plan takes from a command line, named rather
+// than positional: half of it is optional strings that read the same way.
+type planInput struct {
+	model, modelVersion, variant, release, namespace string
+	sets                                             []string
+	createNamespace                                  bool
+}
+
+func buildPlan(ctx context.Context, in planInput) (*plan.Plan, error) {
 	catalogLoc, profileFile, err := resolve()
 	if err != nil {
 		return nil, err
@@ -120,23 +136,23 @@ func buildPlan(ctx context.Context, model, modelVersion, variant, release, names
 	if err != nil {
 		return nil, err
 	}
-	entry, err := cat.Entry(ctx, model, modelVersion)
+	entry, err := cat.Entry(ctx, in.model, in.modelVersion)
 	if err != nil {
 		return nil, err
 	}
 
 	var v catalog.Variant
-	if variant == "" {
+	if in.variant == "" {
 		v, err = entry.DefaultVariant()
 	} else {
-		v, err = entry.Variant(variant)
+		v, err = entry.Variant(in.variant)
 	}
 	if err != nil {
 		return nil, err
 	}
 
 	overrides := values.Tree{}
-	for _, s := range sets {
+	for _, s := range in.sets {
 		if s == "" {
 			continue
 		}
@@ -147,18 +163,20 @@ func buildPlan(ctx context.Context, model, modelVersion, variant, release, names
 		values.Merge(overrides, t, values.LayerForm, nil)
 	}
 
+	release := in.release
 	if release == "" {
 		release = entry.Name
 	}
 	return compose.Compose(compose.Input{
-		Catalog:   cat.Fetcher.String(),
-		Ref:       cat.Ref,
-		Entry:     entry,
-		Variant:   v,
-		Profile:   *prof,
-		Release:   release,
-		Namespace: namespace,
-		Overrides: overrides,
+		Catalog:         cat.Fetcher.String(),
+		Ref:             cat.Ref,
+		Entry:           entry,
+		Variant:         v,
+		Profile:         *prof,
+		Release:         release,
+		Namespace:       in.namespace,
+		Overrides:       overrides,
+		CreateNamespace: in.createNamespace,
 	})
 }
 

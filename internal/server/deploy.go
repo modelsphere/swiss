@@ -48,6 +48,10 @@ type planRequest struct {
 	// EditsYAML is the plan editor: applied after every layer, exempt from
 	// ownership, and labelled "edit" wherever the plan is shown.
 	EditsYAML string `json:"editsYAML,omitempty"`
+	// CreateNamespace composes helmfile's createNamespace into the plan, on top
+	// of the site profile's own setting. helm is what creates the namespace;
+	// this is where the plan says so.
+	CreateNamespace bool `json:"createNamespace,omitempty"`
 }
 
 type applyRequest struct {
@@ -66,9 +70,6 @@ type applyRequest struct {
 	// recorded in the audit log and beside the release, and read by nothing --
 	// a diff says what changed, and only a person can say why.
 	Note string `json:"note,omitempty"`
-	// CreateNamespace is honoured on install only: an upgrade's namespace holds
-	// the live release already.
-	CreateNamespace bool `json:"createNamespace,omitempty"`
 }
 
 func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
@@ -192,15 +193,16 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 	}
 
 	return compose.Compose(compose.Input{
-		Catalog:   cat.Fetcher.String(),
-		Ref:       cat.Ref,
-		Entry:     entry,
-		Variant:   v,
-		Profile:   *prof,
-		Release:   release,
-		Namespace: req.Namespace,
-		Overrides: overrides,
-		Edits:     edits,
+		Catalog:         cat.Fetcher.String(),
+		Ref:             cat.Ref,
+		Entry:           entry,
+		Variant:         v,
+		Profile:         *prof,
+		Release:         release,
+		Namespace:       req.Namespace,
+		Overrides:       overrides,
+		Edits:           edits,
+		CreateNamespace: req.CreateNamespace,
 	})
 }
 
@@ -390,10 +392,6 @@ func (s *Server) handleApply(mode exec.Mode) http.HandlerFunc {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		if mode == exec.Install && req.CreateNamespace {
-			p.CreateNamespace = true
-		}
-
 		s.applyPlan(ctx, w, p, mode, req.ExpectRevision, actionName(mode), req.Note)
 	}
 }

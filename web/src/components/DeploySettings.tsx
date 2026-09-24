@@ -27,6 +27,10 @@ export interface Form {
   slo: boolean;
   serviceMonitor: boolean;
   namespace: string;
+  // createNamespace is composed into the plan as helmfile's createNamespace:
+  // helm creates the namespace, and the plan is where that is declared. The
+  // site profile may already say so, in which case this adds nothing.
+  createNamespace: boolean;
   serviceId: string;
   localPath: string;
   scaler: boolean;
@@ -49,6 +53,7 @@ export const EMPTY: Form = {
   slo: true,
   serviceMonitor: true,
   namespace: "",
+  createNamespace: false,
   serviceId: "",
   localPath: "",
   scaler: false,
@@ -243,6 +248,34 @@ export function DeploySettings({
               placeholder={cluster?.namespace ?? "the site profile's"}
             />
           </Row>
+
+          {/* A property of the plan, not of the apply: it renders as
+              helmDefaults.createNamespace in the helmfile the plan carries, and
+              helm is what creates the namespace. Composing it here is what
+              makes the rendered helmfile on the Plan tab the one that runs.
+
+              Hidden on an upgrade: the live release is in that namespace
+              already. */}
+          {!lockIdentity && (
+            <Row
+              label="Create namespace"
+              note="helm creates it during install — helmDefaults.createNamespace in the plan's helmfile"
+              toggle={
+                <Switch
+                  checked={form.createNamespace || !!cluster?.createNamespace}
+                  onChange={(v) => onChange({ createNamespace: v })}
+                  disabled={cluster?.createNamespace}
+                  label="create the namespace"
+                />
+              }
+            >
+              {cluster?.createNamespace && (
+                <span className="text-xs text-muted-foreground">
+                  the site profile already asks for this on every deploy
+                </span>
+              )}
+            </Row>
+          )}
         </CardContent>
       </Card>
 
@@ -738,6 +771,7 @@ export function planRequest(
     variant: opts.variant || undefined,
     release: f.serviceId.trim() || undefined,
     namespace: f.namespace.trim() || undefined,
+    createNamespace: f.createNamespace || undefined,
     serviceId: f.serviceId.trim() || undefined,
     localPath: f.localPath.trim() || undefined,
     overrides,
