@@ -198,7 +198,12 @@ export interface SiteProfile {
 export interface ProfileResponse {
   source: string;
   cluster: string;
-  profile: SiteProfile;
+  // Absent when the stored document does not parse: there is then nothing
+  // swissd can compose against, which is the same state as having no profile.
+  profile?: SiteProfile;
+  // Why it did not parse, when it did not. The document still comes back, so
+  // the line it names can be fixed rather than the profile retyped.
+  error?: string;
   // The stored text, which is what the editor edits. The parsed view above is
   // what swissd composes against; editing that would drop every comment.
   yaml?: string;

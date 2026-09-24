@@ -27,7 +27,20 @@ export function Setup() {
   const configured = !!session.data?.initialized;
   // An install that got half-way through keeps what it saved; everything else
   // starts from the server's own default.
-  const start = existing.data ?? template.data;
+  //
+  // The two halves are chosen separately on purpose. A stored document that
+  // does not parse has no profile to seed the form with -- that falls back to
+  // the default -- but its text is exactly what has to be edited, so the YAML
+  // tab opens on it rather than on a template that would discard the whole
+  // profile to fix one line.
+  const startProfile = existing.data?.profile ?? template.data.profile;
+  const startYaml = existing.data?.yaml ?? template.data.yaml ?? "";
+
+  // The server's own default failing to parse is a bug in swissd, not something
+  // this page can seed around.
+  if (!startProfile) {
+    return <ErrorState what="the setup" error={new Error("the default profile does not parse")} />;
+  }
 
   return (
     <div className="mx-auto max-w-3xl space-y-5 px-4 py-8">
@@ -41,6 +54,24 @@ export function Setup() {
         </p>
       </div>
 
+      {existing.data?.error && (
+        <Card>
+          <CardContent className="p-4 text-sm">
+            <div className="font-medium text-warning">
+              The stored profile does not parse, so swissd has nothing to compose against.
+            </div>
+            <pre className="mt-2 overflow-x-auto font-mono text-xs text-muted-foreground">
+              {existing.data.error}
+            </pre>
+            <p className="mt-2 text-muted-foreground">
+              The YAML tab below opens on the stored document — fix the line it names and
+              save. The form tab starts from the default instead, and saving from it would
+              replace the whole profile.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Site profile</CardTitle>
@@ -51,8 +82,8 @@ export function Setup() {
         </CardHeader>
         <CardContent>
           <ProfileEditor
-            profile={start.profile}
-            yaml={start.yaml ?? ""}
+            profile={startProfile}
+            yaml={startYaml}
             submitLabel={configured ? "Save profile" : "Save and start"}
             onSaved={() => navigate("/", { replace: true })}
           />

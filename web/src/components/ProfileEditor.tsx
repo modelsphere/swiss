@@ -40,8 +40,10 @@ export function ProfileEditor({
       qc.setQueryData(["profile"], saved);
       qc.invalidateQueries({ queryKey: ["session"] });
       qc.invalidateQueries({ queryKey: ["cluster"] });
-      // Whichever half was not edited is now stale.
-      setForm(saved.profile);
+      // Whichever half was not edited is now stale. A save that came back
+      // without a profile did not parse, which the server refuses -- so this is
+      // only ever the parsed result of what was just written.
+      if (saved.profile) setForm(saved.profile);
       setYaml(saved.yaml ?? "");
       onSaved?.();
     },

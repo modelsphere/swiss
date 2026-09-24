@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Navigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +19,11 @@ export function SiteProfile() {
 
   if (isPending) return <Loading what="the site profile" />;
   if (error) return <ErrorState what="the site profile" error={error} />;
+
+  // The stored document does not parse, so there is nothing to show as parsed.
+  // Setup is where it gets fixed -- it opens on the same text -- and the site
+  // reports itself uninitialised anyway, which is the state this is.
+  if (!data.profile) return <Navigate to="/setup" replace />;
 
   const p = data.profile;
   const auth = p.route?.auth;

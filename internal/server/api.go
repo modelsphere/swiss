@@ -166,29 +166,36 @@ func (s *Server) handleCatalogModel(w http.ResponseWriter, r *http.Request) {
 
 // handleProfile serves the site profile as parsed, not as stored: what swissd
 // is actually composing against, after defaults.
+//
+// A document that does not parse comes back without `profile` and with the
+// reason, rather than as an error. It is the same state as having no profile at
+// all -- swissd cannot compose against it -- and the site is already reported as
+// uninitialised, so the web sends it to setup. Answering with a 502 instead made
+// the one page that could fix it render a dead error, and the text is here so
+// the offending line can be deleted rather than the whole profile retyped.
 func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := contextWithTimeout(r, 15*time.Second)
 	defer cancel()
-	p, err := s.Profile(ctx)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
-	}
+
 	raw, _, rawErr := s.readProfile(ctx)
 	if rawErr != nil {
-		// Parsed fine a moment ago, so this is a re-read losing a race with an
-		// edit. The parsed view is still the answer; the source text is not.
-		s.log.WarnContext(ctx, "profile source unreadable", "err", rawErr)
+		writeError(w, http.StatusBadGateway, rawErr.Error())
+		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	out := map[string]any{
 		"source":  s.cfg.Cluster.Profile.Ref(),
 		"cluster": s.cfg.Cluster.Name,
-		"profile": p,
 		// The stored text, which is what the editor edits. The parsed view
 		// above is what swissd composes against; showing only that would mean
 		// an edit round trip silently dropping every comment in the file.
 		"yaml": string(raw),
-	})
+	}
+	if p, err := s.Profile(ctx); err == nil {
+		out["profile"] = p
+	} else {
+		out["error"] = err.Error()
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // handleProfileTemplate is the profile a site that has none starts from. Served
