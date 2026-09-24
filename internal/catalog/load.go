@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/aceforeverd/swiss/internal/values"
+	"github.com/modelsphere/swiss/internal/values"
 	"gopkg.in/yaml.v3"
 )
 

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aceforeverd/swiss/internal/cluster"
-	"github.com/aceforeverd/swiss/internal/site"
+	"github.com/modelsphere/swiss/internal/cluster"
+	"github.com/modelsphere/swiss/internal/site"
 )
 
 // Writing the profile, which swissd owns: the chart creates none, so this is

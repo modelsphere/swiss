@@ -8,12 +8,12 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/aceforeverd/swiss/internal/catalog"
-	"github.com/aceforeverd/swiss/internal/compose"
-	"github.com/aceforeverd/swiss/internal/plan"
-	"github.com/aceforeverd/swiss/internal/render"
-	"github.com/aceforeverd/swiss/internal/site"
-	"github.com/aceforeverd/swiss/internal/values"
+	"github.com/modelsphere/swiss/internal/catalog"
+	"github.com/modelsphere/swiss/internal/compose"
+	"github.com/modelsphere/swiss/internal/plan"
+	"github.com/modelsphere/swiss/internal/render"
+	"github.com/modelsphere/swiss/internal/site"
+	"github.com/modelsphere/swiss/internal/values"
 	"github.com/spf13/cobra"
 )
 

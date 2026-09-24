@@ -20,7 +20,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/aceforeverd/swiss/internal/plan"
+	"github.com/modelsphere/swiss/internal/plan"
 	_ "modernc.org/sqlite"
 )
 

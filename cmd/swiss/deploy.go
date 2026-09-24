@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/aceforeverd/swiss/internal/cluster"
-	"github.com/aceforeverd/swiss/internal/exec"
-	"github.com/aceforeverd/swiss/internal/plan"
+	"github.com/modelsphere/swiss/internal/cluster"
+	"github.com/modelsphere/swiss/internal/exec"
+	"github.com/modelsphere/swiss/internal/plan"
 	"github.com/spf13/cobra"
 )
 

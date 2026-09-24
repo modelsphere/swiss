@@ -11,13 +11,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aceforeverd/swiss/internal/auth"
-	"github.com/aceforeverd/swiss/internal/catalog"
-	"github.com/aceforeverd/swiss/internal/cluster"
-	"github.com/aceforeverd/swiss/internal/config"
-	"github.com/aceforeverd/swiss/internal/exec"
-	"github.com/aceforeverd/swiss/internal/site"
-	"github.com/aceforeverd/swiss/internal/store"
+	"github.com/modelsphere/swiss/internal/auth"
+	"github.com/modelsphere/swiss/internal/catalog"
+	"github.com/modelsphere/swiss/internal/cluster"
+	"github.com/modelsphere/swiss/internal/config"
+	"github.com/modelsphere/swiss/internal/exec"
+	"github.com/modelsphere/swiss/internal/site"
+	"github.com/modelsphere/swiss/internal/store"
 )
 
 // Server is the read path. It holds no database: every answer comes from the

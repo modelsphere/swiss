@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/aceforeverd/swiss/internal/plan"
-	"github.com/aceforeverd/swiss/internal/values"
+	"github.com/modelsphere/swiss/internal/plan"
+	"github.com/modelsphere/swiss/internal/values"
 )
 
 func open(t *testing.T) *Store {

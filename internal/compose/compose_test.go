@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aceforeverd/swiss/internal/catalog"
-	"github.com/aceforeverd/swiss/internal/site"
-	"github.com/aceforeverd/swiss/internal/values"
+	"github.com/modelsphere/swiss/internal/catalog"
+	"github.com/modelsphere/swiss/internal/site"
+	"github.com/modelsphere/swiss/internal/values"
 )
 
 func testInput() Input {

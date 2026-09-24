@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/aceforeverd/swiss/internal/exec"
-	"github.com/aceforeverd/swiss/internal/plan"
+	"github.com/modelsphere/swiss/internal/exec"
+	"github.com/modelsphere/swiss/internal/plan"
 )
 
 type rollbackRequest struct {

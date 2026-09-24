@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aceforeverd/swiss/internal/cluster"
-	"github.com/aceforeverd/swiss/web"
+	"github.com/modelsphere/swiss/internal/cluster"
+	"github.com/modelsphere/swiss/web"
 )
 
 // TestEmbeddedUIIsServed exercises the real built bundle against the real

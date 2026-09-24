@@ -10,11 +10,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aceforeverd/swiss/internal/catalog"
-	"github.com/aceforeverd/swiss/internal/cluster"
-	"github.com/aceforeverd/swiss/internal/config"
-	"github.com/aceforeverd/swiss/internal/plan"
-	"github.com/aceforeverd/swiss/internal/site"
+	"github.com/modelsphere/swiss/internal/catalog"
+	"github.com/modelsphere/swiss/internal/cluster"
+	"github.com/modelsphere/swiss/internal/config"
+	"github.com/modelsphere/swiss/internal/plan"
+	"github.com/modelsphere/swiss/internal/site"
 	"gopkg.in/yaml.v3"
 )
 

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aceforeverd/swiss/internal/cluster"
+	"github.com/modelsphere/swiss/internal/cluster"
 )
 
 func TestProfileEndpointServesTheParsedProfile(t *testing.T) {

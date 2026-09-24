@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/aceforeverd/swiss/internal/cluster"
+	"github.com/modelsphere/swiss/internal/cluster"
 )
 
 // managed seeds n swiss-deployed releases, named so their sort order is obvious.

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aceforeverd/swiss/internal/cluster"
+	"github.com/modelsphere/swiss/internal/cluster"
 )
 
 // stubHelm writes a helm that reports whatever the test needs. The real binary

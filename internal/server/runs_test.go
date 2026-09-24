@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/aceforeverd/swiss/internal/store"
+	"github.com/modelsphere/swiss/internal/store"
 )
 
 func seedRuns(t *testing.T, s *Server, runs ...store.Run) {

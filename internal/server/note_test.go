@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aceforeverd/swiss/internal/plan"
-	"github.com/aceforeverd/swiss/internal/values"
+	"github.com/modelsphere/swiss/internal/plan"
+	"github.com/modelsphere/swiss/internal/values"
 )
 
 // The note is the half of a change nothing else records: a diff says what

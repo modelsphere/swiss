@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/aceforeverd/swiss/internal/cluster"
-	"github.com/aceforeverd/swiss/internal/plan"
+	"github.com/modelsphere/swiss/internal/cluster"
+	"github.com/modelsphere/swiss/internal/plan"
 )
 
 type State struct {

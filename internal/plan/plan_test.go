@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aceforeverd/swiss/internal/values"
+	"github.com/modelsphere/swiss/internal/values"
 )
 
 func testPlan() *Plan {

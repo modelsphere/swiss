@@ -3,8 +3,8 @@ package server
 import (
 	"testing"
 
-	"github.com/aceforeverd/swiss/internal/cluster"
-	"github.com/aceforeverd/swiss/internal/values"
+	"github.com/modelsphere/swiss/internal/cluster"
+	"github.com/modelsphere/swiss/internal/values"
 )
 
 // A fixed replica count beside a live scaler is two answers to one question.

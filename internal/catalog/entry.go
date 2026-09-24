@@ -11,7 +11,7 @@ package catalog
 import (
 	"fmt"
 
-	"github.com/aceforeverd/swiss/internal/values"
+	"github.com/modelsphere/swiss/internal/values"
 )
 
 const APIVersion = "catalog.swiss/v1"

@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/aceforeverd/swiss/internal/cluster"
+	"github.com/modelsphere/swiss/internal/cluster"
 )
 
 // counting records which cluster reads a request actually makes, and with what

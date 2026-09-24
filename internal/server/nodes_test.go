@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/aceforeverd/swiss/internal/cluster"
+	"github.com/modelsphere/swiss/internal/cluster"
 )
 
 func gpuProbe() cluster.Fake {

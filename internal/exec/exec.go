@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/aceforeverd/swiss/internal/plan"
+	"github.com/modelsphere/swiss/internal/plan"
 )
 
 type Runner struct {

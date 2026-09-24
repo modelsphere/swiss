@@ -13,8 +13,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/aceforeverd/swiss/internal/config"
-	"github.com/aceforeverd/swiss/internal/version"
+	"github.com/modelsphere/swiss/internal/config"
+	"github.com/modelsphere/swiss/internal/version"
 	"github.com/spf13/cobra"
 )
 

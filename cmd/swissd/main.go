@@ -18,13 +18,13 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/aceforeverd/swiss/internal/auth"
-	"github.com/aceforeverd/swiss/internal/cluster"
-	"github.com/aceforeverd/swiss/internal/config"
-	"github.com/aceforeverd/swiss/internal/server"
-	"github.com/aceforeverd/swiss/internal/store"
-	"github.com/aceforeverd/swiss/internal/version"
-	"github.com/aceforeverd/swiss/web"
+	"github.com/modelsphere/swiss/internal/auth"
+	"github.com/modelsphere/swiss/internal/cluster"
+	"github.com/modelsphere/swiss/internal/config"
+	"github.com/modelsphere/swiss/internal/server"
+	"github.com/modelsphere/swiss/internal/store"
+	"github.com/modelsphere/swiss/internal/version"
+	"github.com/modelsphere/swiss/web"
 )
 
 func main() {

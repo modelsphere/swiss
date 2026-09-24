@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aceforeverd/swiss/internal/cluster"
-	"github.com/aceforeverd/swiss/internal/values"
+	"github.com/modelsphere/swiss/internal/cluster"
+	"github.com/modelsphere/swiss/internal/values"
 )
 
 // deployed seeds a release with a plan beside it, the way an apply leaves it.

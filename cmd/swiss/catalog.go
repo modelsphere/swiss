@@ -6,7 +6,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/aceforeverd/swiss/internal/catalog"
+	"github.com/modelsphere/swiss/internal/catalog"
 	"github.com/spf13/cobra"
 )
 

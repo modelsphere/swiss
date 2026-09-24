@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aceforeverd/swiss/internal/cluster"
-	"github.com/aceforeverd/swiss/internal/values"
+	"github.com/modelsphere/swiss/internal/cluster"
+	"github.com/modelsphere/swiss/internal/values"
 )
 
 func statusOf(t *testing.T, gateway string, overrides values.Tree) map[string]any {

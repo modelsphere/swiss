@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aceforeverd/swiss/internal/cluster"
-	"github.com/aceforeverd/swiss/internal/config"
-	"github.com/aceforeverd/swiss/internal/plan"
+	"github.com/modelsphere/swiss/internal/cluster"
+	"github.com/modelsphere/swiss/internal/config"
+	"github.com/modelsphere/swiss/internal/plan"
 )
 
 func discardLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }

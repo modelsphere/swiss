@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aceforeverd/swiss/internal/auth"
-	"github.com/aceforeverd/swiss/internal/cluster"
+	"github.com/modelsphere/swiss/internal/auth"
+	"github.com/modelsphere/swiss/internal/cluster"
 )
 
 const (

@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aceforeverd/swiss/internal/cluster"
-	"github.com/aceforeverd/swiss/internal/plan"
-	"github.com/aceforeverd/swiss/internal/site"
-	"github.com/aceforeverd/swiss/internal/values"
+	"github.com/modelsphere/swiss/internal/cluster"
+	"github.com/modelsphere/swiss/internal/plan"
+	"github.com/modelsphere/swiss/internal/site"
+	"github.com/modelsphere/swiss/internal/values"
 )
 
 type releaseStatus struct {

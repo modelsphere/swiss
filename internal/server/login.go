@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aceforeverd/swiss/internal/auth"
+	"github.com/modelsphere/swiss/internal/auth"
 )
 
 // cookieName is the session. HttpOnly, so a script that gets onto the page

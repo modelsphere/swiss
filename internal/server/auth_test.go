@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/aceforeverd/swiss/internal/site"
+	"github.com/modelsphere/swiss/internal/site"
 )
 
 func headersFor(t *testing.T, s *Server, cfg site.RouteAuth, req entrypointAuth) http.Header {

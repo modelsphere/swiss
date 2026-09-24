@@ -1,4 +1,4 @@
-module github.com/aceforeverd/swiss
+module github.com/modelsphere/swiss
 
 go 1.26.0
 
