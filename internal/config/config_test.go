@@ -185,8 +185,8 @@ server:
   gpuProductLabels:
     custom.com/npu: custom.com/npu.sku
     huawei.com/Ascend910:
-      - accelerator-type
       - accelerator/huawei-ascend910
+      - accelerator-type
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -195,7 +195,7 @@ server:
 	if len(m["custom.com/npu"]) != 1 || m["custom.com/npu"][0] != "custom.com/npu.sku" {
 		t.Errorf("unexpected custom.com/npu: %v", m["custom.com/npu"])
 	}
-	if len(m["huawei.com/Ascend910"]) != 2 || m["huawei.com/Ascend910"][0] != "accelerator-type" {
+	if len(m["huawei.com/Ascend910"]) != 2 || m["huawei.com/Ascend910"][0] != "accelerator/huawei-ascend910" {
 		t.Errorf("unexpected huawei.com/Ascend910: %v", m["huawei.com/Ascend910"])
 	}
 }

@@ -328,35 +328,17 @@ func (k *Kube) Ping(ctx context.Context) error {
 	return err
 }
 
-// DefaultGPUProductLabels maps standard accelerator extended resource names to
-// candidate node label keys used to categorize each GPU SKU per vendor.
-// Evaluated in order; the first matching non-empty label on the node wins.
+// DefaultGPUProductLabels maps extended resource names (GPU count keys) to the
+// node label that names each SKU under that vendor. Order matters: first
+// matching non-empty label wins. Values must match Requires.ProductLabel so
+// inventory and deploy affinity read the same key; site-specific alternates
+// belong in server.gpuProductLabels, not here.
 var DefaultGPUProductLabels = map[string][]string{
-	"nvidia.com/gpu": {
-		"nvidia.com/gpu.product",
-	},
-	"huawei.com/Ascend910": {
-		"accelerator-type",
-		"accelerator/huawei-ascend910",
-		"huawei.com/ascend-chip-name",
-		"accelerator",
-	},
-	"cambricon.com/mlu": {
-		"cambricon.com/mlu.product",
-		"cambricon.com/model",
-		"cambricon.com/prod",
-	},
-	"hygon.com/dcu": {
-		"hygon.com/dcu.product",
-		"hygon.com/dcu-model",
-		"dcu-model",
-	},
-	"amd.com/gpu": {
-		"amd.com/gpu.product-name",
-		"amd.com/gpu.product",
-		"amd.com/gpu.device-id",
-		"beta.amd.com/gpu.product-name",
-	},
+	"nvidia.com/gpu":       {"nvidia.com/gpu.product"},
+	"huawei.com/Ascend910": {"accelerator/huawei-ascend910"},
+	"cambricon.com/mlu":    {"cambricon.com/mlu.product"},
+	"hygon.com/dcu":        {"hygon.com/dcu.product"},
+	"amd.com/gpu":          {"amd.com/gpu.device-id"},
 }
 
 func (k *Kube) productLabels() map[string][]string {

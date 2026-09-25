@@ -162,7 +162,7 @@ func TestNodesReadAscendAndOtherAccelerators(t *testing.T) {
 		&corev1.Node{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:   "ascend-1",
-				Labels: map[string]string{"accelerator-type": "module-910b-8"},
+				Labels: map[string]string{"accelerator/huawei-ascend910": "module-910b-8"},
 			},
 			Status: corev1.NodeStatus{
 				Allocatable: corev1.ResourceList{"huawei.com/Ascend910": resource.MustParse("8")},

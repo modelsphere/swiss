@@ -32,17 +32,16 @@ export const VENDOR_RESOURCES: Record<string, string> = {
   amd: "amd.com/gpu",
 };
 
+// Vendor match is resource-name equality only. Product labels group SKUs under
+// a vendor; they are never compared to the extended resource name. Missing
+// GPUResource means we do not know — do not invent a fallback.
 export function matchesVendor(
   vendor: string | undefined,
   node: { GPUResource?: string; GPUProduct?: string },
 ): boolean {
-  const v = vendor ?? "nvidia";
-  const expected = VENDOR_RESOURCES[v];
-  if (node.GPUResource) {
-    return node.GPUResource === expected;
+  const expected = VENDOR_RESOURCES[vendor ?? "nvidia"];
+  if (!node.GPUResource || !expected) {
+    return true;
   }
-  if (expected) {
-    return node.GPUProduct === expected;
-  }
-  return true;
+  return node.GPUResource === expected;
 }
