@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router";
 import { useQuery } from "@tanstack/react-query";
+import { ExternalLink } from "lucide-react";
 import { api, type IndexModel } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -74,8 +75,19 @@ function ModelCard({ m }: { m: IndexModel }) {
         </div>
         <div className="flex flex-wrap items-center gap-1">
           {latest.variants.map((v) => (
-            <Badge key={v.id} variant="outline">
-              {v.engine} · {gpuCount(v.requires)} · {vendorLabel(v.requires.vendor)}
+            <Badge key={v.id} variant="outline" className="gap-1">
+              <span>{v.engine} · {gpuCount(v.requires)} · {vendorLabel(v.requires.vendor)}</span>
+              {v.link && (
+                <a
+                  href={v.link}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center text-muted-foreground hover:text-foreground"
+                  title="Variant details"
+                >
+                  <ExternalLink className="size-3" />
+                </a>
+              )}
             </Badge>
           ))}
         </div>
@@ -105,15 +117,30 @@ function ModelCard({ m }: { m: IndexModel }) {
         >
           <div className="space-y-2">
             {latest.variants.map((v) => (
-              <Link
+              <div
                 key={v.id}
-                to={deployTo(m.name, v.id)}
-                className="block rounded-md border p-3 hover:bg-muted/50"
+                className="rounded-md border p-3 hover:bg-muted/50"
               >
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-medium">{v.id}</span>
-                  {v.default && <Badge variant="muted">default</Badge>}
-                  <Badge variant="outline">{v.engine}</Badge>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-medium">{v.id}</span>
+                    {v.default && <Badge variant="muted">default</Badge>}
+                    <Badge variant="outline">{v.engine}</Badge>
+                    {v.link && (
+                      <a
+                        href={v.link}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground hover:underline"
+                      >
+                        <span>link</span>
+                        <ExternalLink className="size-3" />
+                      </a>
+                    )}
+                  </div>
+                  <Link to={deployTo(m.name, v.id)}>
+                    <Button size="sm">Deploy</Button>
+                  </Link>
                 </div>
                 <div className="mt-1 text-xs text-muted-foreground">
                   {gpuCount(v.requires)} · {vendorLabel(v.requires.vendor)} ·{" "}
@@ -123,7 +150,7 @@ function ModelCard({ m }: { m: IndexModel }) {
                 {v.description && (
                   <p className="mt-1 text-xs text-muted-foreground">{v.description}</p>
                 )}
-              </Link>
+              </div>
             ))}
           </div>
         </Dialog>

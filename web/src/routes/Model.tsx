@@ -1,6 +1,6 @@
 import { Link, useParams, useSearchParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronLeft } from "lucide-react";
+import { ChevronLeft, ExternalLink } from "lucide-react";
 import { api, type Node, type Variant } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { gpuCount, vendorLabel } from "@/lib/gpu";
@@ -128,6 +128,17 @@ function VariantCard({
           {v.id}
           {v.default && <Badge variant="muted">default</Badge>}
           <Badge variant="outline">{v.engine}</Badge>
+          {v.link && (
+            <a
+              href={v.link}
+              target="_blank"
+              rel="noreferrer"
+              className="ml-auto inline-flex items-center gap-1 text-xs font-normal text-muted-foreground hover:text-foreground hover:underline"
+            >
+              <span>link</span>
+              <ExternalLink className="size-3" />
+            </a>
+          )}
         </CardTitle>
         {v.description && <p className="text-sm text-muted-foreground">{v.description}</p>}
       </CardHeader>

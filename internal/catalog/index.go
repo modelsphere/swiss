@@ -51,6 +51,7 @@ type IndexVariant struct {
 	Engine      string   `json:"engine"`
 	Default     bool     `json:"default,omitempty"`
 	Description string   `json:"description,omitempty"`
+	Link        string   `json:"link,omitempty"`
 	Chart       Chart    `json:"chart"`
 	Requires    Requires `json:"requires"`
 }

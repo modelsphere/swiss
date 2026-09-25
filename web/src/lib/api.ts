@@ -77,6 +77,7 @@ export interface IndexVariant {
   engine: string;
   default?: boolean;
   description?: string;
+  link?: string;
   chart: Chart;
   requires: Requires;
 }

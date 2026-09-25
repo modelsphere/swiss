@@ -51,6 +51,7 @@ type Source struct {
 type Variant struct {
 	ID          string      `yaml:"id" json:"id"`
 	Description string      `yaml:"description,omitempty" json:"description,omitempty"`
+	Link        string      `yaml:"link,omitempty" json:"link,omitempty"`
 	Default     bool        `yaml:"default,omitempty" json:"default,omitempty"`
 	Engine      string      `yaml:"engine" json:"engine"`
 	Chart       Chart       `yaml:"chart" json:"chart"`
