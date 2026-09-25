@@ -335,7 +335,7 @@ func (k *Kube) Ping(ctx context.Context) error {
 // belong in server.gpuProductLabels, not here.
 var DefaultGPUProductLabels = map[string][]string{
 	"nvidia.com/gpu":       {"nvidia.com/gpu.product"},
-	"huawei.com/Ascend910": {"accelerator/huawei-ascend910"},
+	"huawei.com/Ascend910": {"accelerator/huawei-ascend910", "accelerator"},
 	"cambricon.com/mlu":    {"cambricon.com/mlu.product"},
 	"hygon.com/dcu":        {"hygon.com/dcu.product"},
 	"amd.com/gpu":          {"amd.com/gpu.device-id"},

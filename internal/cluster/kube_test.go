@@ -169,6 +169,15 @@ func TestNodesReadAscendAndOtherAccelerators(t *testing.T) {
 			},
 		},
 		&corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:   "ascend-accelerator-label",
+				Labels: map[string]string{"accelerator": "huawei-Ascend910"},
+			},
+			Status: corev1.NodeStatus{
+				Allocatable: corev1.ResourceList{"huawei.com/Ascend910": resource.MustParse("8")},
+			},
+		},
+		&corev1.Node{
 			ObjectMeta: metav1.ObjectMeta{Name: "ascend-unlabelled"},
 			Status: corev1.NodeStatus{
 				Allocatable: corev1.ResourceList{"huawei.com/Ascend910": resource.MustParse("8")},
@@ -197,6 +206,10 @@ func TestNodesReadAscendAndOtherAccelerators(t *testing.T) {
 	ascend := byName["ascend-1"]
 	if ascend.GPUs != 8 || ascend.GPUProduct != "module-910b-8" || ascend.GPUResource != "huawei.com/Ascend910" {
 		t.Fatalf("unexpected ascend node: %+v", ascend)
+	}
+	ascendAccel := byName["ascend-accelerator-label"]
+	if ascendAccel.GPUs != 8 || ascendAccel.GPUProduct != "huawei-Ascend910" || ascendAccel.GPUResource != "huawei.com/Ascend910" {
+		t.Fatalf("unexpected ascend accelerator-label node: %+v", ascendAccel)
 	}
 	ascendUnlabelled := byName["ascend-unlabelled"]
 	if ascendUnlabelled.GPUs != 8 || ascendUnlabelled.GPUProduct != "" || ascendUnlabelled.GPUResource != "huawei.com/Ascend910" {
