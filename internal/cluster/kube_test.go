@@ -157,6 +157,70 @@ func TestNodesReadGPUFacts(t *testing.T) {
 	}
 }
 
+func TestNodesReadAscendAndOtherAccelerators(t *testing.T) {
+	cs := fake.NewSimpleClientset(
+		&corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:   "ascend-1",
+				Labels: map[string]string{"accelerator/huawei-ascend910": "module-910b-8"},
+			},
+			Status: corev1.NodeStatus{
+				Allocatable: corev1.ResourceList{"huawei.com/Ascend910": resource.MustParse("8")},
+			},
+		},
+		&corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:   "ascend-accelerator-label",
+				Labels: map[string]string{"accelerator": "huawei-Ascend910"},
+			},
+			Status: corev1.NodeStatus{
+				Allocatable: corev1.ResourceList{"huawei.com/Ascend910": resource.MustParse("8")},
+			},
+		},
+		&corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{Name: "ascend-unlabelled"},
+			Status: corev1.NodeStatus{
+				Allocatable: corev1.ResourceList{"huawei.com/Ascend910": resource.MustParse("8")},
+			},
+		},
+		&corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:   "custom-1",
+				Labels: map[string]string{"custom.com/npu.sku": "NPU-Pro-100"},
+			},
+			Status: corev1.NodeStatus{
+				Allocatable: corev1.ResourceList{"custom.com/npu": resource.MustParse("4")},
+			},
+		},
+	)
+	k := NewKubeWithClient(cs)
+	k.GPUProductLabels = map[string][]string{"custom.com/npu": {"custom.com/npu.sku"}}
+	got, err := k.Nodes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]Node{}
+	for _, n := range got {
+		byName[n.Name] = n
+	}
+	ascend := byName["ascend-1"]
+	if ascend.GPUs != 8 || ascend.GPUProduct != "module-910b-8" || ascend.GPUResource != "huawei.com/Ascend910" {
+		t.Fatalf("unexpected ascend node: %+v", ascend)
+	}
+	ascendAccel := byName["ascend-accelerator-label"]
+	if ascendAccel.GPUs != 8 || ascendAccel.GPUProduct != "huawei-Ascend910" || ascendAccel.GPUResource != "huawei.com/Ascend910" {
+		t.Fatalf("unexpected ascend accelerator-label node: %+v", ascendAccel)
+	}
+	ascendUnlabelled := byName["ascend-unlabelled"]
+	if ascendUnlabelled.GPUs != 8 || ascendUnlabelled.GPUProduct != "" || ascendUnlabelled.GPUResource != "huawei.com/Ascend910" {
+		t.Fatalf("unexpected ascend unlabelled node: %+v", ascendUnlabelled)
+	}
+	custom := byName["custom-1"]
+	if custom.GPUs != 4 || custom.GPUProduct != "NPU-Pro-100" || custom.GPUResource != "custom.com/npu" {
+		t.Fatalf("unexpected custom node: %+v", custom)
+	}
+}
+
 func TestConfigMapKeysForRouteCollision(t *testing.T) {
 	cs := fake.NewSimpleClientset(&corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "llm-route", Name: "openresty-conf"},

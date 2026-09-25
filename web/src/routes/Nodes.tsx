@@ -32,7 +32,7 @@ export function Nodes() {
   const byProduct = new Map<string, { gpus: number; used: number; nodes: number }>();
   for (const n of rows) {
     if (n.GPUs === 0) continue;
-    const key = n.GPUProduct || "unlabelled";
+    const key = n.GPUProduct || (n.GPUResource ? `${n.GPUResource} (unlabelled)` : "unlabelled");
     const agg = byProduct.get(key) ?? { gpus: 0, used: 0, nodes: 0 };
     agg.gpus += n.GPUs;
     agg.used += n.gpusUsed ?? 0;
@@ -135,7 +135,13 @@ function Row({ node, known }: { node: Node; known: boolean }) {
           )}
         </TableCell>
         <TableCell className="text-muted-foreground">
-          {node.GPUs === 0 ? "—" : node.GPUProduct || <Badge variant="warning">unlabelled</Badge>}
+          {node.GPUs === 0
+            ? "—"
+            : node.GPUProduct || (
+                <Badge variant="warning">
+                  {node.GPUResource ? `${node.GPUResource} (unlabelled)` : "unlabelled"}
+                </Badge>
+              )}
         </TableCell>
         <TableCell className="tabular-nums">{node.GPUs || "—"}</TableCell>
         <TableCell>

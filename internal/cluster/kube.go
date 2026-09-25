@@ -45,6 +45,9 @@ type Kube struct {
 	// namespace-scoped Roles can actually authorise. Getting this wrong is not a
 	// degraded view -- a cluster-wide list is simply forbidden.
 	Namespaces []string
+	// GPUProductLabels maps extended resource names (the keys, which count as GPUs)
+	// to candidate node label keys (the values) used to categorize each GPU SKU per vendor.
+	GPUProductLabels map[string][]string
 }
 
 // PlanConfigMapPrefix names the ConfigMap holding a release's live plan.
@@ -325,6 +328,62 @@ func (k *Kube) Ping(ctx context.Context) error {
 	return err
 }
 
+// DefaultGPUProductLabels maps extended resource names (GPU count keys) to the
+// node label that names each SKU under that vendor. Order matters: first
+// matching non-empty label wins. Values must match Requires.ProductLabel so
+// inventory and deploy affinity read the same key; site-specific alternates
+// belong in server.gpuProductLabels, not here.
+var DefaultGPUProductLabels = map[string][]string{
+	"nvidia.com/gpu":       {"nvidia.com/gpu.product"},
+	"huawei.com/Ascend910": {"accelerator/huawei-ascend910", "accelerator"},
+	"cambricon.com/mlu":    {"cambricon.com/mlu.product"},
+	"hygon.com/dcu":        {"hygon.com/dcu.product"},
+	"amd.com/gpu":          {"amd.com/gpu.device-id"},
+}
+
+func (k *Kube) productLabels() map[string][]string {
+	if len(k.GPUProductLabels) == 0 {
+		return DefaultGPUProductLabels
+	}
+	merged := make(map[string][]string, len(DefaultGPUProductLabels)+len(k.GPUProductLabels))
+	for r, l := range DefaultGPUProductLabels {
+		merged[r] = l
+	}
+	for r, l := range k.GPUProductLabels {
+		r = strings.TrimSpace(r)
+		if r != "" {
+			merged[r] = l
+		}
+	}
+	return merged
+}
+
+func (k *Kube) gpuProduct(labels map[string]string, res string) string {
+	if res == "" || len(labels) == 0 {
+		return ""
+	}
+	pl := k.productLabels()
+	for _, key := range pl[res] {
+		key = strings.TrimSpace(key)
+		if key != "" {
+			if val := labels[key]; val != "" {
+				return val
+			}
+		}
+	}
+	return ""
+}
+
+func (k *Kube) gpuResources() []string {
+	pl := k.productLabels()
+	out := make([]string, 0, len(pl))
+	for r := range pl {
+		out = append(out, r)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // Nodes lists nodes with the GPU facts a fit check needs.
 func (k *Kube) Nodes(ctx context.Context) ([]Node, error) {
 	list, err := k.client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
@@ -335,17 +394,21 @@ func (k *Kube) Nodes(ctx context.Context) ([]Node, error) {
 	for i := range list.Items {
 		n := &list.Items[i]
 		node := Node{
-			Name: n.Name,
-			// Set by GPU Feature Discovery. Absent on a node with no GPUs, and
-			// absent on a GPU node where GFD is not running -- which a fit check
-			// must report as unknown rather than as "no match".
-			GPUProduct:  n.Labels["nvidia.com/gpu.product"],
+			Name:        n.Name,
 			Labels:      n.Labels,
 			Schedulable: !n.Spec.Unschedulable,
 		}
-		if q, ok := n.Status.Allocatable["nvidia.com/gpu"]; ok {
-			node.GPUs = int(q.Value())
+		var matchedRes string
+		for _, res := range k.gpuResources() {
+			if q, ok := n.Status.Allocatable[corev1.ResourceName(res)]; ok && q.Value() > 0 {
+				node.GPUs += int(q.Value())
+				if matchedRes == "" {
+					matchedRes = res
+				}
+			}
 		}
+		node.GPUResource = matchedRes
+		node.GPUProduct = k.gpuProduct(n.Labels, matchedRes)
 		node.Kubelet = n.Status.NodeInfo.KubeletVersion
 		for _, c := range n.Status.Conditions {
 			if c.Type == corev1.NodeReady {
@@ -375,6 +438,7 @@ func (k *Kube) GPUAllocations(ctx context.Context) (map[string][]GPUPod, error) 
 	if err != nil {
 		return nil, fmt.Errorf("list pods for GPU allocation: %w", err)
 	}
+	resources := k.gpuResources()
 	out := map[string][]GPUPod{}
 	for i := range pods.Items {
 		p := &pods.Items[i]
@@ -383,10 +447,13 @@ func (k *Kube) GPUAllocations(ctx context.Context) (map[string][]GPUPod, error) 
 		}
 		gpus := 0
 		for _, c := range p.Spec.Containers {
-			if q, ok := c.Resources.Limits["nvidia.com/gpu"]; ok {
-				gpus += int(q.Value())
-			} else if q, ok := c.Resources.Requests["nvidia.com/gpu"]; ok {
-				gpus += int(q.Value())
+			for _, res := range resources {
+				r := corev1.ResourceName(res)
+				if q, ok := c.Resources.Limits[r]; ok {
+					gpus += int(q.Value())
+				} else if q, ok := c.Resources.Requests[r]; ok {
+					gpus += int(q.Value())
+				}
 			}
 		}
 		if gpus == 0 {

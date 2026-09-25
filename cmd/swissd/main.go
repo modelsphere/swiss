@@ -71,6 +71,9 @@ func run(configPath, addr, logLevel, webDir string) error {
 	if err != nil {
 		return fmt.Errorf("cluster access: %w", err)
 	}
+	if len(cfg.Server.GPUProductLabels) > 0 {
+		probe.GPUProductLabels = cfg.Server.GPUProductLabelsMap()
+	}
 
 	// Signals cancel the context; Run then drains in-flight requests. A diff can
 	// be in progress, and cutting it off mid-render tells the operator nothing

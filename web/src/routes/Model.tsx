@@ -1,12 +1,13 @@
 import { Link, useParams, useSearchParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronLeft } from "lucide-react";
+import { ChevronLeft, ExternalLink } from "lucide-react";
 import { api, type Node, type Variant } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
-import { gpuCount, vendorLabel } from "@/lib/gpu";
-import { Button } from "@/components/ui/button";
+import { gpuCount, matchesVendor, vendorLabel } from "@/lib/gpu";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ErrorState, Loading } from "@/components/States";
+import { cn } from "@/lib/utils";
 
 export function Model() {
   const { name = "" } = useParams();
@@ -123,13 +124,26 @@ function VariantCard({
   const fit = fitness(v, nodes);
   return (
     <Card className="flex h-full flex-col">
-      <CardHeader>
-        <CardTitle className="flex flex-wrap items-center gap-2 text-base">
-          {v.id}
-          {v.default && <Badge variant="muted">default</Badge>}
-          <Badge variant="outline">{v.engine}</Badge>
-        </CardTitle>
-        {v.description && <p className="text-sm text-muted-foreground">{v.description}</p>}
+      <CardHeader className="flex-row items-start justify-between gap-3">
+        <div className="space-y-1">
+          <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+            {v.id}
+            {v.default && <Badge variant="muted">default</Badge>}
+            <Badge variant="outline">{v.engine}</Badge>
+          </CardTitle>
+          {v.description && <p className="text-sm text-muted-foreground">{v.description}</p>}
+        </div>
+        {v.link && (
+          <a
+            href={v.link}
+            target="_blank"
+            rel="noreferrer"
+            className={cn(buttonVariants({ variant: "outline", size: "sm" }), "shrink-0 gap-1.5")}
+          >
+            <ExternalLink className="size-3.5 text-muted-foreground" />
+            <span>Docs</span>
+          </a>
+        )}
       </CardHeader>
       <CardContent className="flex flex-1 flex-col gap-2 text-sm">
         <div className="text-muted-foreground">
@@ -152,7 +166,7 @@ function VariantCard({
             <Badge variant="outline">any {vendorLabel(v.requires.vendor)}</Badge>
           )}
         </div>
-        <div className="mt-auto flex flex-wrap items-center gap-2 pt-2">
+        <div className="mt-auto flex flex-wrap items-center justify-between gap-2 border-t pt-3">
           {fit && <Badge variant={fit.ok ? "success" : "warning"}>{fit.text}</Badge>}
           <Link
             to={
@@ -175,6 +189,7 @@ function fitness(v: Variant, nodes?: Node[]): { ok: boolean; text: string } | nu
     (n) =>
       n.Schedulable &&
       n.GPUs >= v.requires.gpus &&
+      matchesVendor(v.requires.vendor, n) &&
       (!v.requires.gpuProduct?.length || v.requires.gpuProduct.includes(n.GPUProduct)),
   );
   const needed = v.requires.nodes ?? 1;

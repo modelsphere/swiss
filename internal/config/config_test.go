@@ -172,3 +172,30 @@ func TestAuthDirResolvesAgainstTheConfigFile(t *testing.T) {
 		t.Errorf("auth.dir = %q", c.Server.Auth.Dir)
 	}
 }
+
+func TestGPUProductLabelsConfig(t *testing.T) {
+	dir := t.TempDir()
+	c, err := Load(write(t, dir, "swiss.yaml", `
+catalog: ./c
+cluster:
+  name: c
+  profile: {configMap: swiss/p}
+server:
+  auth: {disabled: true}
+  gpuProductLabels:
+    custom.com/npu: custom.com/npu.sku
+    huawei.com/Ascend910:
+      - accelerator/huawei-ascend910
+      - accelerator-type
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := c.Server.GPUProductLabelsMap()
+	if len(m["custom.com/npu"]) != 1 || m["custom.com/npu"][0] != "custom.com/npu.sku" {
+		t.Errorf("unexpected custom.com/npu: %v", m["custom.com/npu"])
+	}
+	if len(m["huawei.com/Ascend910"]) != 2 || m["huawei.com/Ascend910"][0] != "accelerator/huawei-ascend910" {
+		t.Errorf("unexpected huawei.com/Ascend910: %v", m["huawei.com/Ascend910"])
+	}
+}
