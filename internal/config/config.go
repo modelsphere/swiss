@@ -87,6 +87,40 @@ type Server struct {
 	// depends on whether a credential happens to be configured is a default
 	// that ships open.
 	Auth Auth `yaml:"auth,omitempty"`
+
+	// GPUProductLabels maps extended resource names counted as GPUs on nodes
+	// to candidate node label keys used to categorize each GPU SKU per vendor.
+	// When empty, DefaultGPUProductLabels is used.
+	GPUProductLabels map[string]StringList `yaml:"gpuProductLabels,omitempty"`
+}
+
+// GPUProductLabelsMap returns the configured GPUProductLabels as map[string][]string.
+func (s Server) GPUProductLabelsMap() map[string][]string {
+	if len(s.GPUProductLabels) == 0 {
+		return nil
+	}
+	out := make(map[string][]string, len(s.GPUProductLabels))
+	for k, v := range s.GPUProductLabels {
+		out[k] = []string(v)
+	}
+	return out
+}
+
+// StringList unmarshals YAML from either a single string or a list of strings.
+type StringList []string
+
+func (s *StringList) UnmarshalYAML(value *yaml.Node) error {
+	var single string
+	if err := value.Decode(&single); err == nil {
+		*s = []string{single}
+		return nil
+	}
+	var list []string
+	if err := value.Decode(&list); err == nil {
+		*s = list
+		return nil
+	}
+	return fmt.Errorf("expected string or list of strings")
 }
 
 // Auth is the site login: one account, read from a mounted Secret.

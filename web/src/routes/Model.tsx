@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, ExternalLink } from "lucide-react";
 import { api, type Node, type Variant } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
-import { gpuCount, vendorLabel } from "@/lib/gpu";
+import { gpuCount, matchesVendor, vendorLabel } from "@/lib/gpu";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ErrorState, Loading } from "@/components/States";
@@ -189,6 +189,7 @@ function fitness(v: Variant, nodes?: Node[]): { ok: boolean; text: string } | nu
     (n) =>
       n.Schedulable &&
       n.GPUs >= v.requires.gpus &&
+      matchesVendor(v.requires.vendor, n) &&
       (!v.requires.gpuProduct?.length || v.requires.gpuProduct.includes(n.GPUProduct)),
   );
   const needed = v.requires.nodes ?? 1;

@@ -217,6 +217,7 @@ export interface ProfileResponse {
 export interface Node {
   Name: string;
   GPUProduct: string;
+  GPUResource?: string;
   // Allocatable, not capacity — what a fit check may actually use.
   GPUs: number;
   Schedulable: boolean;

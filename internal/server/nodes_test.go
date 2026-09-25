@@ -112,3 +112,29 @@ type failingNodes struct{ cluster.Fake }
 func (failingNodes) Nodes(context.Context) ([]cluster.Node, error) {
 	return nil, errors.New("nodes is forbidden")
 }
+
+func TestNodesReportAscendGPUs(t *testing.T) {
+	p := liveProbe()
+	p.Nod = []cluster.Node{
+		{Name: "ascend-1", GPUProduct: "module-910b-8", GPUResource: "huawei.com/Ascend910", GPUs: 8, Schedulable: true, Ready: true},
+	}
+	p.Alloc = map[string][]cluster.GPUPod{
+		"ascend-1": {
+			{Namespace: "modelforge", Name: "ascend-pod-0", GPUs: 8},
+		},
+	}
+	srv := testServer(t, p)
+	code, body := get(t, srv, "/api/nodes")
+	if code != 200 {
+		t.Fatalf("status %d: %v", code, body)
+	}
+	nodes := body["nodes"].([]any)
+	n := nodes[0].(map[string]any)
+	if n["GPUProduct"] != "module-910b-8" || n["GPUs"] != float64(8) || n["gpusUsed"] != float64(8) {
+		t.Fatalf("unexpected ascend node view: %v", n)
+	}
+	sum := body["summary"].(map[string]any)
+	if sum["gpus"] != float64(8) || sum["gpusUsed"] != float64(8) {
+		t.Fatalf("unexpected summary: %v", sum)
+	}
+}

@@ -23,3 +23,26 @@ export function gpuSupport(r: Requires): string {
 export function gpuCount(r: Requires): string {
   return r.nodes && r.nodes > 1 ? `${r.gpus} GPU × ${r.nodes} nodes` : `${r.gpus} GPU`;
 }
+
+export const VENDOR_RESOURCES: Record<string, string> = {
+  nvidia: "nvidia.com/gpu",
+  ascend: "huawei.com/Ascend910",
+  cambricon: "cambricon.com/mlu",
+  hygon: "hygon.com/dcu",
+  amd: "amd.com/gpu",
+};
+
+export function matchesVendor(
+  vendor: string | undefined,
+  node: { GPUResource?: string; GPUProduct?: string },
+): boolean {
+  const v = vendor ?? "nvidia";
+  const expected = VENDOR_RESOURCES[v];
+  if (node.GPUResource) {
+    return node.GPUResource === expected;
+  }
+  if (expected) {
+    return node.GPUProduct === expected;
+  }
+  return true;
+}

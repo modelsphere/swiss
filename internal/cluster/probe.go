@@ -42,8 +42,9 @@ type ManagedRef struct {
 
 // Node is what a fit check needs, plus what a node view shows.
 type Node struct {
-	Name       string
-	GPUProduct string // nvidia.com/gpu.product, as labelled by GFD
+	Name        string
+	GPUProduct  string // node label for GPU SKU (e.g. nvidia.com/gpu.product, accelerator-type)
+	GPUResource string // the matching extended resource (e.g. nvidia.com/gpu, huawei.com/Ascend910)
 	// GPUs is allocatable, which is what a fit check must compare against --
 	// capacity counts GPUs the kubelet has reserved away.
 	GPUs        int

@@ -49,6 +49,9 @@ type Server struct {
 }
 
 func New(cfg *config.Config, probe cluster.Probe, log *slog.Logger, version string) *Server {
+	if k, ok := probe.(*cluster.Kube); ok && len(cfg.Server.GPUProductLabels) > 0 {
+		k.GPUProductLabels = cfg.Server.GPUProductLabelsMap()
+	}
 	return &Server{cfg: cfg, probe: probe, log: log, version: version, namespace: cluster.SelfNamespace()}
 }
 
