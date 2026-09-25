@@ -99,13 +99,13 @@ passes them on.
 - apiGroups: ["leaderworkerset.x-k8s.io"]
   resources: ["leaderworkersets"]
   verbs: {{ $all | toJson }}
-- apiGroups: ["autoscaling.4pd.io"]
+- apiGroups: ["autoscaling.4pd.io", "autoscaling.modelsphere.dev"]
   resources: ["llmscalers"]
   verbs: {{ $all | toJson }}
-- apiGroups: ["inference.x-k8s.io"]
+- apiGroups: ["inference.x-k8s.io", "inference.modelsphere.dev"]
   resources: ["llmslorequirements"]
   verbs: {{ $all | toJson }}
-- apiGroups: ["routing.gpucluster.io"]
+- apiGroups: ["routing.gpucluster.io", "routing.modelsphere.dev"]
   resources: ["modelroutes"]
   verbs: {{ $all | toJson }}
 {{- end -}}
