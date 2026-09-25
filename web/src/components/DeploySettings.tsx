@@ -40,6 +40,14 @@ export interface Form {
   // which is the mirror when one is configured -- the switch beside the field
   // is a view of this one value, so the two cannot name different registries.
   image: string;
+  // Model route advanced: empty / untouched means leave chart defaults.
+  nginxValues: { key: string; value: string }[];
+  backendMaxConcurrency: string;
+  cartMaxLoad: string;
+  monitor: boolean;
+  monitorGpuType: string;
+  monitorNginx: boolean;
+  monitorRouter: boolean;
 }
 
 export const EMPTY: Form = {
@@ -60,6 +68,13 @@ export const EMPTY: Form = {
   replicaCount: "",
   route: "",
   image: "",
+  nginxValues: [],
+  backendMaxConcurrency: "",
+  cartMaxLoad: "",
+  monitor: true,
+  monitorGpuType: "",
+  monitorNginx: true,
+  monitorRouter: true,
 };
 
 export function DeploySettings({
@@ -340,6 +355,85 @@ export function DeploySettings({
               placeholder={cluster?.schedulerName ?? "the chart's default"}
             />
           </Row>
+
+          <div className="py-3">
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Model route
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              OpenResty route values, backend concurrency, CART load and monitor overrides
+            </p>
+          </div>
+
+          <Row label="Nginx values" note="merged into modelRoute.nginx.values; empty leaves chart defaults">
+            <NginxValues
+              rows={form.nginxValues}
+              onChange={(v) => onChange({ nginxValues: v })}
+            />
+          </Row>
+
+          <Row
+            label="Backend concurrency"
+            note="modelRoute.nginx.peers backend maxConcurrency — chart default 100"
+          >
+            <Input
+              className="w-32"
+              value={form.backendMaxConcurrency}
+              onChange={set("backendMaxConcurrency")}
+              inputMode="numeric"
+              aria-label="backend max concurrency"
+              placeholder="100"
+            />
+          </Row>
+
+          {form.cart && (
+            <Row label="CART max load" note="modelRoute.cart.maxLoad — chart default 20">
+              <Input
+                className="w-32"
+                value={form.cartMaxLoad}
+                onChange={set("cartMaxLoad")}
+                inputMode="numeric"
+                aria-label="CART max load"
+                placeholder="20"
+              />
+            </Row>
+          )}
+
+          <Row
+            label="Monitor"
+            note="writes backends into monitor's config"
+            toggle={
+              <Switch
+                checked={form.monitor}
+                onChange={toggle("monitor")}
+                label="monitor"
+              />
+            }
+          >
+            {form.monitor && (
+              <div className="flex w-full flex-col gap-3">
+                <Suggest
+                  value={form.monitorGpuType}
+                  onChange={(v) => onChange({ monitorGpuType: v })}
+                  placeholder="gpuType (optional override)"
+                />
+                <div className="grid w-full gap-x-6 gap-y-3 sm:grid-cols-2">
+                  <Flag
+                    checked={form.monitorNginx}
+                    onChange={toggle("monitorNginx")}
+                    label="nginx row"
+                    hint="modelRoute.monitor.nginx"
+                  />
+                  <Flag
+                    checked={form.monitorRouter}
+                    onChange={toggle("monitorRouter")}
+                    label="router row"
+                    hint="modelRoute.monitor.router"
+                  />
+                </div>
+              </div>
+            )}
+          </Row>
         </div>
 
       </details>
@@ -561,6 +655,81 @@ function PathInput({
         {...s.focus}
       />
       {s.hint && <TabHint />}
+    </div>
+  );
+}
+
+
+function nginxValuesOf(v: unknown): { key: string; value: string }[] {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return [];
+  return Object.entries(v as Record<string, unknown>).map(([key, val]) => ({
+    key,
+    value: val === undefined || val === null ? "" : String(val),
+  }));
+}
+
+function backendMaxConcurrencyOf(v: unknown): string {
+  if (!Array.isArray(v)) return "";
+  for (const p of v) {
+    if (!p || typeof p !== "object") continue;
+    const row = p as Record<string, unknown>;
+    if (row.use === "backend" && row.maxConcurrency !== undefined && row.maxConcurrency !== null) {
+      return String(row.maxConcurrency);
+    }
+  }
+  return "";
+}
+
+function NginxValues({
+  rows,
+  onChange,
+}: {
+  rows: { key: string; value: string }[];
+  onChange: (v: { key: string; value: string }[]) => void;
+}) {
+  const patch = (i: number, p: Partial<{ key: string; value: string }>) =>
+    onChange(rows.map((r, j) => (i === j ? { ...r, ...p } : r)));
+
+  return (
+    <div className="w-full space-y-2">
+      {rows.map((r, i) => (
+        <div key={i} className="flex flex-wrap items-center gap-2">
+          <Input
+            className="w-44 font-mono text-xs"
+            value={r.key}
+            onChange={(e) => patch(i, { key: e.target.value })}
+            placeholder="key"
+            aria-label="nginx value key"
+          />
+          <Input
+            className="min-w-0 flex-1 font-mono text-xs"
+            value={r.value}
+            onChange={(e) => patch(i, { value: e.target.value })}
+            placeholder="value"
+            aria-label="nginx value"
+          />
+          <button
+            type="button"
+            onClick={() => onChange(rows.filter((_, j) => j !== i))}
+            aria-label="remove nginx value"
+            className="text-sm text-muted-foreground hover:text-destructive"
+          >
+            remove
+          </button>
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={() => onChange([...rows, { key: "", value: "" }])}
+        className="text-sm text-muted-foreground underline hover:text-foreground"
+      >
+        Add value
+      </button>
+      {rows.length === 0 && (
+        <span className="block text-xs text-muted-foreground">
+          none — chart defaults (e.g. expose_routed_peer)
+        </span>
+      )}
     </div>
   );
 }
@@ -790,9 +959,39 @@ export function planRequest(
   overrides.serviceMonitor = { enabled: f.serviceMonitor };
 
   const route = f.route.trim();
-  overrides.modelRoute = route
-    ? { enabled: on.modelRoute, nginx: { route } }
-    : { enabled: on.modelRoute };
+  const modelRoute: Record<string, unknown> = { enabled: on.modelRoute };
+  const nginx: Record<string, unknown> = {};
+  if (route) nginx.route = route;
+
+  const nginxValues: Record<string, string> = {};
+  for (const row of f.nginxValues) {
+    const k = row.key.trim();
+    if (k) nginxValues[k] = row.value;
+  }
+  if (Object.keys(nginxValues).length) nginx.values = nginxValues;
+
+  const maxConc = num(f.backendMaxConcurrency);
+  if (maxConc !== undefined) {
+    // Lists replace, so keep the chart's two-tier shape and only change backend.
+    nginx.peers = [
+      { use: "backend", priority: 2, maxConcurrency: maxConc },
+      { use: "backend-svc", priority: 1 },
+    ];
+  }
+  if (Object.keys(nginx).length) modelRoute.nginx = nginx;
+
+  const maxLoad = num(f.cartMaxLoad);
+  if (f.cart && maxLoad !== undefined) modelRoute.cart = { maxLoad };
+
+  const monitor: Record<string, unknown> = { enabled: f.monitor };
+  if (f.monitor) {
+    if (f.monitorGpuType.trim()) monitor.gpuType = f.monitorGpuType.trim();
+    monitor.nginx = f.monitorNginx;
+    monitor.router = f.monitorRouter;
+  }
+  modelRoute.monitor = monitor;
+
+  overrides.modelRoute = modelRoute;
 
   // A row with no key tolerates nothing; it is a half-typed row, not a value.
   const tolerations = f.tolerations
@@ -875,6 +1074,13 @@ export function formFromPlan(plan: Plan): Form {
     serviceMonitor: bool("serviceMonitor.enabled"),
     priorityClassName: str("priorityClassName"),
     schedulerName: str("schedulerName"),
+    nginxValues: nginxValuesOf(at("modelRoute.nginx.values")),
+    backendMaxConcurrency: backendMaxConcurrencyOf(at("modelRoute.nginx.peers")),
+    cartMaxLoad: str("modelRoute.cart.maxLoad"),
+    monitor: bool("modelRoute.monitor.enabled", true),
+    monitorGpuType: str("modelRoute.monitor.gpuType"),
+    monitorNginx: bool("modelRoute.monitor.nginx", true),
+    monitorRouter: bool("modelRoute.monitor.router", true),
     edits:
       plan.layers?.edit && Object.keys(plan.layers.edit).length > 0
         ? toYamlish(plan.layers.edit)
