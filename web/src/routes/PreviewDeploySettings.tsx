@@ -15,9 +15,10 @@ export function PreviewDeploySettings() {
       <div>
         <h1 className="text-xl font-semibold">Deploy settings preview</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Core deploy settings, Routing options (SLO-first TTFT/TPS, CART, adaptive), then Advanced.
-          SLO and Adaptive concurrency default on. Static TTFT/TPS limits mute as fallback while SLO is on
-          but stay editable. CART max load and Adaptive floor mute until their switch is on.
+          Core deploy settings, Routing options (SLO-first TTFT/TPS, CART, adaptive, monitor), then Advanced.
+          SLO and Adaptive concurrency default on. Static TTFT/TPS stay fully visible when SLO is on
+          and are labeled "(fallback)" with captions. Monitor (enable, model, GPU type) lives on Routing.
+          CART max load and Adaptive floor mute until their switch is on.
           ServiceMonitor lives under Advanced. No backend required.
         </p>
       </div>

@@ -49,6 +49,7 @@ export interface Form {
   adaptiveCc: boolean;
   adaptiveCcMin: string;
   monitor: boolean;
+  monitorModel: string;
   monitorGpuType: string;
 }
 
@@ -78,6 +79,7 @@ export const EMPTY: Form = {
   adaptiveCc: true,
   adaptiveCcMin: "",
   monitor: true,
+  monitorModel: "",
   monitorGpuType: "",
 };
 
@@ -353,7 +355,6 @@ export function DeploySettings({
                 ? "static fallback when no declared ttft_metrics"
                 : "static threshold — SLO is off"
             }
-            muted={form.slo}
           >
             <Input
               className="w-32"
@@ -382,7 +383,6 @@ export function DeploySettings({
                 ? "static fallback when no declared tps_metrics"
                 : "static threshold — SLO is off"
             }
-            muted={form.slo}
           >
             <Input
               className="w-32"
@@ -430,6 +430,59 @@ export function DeploySettings({
               aria-label="adaptive floor"
               placeholder="omit"
               disabled={!form.adaptiveCc}
+            />
+          </Row>
+
+          <Row
+            label="Monitor"
+            note="writes backends into monitor's config"
+            toggle={
+              <Switch
+                checked={form.monitor}
+                onChange={toggle("monitor")}
+                label="monitor"
+              />
+            }
+          />
+
+          <Row
+            label="Monitor model"
+            note={
+              form.monitor
+                ? "served-model-name on monitor service rows — empty uses chart default (model.name / serviceId)"
+                : "enable Monitor to edit"
+            }
+            hint={
+              form.monitor
+                ? "modelRoute.monitor.model — ConfigMap is keyed per model, not route; two releases sharing this value clobber each other's row. Empty omits; chart defaults to model.name."
+                : "enable Monitor to edit"
+            }
+            muted={!form.monitor}
+          >
+            <Input
+              className="w-48"
+              value={form.monitorModel}
+              onChange={set("monitorModel")}
+              aria-label="monitor model"
+              placeholder="omit"
+              disabled={!form.monitor}
+            />
+          </Row>
+
+          <Row
+            label="Monitor GPU type"
+            note={
+              form.monitor
+                ? "gpu_type on monitor service rows — empty lets autoconfig derive from node GPU label"
+                : "enable Monitor to edit"
+            }
+            muted={!form.monitor}
+          >
+            <Suggest
+              value={form.monitorGpuType}
+              onChange={(v) => onChange({ monitorGpuType: v })}
+              placeholder="omit"
+              disabled={!form.monitor}
             />
           </Row>
         </CardContent>
@@ -517,25 +570,6 @@ export function DeploySettings({
             />
           </Row>
 
-          <Row
-            label="Monitor"
-            note="writes backends into monitor's config"
-            toggle={
-              <Switch
-                checked={form.monitor}
-                onChange={toggle("monitor")}
-                label="monitor"
-              />
-            }
-          >
-            {form.monitor && (
-              <Suggest
-                value={form.monitorGpuType}
-                onChange={(v) => onChange({ monitorGpuType: v })}
-                placeholder="GPU type (optional)"
-              />
-            )}
-          </Row>
         </div>
 
       </details>
@@ -1049,6 +1083,7 @@ export function planRequest(
   // keeps null — do not write form booleans (deploy fails schema) and do not
   // invent an object shape the template does not consume.
   const monitor: Record<string, unknown> = { enabled: f.monitor };
+  if (f.monitor && f.monitorModel.trim()) monitor.model = f.monitorModel.trim();
   if (f.monitor && f.monitorGpuType.trim()) monitor.gpuType = f.monitorGpuType.trim();
   modelRoute.monitor = monitor;
 
@@ -1144,6 +1179,7 @@ export function formFromPlan(plan: Plan): Form {
     backendMaxConcurrency: backendMaxConcurrencyOf(at("modelRoute.nginx.peers")),
     cartMaxLoad: str("modelRoute.cart.maxLoad"),
     monitor: bool("modelRoute.monitor.enabled", true),
+    monitorModel: str("modelRoute.monitor.model"),
     monitorGpuType: str("modelRoute.monitor.gpuType"),
     edits:
       plan.layers?.edit && Object.keys(plan.layers.edit).length > 0
