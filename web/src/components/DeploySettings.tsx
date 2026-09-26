@@ -49,9 +49,8 @@ export interface Form {
   adaptiveCc: boolean;
   adaptiveCcMin: string;
   monitor: boolean;
+  monitorModel: string;
   monitorGpuType: string;
-  monitorNginx: boolean;
-  monitorRouter: boolean;
 }
 
 export const EMPTY: Form = {
@@ -77,12 +76,11 @@ export const EMPTY: Form = {
   cartMaxLoad: "",
   ttftLimitMs: "",
   tpsLimitTps: "",
-  adaptiveCc: false,
+  adaptiveCc: true,
   adaptiveCcMin: "",
   monitor: true,
+  monitorModel: "",
   monitorGpuType: "",
-  monitorNginx: true,
-  monitorRouter: true,
 };
 
 export function DeploySettings({
@@ -271,7 +269,8 @@ export function DeploySettings({
         <CardHeader>
           <CardTitle className="text-base">Routing options</CardTitle>
           <p className="text-sm text-muted-foreground">
-            OpenResty and CART knobs for this model route. Empty number fields leave the chart default.
+            SLO-first latency and throughput: LLMSLORequirement declares ttft_metrics / tps_metrics for openresty.
+            Static TTFT/TPS limits are fallback when nothing is declared. Empty number fields leave the chart default.
           </p>
         </CardHeader>
         <CardContent className="divide-y pt-0">
@@ -331,13 +330,32 @@ export function DeploySettings({
 
           <Row
             label="SLO requirement"
-            note="LLMSLORequirement"
+            note="primary — LLMSLORequirement declares ttft_metrics / tps_metrics for openresty (beats static limits)"
+            hint="Primary source for TTFT/TPS decisions. openresty priority: declared metrics (from this CR) > runtime override > static ttft_limit_ms / tps_limit_tps"
+            caption="primary — declares ttft_metrics / tps_metrics for openresty"
             toggle={
               <Switch checked={form.slo} onChange={toggle("slo")} label="SLO requirement" />
             }
           />
 
-          <Row label="TTFT limit (ms)" note="empty omits the override">
+          <Row
+            label={form.slo ? "TTFT limit (fallback)" : "TTFT limit (ms)"}
+            note={
+              form.slo
+                ? "static fallback — ttft_limit_ms only when SLO declares no ttft_metrics; empty omits"
+                : "static threshold (SLO off) — empty omits"
+            }
+            hint={
+              form.slo
+                ? "Emergency static fallback. openresty: declared ttft_metrics > override > static ttft_limit_ms. Editable while SLO is on for bare-metal / no-metrics cases."
+                : "Primary static TTFT threshold while SLO is off (no LLMSLORequirement → no declared metrics)."
+            }
+            caption={
+              form.slo
+                ? "static fallback when no declared ttft_metrics"
+                : "static threshold — SLO is off"
+            }
+          >
             <Input
               className="w-32"
               value={form.ttftLimitMs}
@@ -348,7 +366,24 @@ export function DeploySettings({
             />
           </Row>
 
-          <Row label="TPS limit (tok/s)" note="empty omits the override">
+          <Row
+            label={form.slo ? "TPS limit (fallback)" : "TPS limit (tok/s)"}
+            note={
+              form.slo
+                ? "static fallback — tps_limit_tps only when SLO declares no tps_metrics; empty omits"
+                : "static threshold (SLO off) — empty omits"
+            }
+            hint={
+              form.slo
+                ? "Emergency static fallback. openresty: declared tps_metrics > override > static tps_limit_tps. AIMD (Adaptive concurrency) also reads the effective TPS threshold."
+                : "Primary static TPS threshold while SLO is off (no LLMSLORequirement → no declared metrics)."
+            }
+            caption={
+              form.slo
+                ? "static fallback when no declared tps_metrics"
+                : "static threshold — SLO is off"
+            }
+          >
             <Input
               className="w-32"
               value={form.tpsLimitTps}
@@ -361,7 +396,7 @@ export function DeploySettings({
 
           <Row
             label="Adaptive concurrency"
-            note="AIMD ceiling when decode rate falls below the TPS limit"
+            note="AIMD on the effective TPS signal — defaults on; stays next to TPS"
             toggle={
               <Switch
                 checked={form.adaptiveCc}
@@ -377,7 +412,12 @@ export function DeploySettings({
             label="Adaptive floor"
             note={
               form.adaptiveCc
-                ? "concurrency floor — empty omits"
+                ? "adaptive_cc_min — empty omits"
+                : "enable Adaptive concurrency to edit"
+            }
+            hint={
+              form.adaptiveCc
+                ? "adaptive_cc_min — AIMD concurrency floor (lower clamp); empty omits and openresty derives floor from static peer max × min_frac; only applies when Adaptive concurrency is on"
                 : "enable Adaptive concurrency to edit"
             }
             muted={!form.adaptiveCc}
@@ -390,6 +430,59 @@ export function DeploySettings({
               aria-label="adaptive floor"
               placeholder="omit"
               disabled={!form.adaptiveCc}
+            />
+          </Row>
+
+          <Row
+            label="Monitor"
+            note="writes backends into monitor's config"
+            toggle={
+              <Switch
+                checked={form.monitor}
+                onChange={toggle("monitor")}
+                label="monitor"
+              />
+            }
+          />
+
+          <Row
+            label="Monitor model"
+            note={
+              form.monitor
+                ? "served-model-name on monitor service rows — empty uses chart default (model.name / serviceId)"
+                : "enable Monitor to edit"
+            }
+            hint={
+              form.monitor
+                ? "modelRoute.monitor.model — ConfigMap is keyed per model, not route; two releases sharing this value clobber each other's row. Empty omits; chart defaults to model.name."
+                : "enable Monitor to edit"
+            }
+            muted={!form.monitor}
+          >
+            <Input
+              className="w-48"
+              value={form.monitorModel}
+              onChange={set("monitorModel")}
+              aria-label="monitor model"
+              placeholder="omit"
+              disabled={!form.monitor}
+            />
+          </Row>
+
+          <Row
+            label="Monitor GPU type"
+            note={
+              form.monitor
+                ? "gpu_type on monitor service rows — empty lets autoconfig derive from node GPU label"
+                : "enable Monitor to edit"
+            }
+            muted={!form.monitor}
+          >
+            <Suggest
+              value={form.monitorGpuType}
+              onChange={(v) => onChange({ monitorGpuType: v })}
+              placeholder="omit"
+              disabled={!form.monitor}
             />
           </Row>
         </CardContent>
@@ -477,41 +570,6 @@ export function DeploySettings({
             />
           </Row>
 
-          <Row
-            label="Monitor"
-            note="writes backends into monitor's config"
-            toggle={
-              <Switch
-                checked={form.monitor}
-                onChange={toggle("monitor")}
-                label="monitor"
-              />
-            }
-          >
-            {form.monitor && (
-              <div className="flex w-full flex-col gap-3">
-                <Suggest
-                  value={form.monitorGpuType}
-                  onChange={(v) => onChange({ monitorGpuType: v })}
-                  placeholder="GPU type (optional)"
-                />
-                <div className="grid w-full gap-x-6 gap-y-3 sm:grid-cols-2">
-                  <Flag
-                    checked={form.monitorNginx}
-                    onChange={toggle("monitorNginx")}
-                    label="openresty"
-                    hint="include the openresty entry in monitor"
-                  />
-                  <Flag
-                    checked={form.monitorRouter}
-                    onChange={toggle("monitorRouter")}
-                    label="CART"
-                    hint="include the CART entry in monitor"
-                  />
-                </div>
-              </div>
-            )}
-          </Row>
         </div>
 
       </details>
@@ -546,36 +604,21 @@ export function DeploySettings({
 // so toggles and number fields share one start edge (Routing options especially
 // alternates the two). The control column keeps the input's height either way,
 // so toggling a row grows it sideways and never moves what is below.
-// Flag is one feature switch with its explanation under it, so several can sit
-// on one row without any of them becoming a mystery.
-function Flag({
-  checked,
-  onChange,
-  label,
-  hint,
-}: {
-  checked: boolean;
-  onChange: (v: boolean) => void;
-  label: string;
-  hint: string;
-}) {
-  return (
-    <div className="min-w-0 space-y-1">
-      <Switch checked={checked} onChange={onChange} label={label} />
-      <p className="text-xs leading-snug text-muted-foreground">{hint}</p>
-    </div>
-  );
-}
-
 function Row({
   label,
   note,
+  hint,
+  caption,
   toggle,
   children,
   muted,
 }: {
   label: string;
   note?: string;
+  // Longer hover text when note stays short (or when note is absent).
+  hint?: string;
+  // Optional visible subline under the label (Routing SLO/fallback rows).
+  caption?: string;
   toggle?: React.ReactNode;
   children?: React.ReactNode;
   muted?: boolean;
@@ -592,8 +635,11 @@ function Row({
         muted && "opacity-60",
       )}
     >
-      <div className="text-sm font-medium" title={note}>
-        {label}
+      <div className="min-w-0" title={hint ?? note}>
+        <div className="text-sm font-medium">{label}</div>
+        {caption ? (
+          <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{caption}</p>
+        ) : null}
       </div>
       <div className="flex min-h-9 items-center">{hasControl ? toggle : null}</div>
       <div className="flex min-h-9 min-w-0 items-center">
@@ -1031,12 +1077,14 @@ export function planRequest(
   const maxLoad = num(f.cartMaxLoad);
   if (f.cart && maxLoad !== undefined) modelRoute.cart = { maxLoad };
 
+  // modelRoute.monitor.nginx / .router: chart values.schema.json allows
+  // object|null only (not boolean). Chart defaults are null (= autoconfig
+  // default on when nginx.service / cart are set). Omit those keys so helm
+  // keeps null — do not write form booleans (deploy fails schema) and do not
+  // invent an object shape the template does not consume.
   const monitor: Record<string, unknown> = { enabled: f.monitor };
-  if (f.monitor) {
-    if (f.monitorGpuType.trim()) monitor.gpuType = f.monitorGpuType.trim();
-    monitor.nginx = f.monitorNginx;
-    monitor.router = f.monitorRouter;
-  }
+  if (f.monitor && f.monitorModel.trim()) monitor.model = f.monitorModel.trim();
+  if (f.monitor && f.monitorGpuType.trim()) monitor.gpuType = f.monitorGpuType.trim();
   modelRoute.monitor = monitor;
 
   overrides.modelRoute = modelRoute;
@@ -1119,21 +1167,20 @@ export function formFromPlan(plan: Plan): Form {
     image: joinImage(str("image.repository"), str("image.tag")),
     cart: bool("cart.enabled", true),
     modelRoute: bool("modelRoute.enabled"),
-    slo: bool("sloRequirement.enabled"),
+    slo: bool("sloRequirement.enabled", true),
     serviceMonitor: bool("serviceMonitor.enabled"),
     priorityClassName: str("priorityClassName"),
     schedulerName: str("schedulerName"),
     exposeRoutedPeer: truthyStr(nv.expose_routed_peer, true),
     ttftLimitMs: nv.ttft_limit_ms ?? "",
     tpsLimitTps: nv.tps_limit_tps ?? "",
-    adaptiveCc: truthyStr(nv.adaptive_cc, false),
+    adaptiveCc: truthyStr(nv.adaptive_cc, true),
     adaptiveCcMin: nv.adaptive_cc_min ?? "",
     backendMaxConcurrency: backendMaxConcurrencyOf(at("modelRoute.nginx.peers")),
     cartMaxLoad: str("modelRoute.cart.maxLoad"),
     monitor: bool("modelRoute.monitor.enabled", true),
+    monitorModel: str("modelRoute.monitor.model"),
     monitorGpuType: str("modelRoute.monitor.gpuType"),
-    monitorNginx: bool("modelRoute.monitor.nginx", true),
-    monitorRouter: bool("modelRoute.monitor.router", true),
     edits:
       plan.layers?.edit && Object.keys(plan.layers.edit).length > 0
         ? toYamlish(plan.layers.edit)
