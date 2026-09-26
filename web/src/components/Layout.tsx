@@ -18,7 +18,7 @@ export function Layout() {
             Swiss
           </div>
 
-          <nav className="flex gap-1 text-sm">
+          <nav className="flex flex-wrap gap-1 text-sm">
             <Tab to="/">LLM deployments</Tab>
             <Tab to="/catalog">Catalog</Tab>
             <Tab to="/nodes">Nodes</Tab>

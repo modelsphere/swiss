@@ -53,6 +53,21 @@ type Node struct {
 	Schedulable bool
 	Ready       bool
 	Kubelet     string
+	// InternalIP is the node's primary address. ExternalIP is set when the
+	// cluster publishes one; many nodes have only the internal address.
+	InternalIP string
+	ExternalIP string
+	// Conditions are the kubelet's node conditions, Ready included. The node
+	// view shows them; fit checks keep using Ready and Schedulable.
+	Conditions []NodeCondition
+}
+
+// NodeCondition is one kubelet condition. Status is True, False, or Unknown.
+type NodeCondition struct {
+	Type    string
+	Status  string
+	Reason  string
+	Message string
 }
 
 // GPUPod is one pod holding GPUs on a node. Kubernetes publishes no "allocated"

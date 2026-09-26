@@ -142,6 +142,14 @@ func TestNodesReadGPUFacts(t *testing.T) {
 		},
 		Status: corev1.NodeStatus{
 			Allocatable: corev1.ResourceList{"nvidia.com/gpu": resource.MustParse("8")},
+			Addresses: []corev1.NodeAddress{
+				{Type: corev1.NodeInternalIP, Address: "10.0.0.8"},
+				{Type: corev1.NodeExternalIP, Address: "203.0.113.8"},
+			},
+			Conditions: []corev1.NodeCondition{
+				{Type: corev1.NodeReady, Status: corev1.ConditionFalse, Reason: "KubeletNotReady", Message: "node is shutting down"},
+				{Type: corev1.NodeMemoryPressure, Status: corev1.ConditionTrue, Reason: "KubeletHasInsufficientMemory"},
+			},
 		},
 	})
 	got, err := NewKubeWithClient(cs).Nodes(context.Background())
@@ -154,6 +162,15 @@ func TestNodesReadGPUFacts(t *testing.T) {
 	}
 	if len(n.Taints) != 1 || n.Taints[0] != "gpu=true:NoSchedule" {
 		t.Fatalf("taints not read: %+v", n.Taints)
+	}
+	if n.Ready || len(n.Conditions) != 2 || n.Conditions[0].Type != "Ready" || n.Conditions[0].Status != "False" || n.Conditions[0].Reason != "KubeletNotReady" {
+		t.Fatalf("conditions not read: ready=%v %+v", n.Ready, n.Conditions)
+	}
+	if n.Conditions[1].Type != "MemoryPressure" || n.Conditions[1].Status != "True" {
+		t.Fatalf("pressure condition: %+v", n.Conditions[1])
+	}
+	if n.InternalIP != "10.0.0.8" || n.ExternalIP != "203.0.113.8" {
+		t.Fatalf("addresses: internal=%q external=%q", n.InternalIP, n.ExternalIP)
 	}
 }
 

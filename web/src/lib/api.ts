@@ -223,11 +223,22 @@ export interface Node {
   Schedulable: boolean;
   Ready: boolean;
   Kubelet?: string;
+  InternalIP?: string;
+  ExternalIP?: string;
   Taints?: string[];
+  Conditions?: NodeCondition[];
   // Absent when the cluster-wide pod list was refused: unknown, not zero.
   gpusUsed?: number;
   gpusFree?: number;
   gpuPods?: GPUPod[];
+}
+
+// Status is True, False, or Unknown, as the kubelet reported it.
+export interface NodeCondition {
+  Type: string;
+  Status: string;
+  Reason?: string;
+  Message?: string;
 }
 
 export interface GPUPod {

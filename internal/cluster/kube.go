@@ -410,10 +410,28 @@ func (k *Kube) Nodes(ctx context.Context) ([]Node, error) {
 		node.GPUResource = matchedRes
 		node.GPUProduct = k.gpuProduct(n.Labels, matchedRes)
 		node.Kubelet = n.Status.NodeInfo.KubeletVersion
+		for _, a := range n.Status.Addresses {
+			switch a.Type {
+			case corev1.NodeInternalIP:
+				if node.InternalIP == "" {
+					node.InternalIP = a.Address
+				}
+			case corev1.NodeExternalIP:
+				if node.ExternalIP == "" {
+					node.ExternalIP = a.Address
+				}
+			}
+		}
 		for _, c := range n.Status.Conditions {
 			if c.Type == corev1.NodeReady {
 				node.Ready = c.Status == corev1.ConditionTrue
 			}
+			node.Conditions = append(node.Conditions, NodeCondition{
+				Type:    string(c.Type),
+				Status:  string(c.Status),
+				Reason:  c.Reason,
+				Message: c.Message,
+			})
 		}
 		for _, t := range n.Spec.Taints {
 			node.Taints = append(node.Taints, t.Key+"="+t.Value+":"+string(t.Effect))
