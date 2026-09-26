@@ -302,11 +302,19 @@ export function DeploySettings({
           </Row>
 
           <Row
+            label="CART"
+            note="Cache-aware router"
+            toggle={
+              <Switch checked={form.cart} onChange={toggle("cart")} label="CART" />
+            }
+          />
+
+          <Row
             label="CART max load"
             note={
               form.cart
                 ? "per-worker max load — empty keeps the chart default"
-                : "enable CART under Advanced → Components to edit"
+                : "enable CART to edit"
             }
             muted={!form.cart}
           >
@@ -320,6 +328,14 @@ export function DeploySettings({
               disabled={!form.cart}
             />
           </Row>
+
+          <Row
+            label="SLO requirement"
+            note="LLMSLORequirement"
+            toggle={
+              <Switch checked={form.slo} onChange={toggle("slo")} label="SLO requirement" />
+            }
+          />
 
           <Row label="TTFT limit (ms)" note="empty omits the override">
             <Input
@@ -357,18 +373,25 @@ export function DeploySettings({
             }
           />
 
-          {form.adaptiveCc && (
-            <Row label="Adaptive floor" note="concurrency floor — empty omits">
-              <Input
-                className="w-32"
-                value={form.adaptiveCcMin}
-                onChange={set("adaptiveCcMin")}
-                inputMode="numeric"
-                aria-label="adaptive floor"
-                placeholder="omit"
-              />
-            </Row>
-          )}
+          <Row
+            label="Adaptive floor"
+            note={
+              form.adaptiveCc
+                ? "concurrency floor — empty omits"
+                : "enable Adaptive concurrency to edit"
+            }
+            muted={!form.adaptiveCc}
+          >
+            <Input
+              className="w-32"
+              value={form.adaptiveCcMin}
+              onChange={set("adaptiveCcMin")}
+              inputMode="numeric"
+              aria-label="adaptive floor"
+              placeholder="omit"
+              disabled={!form.adaptiveCc}
+            />
+          </Row>
         </CardContent>
       </Card>
 
@@ -378,33 +401,17 @@ export function DeploySettings({
       <details className="rounded-lg border">
         <summary className="cursor-pointer px-4 py-3 text-sm font-medium">Advanced</summary>
         <div className="divide-y border-t px-4">
-          {/* One row rather than three: these are three independent objects the
-              release either gets or does not, each a single bit, and three
-              labelled rows read as three decisions to weigh rather than a set
-              to glance at. Each still says what it is -- a switch whose only
-              explanation is a tooltip is a switch nobody reads. */}
-          <Row label="Components" note="objects rendered alongside the release">
-            <div className="grid w-full gap-x-6 gap-y-3 sm:grid-cols-3">
-              <Flag
-                checked={form.cart}
-                onChange={toggle("cart")}
-                label="CART"
-                hint="Cache-aware router"
-              />
-              <Flag
-                checked={form.slo}
-                onChange={toggle("slo")}
-                label="SLO requirement"
-                hint="LLMSLORequirement"
-              />
-              <Flag
+          <Row
+            label="ServiceMonitor"
+            note="Prometheus metrics scraped alongside the release"
+            toggle={
+              <Switch
                 checked={form.serviceMonitor}
                 onChange={toggle("serviceMonitor")}
                 label="ServiceMonitor"
-                hint="Prometheus metrics"
               />
-            </div>
-          </Row>
+            }
+          />
 
           {/* Off is the answer almost always: the catalog pins the tag and the
               site rewrites the repository to its mirror, and between them the
