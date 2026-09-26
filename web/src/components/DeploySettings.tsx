@@ -46,7 +46,6 @@ export interface Form {
   cartMaxLoad: string;
   ttftLimitMs: string;
   tpsLimitTps: string;
-  defaultMax: string;
   adaptiveCc: boolean;
   adaptiveCcMin: string;
   monitor: boolean;
@@ -78,7 +77,6 @@ export const EMPTY: Form = {
   cartMaxLoad: "",
   ttftLimitMs: "",
   tpsLimitTps: "",
-  defaultMax: "",
   adaptiveCc: false,
   adaptiveCcMin: "",
   monitor: true,
@@ -266,6 +264,17 @@ export function DeploySettings({
             />
           )}
 
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Routing options</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            OpenResty and CART knobs for this model route. Empty number fields leave the chart default.
+          </p>
+        </CardHeader>
+        <CardContent className="divide-y pt-0">
           <Row
             label="Expose routed peer"
             note="echoes the chosen backend as X-Routed-Peer — chart default on"
@@ -292,21 +301,25 @@ export function DeploySettings({
             />
           </Row>
 
-          {form.cart && (
-            <Row
-              label="CART max load"
-              note="per-worker max load — empty keeps the chart default"
-            >
-              <Input
-                className="w-32"
-                value={form.cartMaxLoad}
-                onChange={set("cartMaxLoad")}
-                inputMode="numeric"
-                aria-label="CART max load"
-                placeholder="omit"
-              />
-            </Row>
-          )}
+          <Row
+            label="CART max load"
+            note={
+              form.cart
+                ? "per-worker max load — empty keeps the chart default"
+                : "enable CART under Advanced → Components to edit"
+            }
+            muted={!form.cart}
+          >
+            <Input
+              className="w-32"
+              value={form.cartMaxLoad}
+              onChange={set("cartMaxLoad")}
+              inputMode="numeric"
+              aria-label="CART max load"
+              placeholder="omit"
+              disabled={!form.cart}
+            />
+          </Row>
 
           <Row label="TTFT limit (ms)" note="empty omits the override">
             <Input
@@ -331,41 +344,31 @@ export function DeploySettings({
           </Row>
 
           <Row
-            label="Default max concurrency"
-            note="for peers without their own max — empty omits"
-          >
-            <Input
-              className="w-32"
-              value={form.defaultMax}
-              onChange={set("defaultMax")}
-              inputMode="numeric"
-              aria-label="default max concurrency"
-              placeholder="omit"
-            />
-          </Row>
-
-          <Row
             label="Adaptive concurrency"
             note="AIMD ceiling when decode rate falls below the TPS limit"
             toggle={
               <Switch
                 checked={form.adaptiveCc}
-                onChange={toggle("adaptiveCc")}
+                onChange={(v) =>
+                  onChange(v ? { adaptiveCc: true } : { adaptiveCc: false, adaptiveCcMin: "" })
+                }
                 label="adaptive concurrency"
               />
             }
           />
 
-          <Row label="Adaptive floor" note="concurrency floor — empty omits">
-            <Input
-              className="w-32"
-              value={form.adaptiveCcMin}
-              onChange={set("adaptiveCcMin")}
-              inputMode="numeric"
-              aria-label="adaptive floor"
-              placeholder="omit"
-            />
-          </Row>
+          {form.adaptiveCc && (
+            <Row label="Adaptive floor" note="concurrency floor — empty omits">
+              <Input
+                className="w-32"
+                value={form.adaptiveCcMin}
+                onChange={set("adaptiveCcMin")}
+                inputMode="numeric"
+                aria-label="adaptive floor"
+                placeholder="omit"
+              />
+            </Row>
+          )}
         </CardContent>
       </Card>
 
@@ -489,14 +492,14 @@ export function DeploySettings({
                   <Flag
                     checked={form.monitorNginx}
                     onChange={toggle("monitorNginx")}
-                    label="nginx row"
-                    hint="openresty entry in monitor"
+                    label="openresty"
+                    hint="include the openresty entry in monitor"
                   />
                   <Flag
                     checked={form.monitorRouter}
                     onChange={toggle("monitorRouter")}
-                    label="router row"
-                    hint="CART entry in monitor"
+                    label="CART"
+                    hint="include the CART entry in monitor"
                   />
                 </div>
               </div>
@@ -561,14 +564,21 @@ function Row({
   note,
   toggle,
   children,
+  muted,
 }: {
   label: string;
   note?: string;
   toggle?: React.ReactNode;
   children?: React.ReactNode;
+  muted?: boolean;
 }) {
   return (
-    <div className="grid gap-x-3 gap-y-1 py-2.5 sm:grid-cols-[11rem_2.25rem_minmax(0,1fr)] sm:items-center">
+    <div
+      className={cn(
+        "grid gap-x-3 gap-y-1 py-2.5 sm:grid-cols-[11rem_2.25rem_minmax(0,1fr)] sm:items-center",
+        muted && "opacity-60",
+      )}
+    >
       <div className="text-sm font-medium" title={note}>
         {label}
       </div>
@@ -989,9 +999,8 @@ export function planRequest(
   };
   if (f.ttftLimitMs.trim()) nginxValues.ttft_limit_ms = f.ttftLimitMs.trim();
   if (f.tpsLimitTps.trim()) nginxValues.tps_limit_tps = f.tpsLimitTps.trim();
-  if (f.defaultMax.trim()) nginxValues.default_max = f.defaultMax.trim();
   nginxValues.adaptive_cc = f.adaptiveCc ? "true" : "false";
-  if (f.adaptiveCcMin.trim()) nginxValues.adaptive_cc_min = f.adaptiveCcMin.trim();
+  if (f.adaptiveCc && f.adaptiveCcMin.trim()) nginxValues.adaptive_cc_min = f.adaptiveCcMin.trim();
   nginx.values = nginxValues;
 
   const maxConc = num(f.backendMaxConcurrency);
@@ -1102,7 +1111,6 @@ export function formFromPlan(plan: Plan): Form {
     exposeRoutedPeer: truthyStr(nv.expose_routed_peer, true),
     ttftLimitMs: nv.ttft_limit_ms ?? "",
     tpsLimitTps: nv.tps_limit_tps ?? "",
-    defaultMax: nv.default_max ?? "",
     adaptiveCc: truthyStr(nv.adaptive_cc, false),
     adaptiveCcMin: nv.adaptive_cc_min ?? "",
     backendMaxConcurrency: backendMaxConcurrencyOf(at("modelRoute.nginx.peers")),

@@ -15,8 +15,9 @@ export function PreviewDeploySettings() {
       <div>
         <h1 className="text-xl font-semibold">Deploy settings preview</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Named routing knobs on the main card; Monitor stays under Advanced. Toggle CART
-          off to hide CART max load. No backend required.
+          Core deploy settings, standalone Routing options, then Advanced. Toggle CART off
+          under Advanced → Components to mute CART max load; Adaptive floor hides when
+          Adaptive is off. No backend required.
         </p>
       </div>
       <DeploySettings
