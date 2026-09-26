@@ -77,7 +77,7 @@ export const EMPTY: Form = {
   cartMaxLoad: "",
   ttftLimitMs: "",
   tpsLimitTps: "",
-  adaptiveCc: false,
+  adaptiveCc: true,
   adaptiveCcMin: "",
   monitor: true,
   monitorGpuType: "",
@@ -337,7 +337,14 @@ export function DeploySettings({
             }
           />
 
-          <Row label="TTFT limit (ms)" note="empty omits the override">
+          <Row
+            label="TTFT limit (ms)"
+            note={
+              form.slo
+                ? "fallback — LLMSLORequirement → ttft_metrics wins; static ttft_limit_ms only when no declared metrics"
+                : "primary static threshold — empty omits"
+            }
+          >
             <Input
               className="w-32"
               value={form.ttftLimitMs}
@@ -348,7 +355,14 @@ export function DeploySettings({
             />
           </Row>
 
-          <Row label="TPS limit (tok/s)" note="empty omits the override">
+          <Row
+            label="TPS limit (tok/s)"
+            note={
+              form.slo
+                ? "fallback — LLMSLORequirement → tps_metrics wins; static tps_limit_tps only when no declared metrics"
+                : "primary static threshold — empty omits"
+            }
+          >
             <Input
               className="w-32"
               value={form.tpsLimitTps}
@@ -377,7 +391,12 @@ export function DeploySettings({
             label="Adaptive floor"
             note={
               form.adaptiveCc
-                ? "concurrency floor — empty omits"
+                ? "adaptive_cc_min — empty omits"
+                : "enable Adaptive concurrency to edit"
+            }
+            hint={
+              form.adaptiveCc
+                ? "adaptive_cc_min — AIMD concurrency floor (lower clamp); empty omits and openresty derives floor from static peer max × min_frac; only applies when Adaptive concurrency is on"
                 : "enable Adaptive concurrency to edit"
             }
             muted={!form.adaptiveCc}
@@ -570,12 +589,15 @@ function Flag({
 function Row({
   label,
   note,
+  hint,
   toggle,
   children,
   muted,
 }: {
   label: string;
   note?: string;
+  // Longer hover text when note stays short (or when note is absent).
+  hint?: string;
   toggle?: React.ReactNode;
   children?: React.ReactNode;
   muted?: boolean;
@@ -592,7 +614,7 @@ function Row({
         muted && "opacity-60",
       )}
     >
-      <div className="text-sm font-medium" title={note}>
+      <div className="text-sm font-medium" title={hint ?? note}>
         {label}
       </div>
       <div className="flex min-h-9 items-center">{hasControl ? toggle : null}</div>
@@ -1126,7 +1148,7 @@ export function formFromPlan(plan: Plan): Form {
     exposeRoutedPeer: truthyStr(nv.expose_routed_peer, true),
     ttftLimitMs: nv.ttft_limit_ms ?? "",
     tpsLimitTps: nv.tps_limit_tps ?? "",
-    adaptiveCc: truthyStr(nv.adaptive_cc, false),
+    adaptiveCc: truthyStr(nv.adaptive_cc, true),
     adaptiveCcMin: nv.adaptive_cc_min ?? "",
     backendMaxConcurrency: backendMaxConcurrencyOf(at("modelRoute.nginx.peers")),
     cartMaxLoad: str("modelRoute.cart.maxLoad"),

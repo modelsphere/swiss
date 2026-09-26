@@ -16,8 +16,8 @@ export function PreviewDeploySettings() {
         <h1 className="text-xl font-semibold">Deploy settings preview</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           Core deploy settings, Routing options (CART / SLO / adaptive knobs), then Advanced.
-          CART max load and Adaptive floor stay visible; each is muted until its switch is on.
-          ServiceMonitor lives under Advanced. No backend required.
+          Adaptive concurrency defaults on. CART max load and Adaptive floor stay visible;
+          each is muted until its switch is on. ServiceMonitor lives under Advanced. No backend required.
         </p>
       </div>
       <DeploySettings
