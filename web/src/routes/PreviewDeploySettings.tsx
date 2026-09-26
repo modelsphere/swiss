@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { DeploySettings, EMPTY, type Form } from "@/components/DeploySettings";
 
-// Dev-only: Advanced Model route UI without session or catalog.
+// Dev-only: Deploy settings routing mock without session or catalog.
 export function PreviewDeploySettings() {
   const [form, setForm] = useState<Form>({
     ...EMPTY,
@@ -15,7 +15,8 @@ export function PreviewDeploySettings() {
       <div>
         <h1 className="text-xl font-semibold">Deploy settings preview</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Open Advanced → Model route. No backend required.
+          Named routing knobs on the main card; Monitor stays under Advanced. Toggle CART
+          off to hide CART max load. No backend required.
         </p>
       </div>
       <DeploySettings

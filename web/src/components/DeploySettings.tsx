@@ -40,10 +40,15 @@ export interface Form {
   // which is the mirror when one is configured -- the switch beside the field
   // is a view of this one value, so the two cannot name different registries.
   image: string;
-  // Model route advanced: empty / untouched means leave chart defaults.
-  nginxValues: { key: string; value: string }[];
+  // Named model-route knobs. Empty number fields leave chart defaults.
+  exposeRoutedPeer: boolean;
   backendMaxConcurrency: string;
   cartMaxLoad: string;
+  ttftLimitMs: string;
+  tpsLimitTps: string;
+  defaultMax: string;
+  adaptiveCc: boolean;
+  adaptiveCcMin: string;
   monitor: boolean;
   monitorGpuType: string;
   monitorNginx: boolean;
@@ -68,9 +73,14 @@ export const EMPTY: Form = {
   replicaCount: "",
   route: "",
   image: "",
-  nginxValues: [],
+  exposeRoutedPeer: true,
   backendMaxConcurrency: "",
   cartMaxLoad: "",
+  ttftLimitMs: "",
+  tpsLimitTps: "",
+  defaultMax: "",
+  adaptiveCc: false,
+  adaptiveCcMin: "",
   monitor: true,
   monitorGpuType: "",
   monitorNginx: true,
@@ -255,6 +265,107 @@ export function DeploySettings({
               }
             />
           )}
+
+          <Row
+            label="Expose routed peer"
+            note="echoes the chosen backend as X-Routed-Peer — chart default on"
+            toggle={
+              <Switch
+                checked={form.exposeRoutedPeer}
+                onChange={toggle("exposeRoutedPeer")}
+                label="expose routed peer"
+              />
+            }
+          />
+
+          <Row
+            label="Backend concurrency"
+            note="per-backend peer max concurrency — empty keeps the chart default"
+          >
+            <Input
+              className="w-32"
+              value={form.backendMaxConcurrency}
+              onChange={set("backendMaxConcurrency")}
+              inputMode="numeric"
+              aria-label="backend concurrency"
+              placeholder="omit"
+            />
+          </Row>
+
+          {form.cart && (
+            <Row
+              label="CART max load"
+              note="per-worker max load — empty keeps the chart default"
+            >
+              <Input
+                className="w-32"
+                value={form.cartMaxLoad}
+                onChange={set("cartMaxLoad")}
+                inputMode="numeric"
+                aria-label="CART max load"
+                placeholder="omit"
+              />
+            </Row>
+          )}
+
+          <Row label="TTFT limit (ms)" note="empty omits the override">
+            <Input
+              className="w-32"
+              value={form.ttftLimitMs}
+              onChange={set("ttftLimitMs")}
+              inputMode="numeric"
+              aria-label="TTFT limit ms"
+              placeholder="omit"
+            />
+          </Row>
+
+          <Row label="TPS limit (tok/s)" note="empty omits the override">
+            <Input
+              className="w-32"
+              value={form.tpsLimitTps}
+              onChange={set("tpsLimitTps")}
+              inputMode="numeric"
+              aria-label="TPS limit tok/s"
+              placeholder="omit"
+            />
+          </Row>
+
+          <Row
+            label="Default max concurrency"
+            note="for peers without their own max — empty omits"
+          >
+            <Input
+              className="w-32"
+              value={form.defaultMax}
+              onChange={set("defaultMax")}
+              inputMode="numeric"
+              aria-label="default max concurrency"
+              placeholder="omit"
+            />
+          </Row>
+
+          <Row
+            label="Adaptive concurrency"
+            note="AIMD ceiling when decode rate falls below the TPS limit"
+            toggle={
+              <Switch
+                checked={form.adaptiveCc}
+                onChange={toggle("adaptiveCc")}
+                label="adaptive concurrency"
+              />
+            }
+          />
+
+          <Row label="Adaptive floor" note="concurrency floor — empty omits">
+            <Input
+              className="w-32"
+              value={form.adaptiveCcMin}
+              onChange={set("adaptiveCcMin")}
+              inputMode="numeric"
+              aria-label="adaptive floor"
+              placeholder="omit"
+            />
+          </Row>
         </CardContent>
       </Card>
 
@@ -356,49 +467,6 @@ export function DeploySettings({
             />
           </Row>
 
-          <div className="py-3">
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Model route
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              OpenResty route values, backend concurrency, CART load and monitor overrides
-            </p>
-          </div>
-
-          <Row label="Nginx values" note="merged into modelRoute.nginx.values; empty leaves chart defaults">
-            <NginxValues
-              rows={form.nginxValues}
-              onChange={(v) => onChange({ nginxValues: v })}
-            />
-          </Row>
-
-          <Row
-            label="Backend concurrency"
-            note="modelRoute.nginx.peers backend maxConcurrency — chart default 100"
-          >
-            <Input
-              className="w-32"
-              value={form.backendMaxConcurrency}
-              onChange={set("backendMaxConcurrency")}
-              inputMode="numeric"
-              aria-label="backend max concurrency"
-              placeholder="100"
-            />
-          </Row>
-
-          {form.cart && (
-            <Row label="CART max load" note="modelRoute.cart.maxLoad — chart default 20">
-              <Input
-                className="w-32"
-                value={form.cartMaxLoad}
-                onChange={set("cartMaxLoad")}
-                inputMode="numeric"
-                aria-label="CART max load"
-                placeholder="20"
-              />
-            </Row>
-          )}
-
           <Row
             label="Monitor"
             note="writes backends into monitor's config"
@@ -415,20 +483,20 @@ export function DeploySettings({
                 <Suggest
                   value={form.monitorGpuType}
                   onChange={(v) => onChange({ monitorGpuType: v })}
-                  placeholder="gpuType (optional override)"
+                  placeholder="GPU type (optional)"
                 />
                 <div className="grid w-full gap-x-6 gap-y-3 sm:grid-cols-2">
                   <Flag
                     checked={form.monitorNginx}
                     onChange={toggle("monitorNginx")}
                     label="nginx row"
-                    hint="modelRoute.monitor.nginx"
+                    hint="openresty entry in monitor"
                   />
                   <Flag
                     checked={form.monitorRouter}
                     onChange={toggle("monitorRouter")}
                     label="router row"
-                    hint="modelRoute.monitor.router"
+                    hint="CART entry in monitor"
                   />
                 </div>
               </div>
@@ -660,12 +728,14 @@ function PathInput({
 }
 
 
-function nginxValuesOf(v: unknown): { key: string; value: string }[] {
-  if (!v || typeof v !== "object" || Array.isArray(v)) return [];
-  return Object.entries(v as Record<string, unknown>).map(([key, val]) => ({
-    key,
-    value: val === undefined || val === null ? "" : String(val),
-  }));
+function nginxValuesMap(v: unknown): Record<string, string> {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  const out: Record<string, string> = {};
+  for (const [key, val] of Object.entries(v as Record<string, unknown>)) {
+    if (val === undefined || val === null) continue;
+    out[key] = String(val);
+  }
+  return out;
 }
 
 function backendMaxConcurrencyOf(v: unknown): string {
@@ -680,58 +750,9 @@ function backendMaxConcurrencyOf(v: unknown): string {
   return "";
 }
 
-function NginxValues({
-  rows,
-  onChange,
-}: {
-  rows: { key: string; value: string }[];
-  onChange: (v: { key: string; value: string }[]) => void;
-}) {
-  const patch = (i: number, p: Partial<{ key: string; value: string }>) =>
-    onChange(rows.map((r, j) => (i === j ? { ...r, ...p } : r)));
-
-  return (
-    <div className="w-full space-y-2">
-      {rows.map((r, i) => (
-        <div key={i} className="flex flex-wrap items-center gap-2">
-          <Input
-            className="w-44 font-mono text-xs"
-            value={r.key}
-            onChange={(e) => patch(i, { key: e.target.value })}
-            placeholder="key"
-            aria-label="nginx value key"
-          />
-          <Input
-            className="min-w-0 flex-1 font-mono text-xs"
-            value={r.value}
-            onChange={(e) => patch(i, { value: e.target.value })}
-            placeholder="value"
-            aria-label="nginx value"
-          />
-          <button
-            type="button"
-            onClick={() => onChange(rows.filter((_, j) => j !== i))}
-            aria-label="remove nginx value"
-            className="text-sm text-muted-foreground hover:text-destructive"
-          >
-            remove
-          </button>
-        </div>
-      ))}
-      <button
-        type="button"
-        onClick={() => onChange([...rows, { key: "", value: "" }])}
-        className="text-sm text-muted-foreground underline hover:text-foreground"
-      >
-        Add value
-      </button>
-      {rows.length === 0 && (
-        <span className="block text-xs text-muted-foreground">
-          none — chart defaults (e.g. expose_routed_peer)
-        </span>
-      )}
-    </div>
-  );
+function truthyStr(v: string | undefined, fallback: boolean): boolean {
+  if (v === undefined || v === "") return fallback;
+  return v !== "false" && v !== "0";
 }
 
 const EFFECTS = ["", "NoSchedule", "PreferNoSchedule", "NoExecute"];
@@ -963,12 +984,15 @@ export function planRequest(
   const nginx: Record<string, unknown> = {};
   if (route) nginx.route = route;
 
-  const nginxValues: Record<string, string> = {};
-  for (const row of f.nginxValues) {
-    const k = row.key.trim();
-    if (k) nginxValues[k] = row.value;
-  }
-  if (Object.keys(nginxValues).length) nginx.values = nginxValues;
+  const nginxValues: Record<string, string> = {
+    expose_routed_peer: f.exposeRoutedPeer ? "true" : "false",
+  };
+  if (f.ttftLimitMs.trim()) nginxValues.ttft_limit_ms = f.ttftLimitMs.trim();
+  if (f.tpsLimitTps.trim()) nginxValues.tps_limit_tps = f.tpsLimitTps.trim();
+  if (f.defaultMax.trim()) nginxValues.default_max = f.defaultMax.trim();
+  nginxValues.adaptive_cc = f.adaptiveCc ? "true" : "false";
+  if (f.adaptiveCcMin.trim()) nginxValues.adaptive_cc_min = f.adaptiveCcMin.trim();
+  nginx.values = nginxValues;
 
   const maxConc = num(f.backendMaxConcurrency);
   if (maxConc !== undefined) {
@@ -1054,6 +1078,7 @@ export function formFromPlan(plan: Plan): Form {
     const v = at(path);
     return typeof v === "boolean" ? v : fallback;
   };
+  const nv = nginxValuesMap(at("modelRoute.nginx.values"));
 
   return {
     ...EMPTY,
@@ -1074,7 +1099,12 @@ export function formFromPlan(plan: Plan): Form {
     serviceMonitor: bool("serviceMonitor.enabled"),
     priorityClassName: str("priorityClassName"),
     schedulerName: str("schedulerName"),
-    nginxValues: nginxValuesOf(at("modelRoute.nginx.values")),
+    exposeRoutedPeer: truthyStr(nv.expose_routed_peer, true),
+    ttftLimitMs: nv.ttft_limit_ms ?? "",
+    tpsLimitTps: nv.tps_limit_tps ?? "",
+    defaultMax: nv.default_max ?? "",
+    adaptiveCc: truthyStr(nv.adaptive_cc, false),
+    adaptiveCcMin: nv.adaptive_cc_min ?? "",
     backendMaxConcurrency: backendMaxConcurrencyOf(at("modelRoute.nginx.peers")),
     cartMaxLoad: str("modelRoute.cart.maxLoad"),
     monitor: bool("modelRoute.monitor.enabled", true),
