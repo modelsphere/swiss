@@ -50,8 +50,6 @@ export interface Form {
   adaptiveCcMin: string;
   monitor: boolean;
   monitorGpuType: string;
-  monitorNginx: boolean;
-  monitorRouter: boolean;
 }
 
 export const EMPTY: Form = {
@@ -81,8 +79,6 @@ export const EMPTY: Form = {
   adaptiveCcMin: "",
   monitor: true,
   monitorGpuType: "",
-  monitorNginx: true,
-  monitorRouter: true,
 };
 
 export function DeploySettings({
@@ -533,27 +529,11 @@ export function DeploySettings({
             }
           >
             {form.monitor && (
-              <div className="flex w-full flex-col gap-3">
-                <Suggest
-                  value={form.monitorGpuType}
-                  onChange={(v) => onChange({ monitorGpuType: v })}
-                  placeholder="GPU type (optional)"
-                />
-                <div className="grid w-full gap-x-6 gap-y-3 sm:grid-cols-2">
-                  <Flag
-                    checked={form.monitorNginx}
-                    onChange={toggle("monitorNginx")}
-                    label="openresty"
-                    hint="include the openresty entry in monitor"
-                  />
-                  <Flag
-                    checked={form.monitorRouter}
-                    onChange={toggle("monitorRouter")}
-                    label="CART"
-                    hint="include the CART entry in monitor"
-                  />
-                </div>
-              </div>
+              <Suggest
+                value={form.monitorGpuType}
+                onChange={(v) => onChange({ monitorGpuType: v })}
+                placeholder="GPU type (optional)"
+              />
             )}
           </Row>
         </div>
@@ -590,27 +570,6 @@ export function DeploySettings({
 // so toggles and number fields share one start edge (Routing options especially
 // alternates the two). The control column keeps the input's height either way,
 // so toggling a row grows it sideways and never moves what is below.
-// Flag is one feature switch with its explanation under it, so several can sit
-// on one row without any of them becoming a mystery.
-function Flag({
-  checked,
-  onChange,
-  label,
-  hint,
-}: {
-  checked: boolean;
-  onChange: (v: boolean) => void;
-  label: string;
-  hint: string;
-}) {
-  return (
-    <div className="min-w-0 space-y-1">
-      <Switch checked={checked} onChange={onChange} label={label} />
-      <p className="text-xs leading-snug text-muted-foreground">{hint}</p>
-    </div>
-  );
-}
-
 function Row({
   label,
   note,
@@ -1084,12 +1043,13 @@ export function planRequest(
   const maxLoad = num(f.cartMaxLoad);
   if (f.cart && maxLoad !== undefined) modelRoute.cart = { maxLoad };
 
+  // modelRoute.monitor.nginx / .router: chart values.schema.json allows
+  // object|null only (not boolean). Chart defaults are null (= autoconfig
+  // default on when nginx.service / cart are set). Omit those keys so helm
+  // keeps null — do not write form booleans (deploy fails schema) and do not
+  // invent an object shape the template does not consume.
   const monitor: Record<string, unknown> = { enabled: f.monitor };
-  if (f.monitor) {
-    if (f.monitorGpuType.trim()) monitor.gpuType = f.monitorGpuType.trim();
-    monitor.nginx = f.monitorNginx;
-    monitor.router = f.monitorRouter;
-  }
+  if (f.monitor && f.monitorGpuType.trim()) monitor.gpuType = f.monitorGpuType.trim();
   modelRoute.monitor = monitor;
 
   overrides.modelRoute = modelRoute;
@@ -1185,8 +1145,6 @@ export function formFromPlan(plan: Plan): Form {
     cartMaxLoad: str("modelRoute.cart.maxLoad"),
     monitor: bool("modelRoute.monitor.enabled", true),
     monitorGpuType: str("modelRoute.monitor.gpuType"),
-    monitorNginx: bool("modelRoute.monitor.nginx", true),
-    monitorRouter: bool("modelRoute.monitor.router", true),
     edits:
       plan.layers?.edit && Object.keys(plan.layers.edit).length > 0
         ? toYamlish(plan.layers.edit)
