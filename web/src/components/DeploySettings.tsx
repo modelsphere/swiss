@@ -271,7 +271,8 @@ export function DeploySettings({
         <CardHeader>
           <CardTitle className="text-base">Routing options</CardTitle>
           <p className="text-sm text-muted-foreground">
-            OpenResty and CART knobs for this model route. Empty number fields leave the chart default.
+            SLO-first latency and throughput: LLMSLORequirement declares ttft_metrics / tps_metrics for openresty.
+            Static TTFT/TPS limits are fallback when nothing is declared. Empty number fields leave the chart default.
           </p>
         </CardHeader>
         <CardContent className="divide-y pt-0">
@@ -331,19 +332,32 @@ export function DeploySettings({
 
           <Row
             label="SLO requirement"
-            note="LLMSLORequirement"
+            note="primary — LLMSLORequirement declares ttft_metrics / tps_metrics for openresty (beats static limits)"
+            hint="Primary source for TTFT/TPS decisions. openresty priority: declared metrics (from this CR) > runtime override > static ttft_limit_ms / tps_limit_tps"
+            caption="primary — declares ttft_metrics / tps_metrics for openresty"
             toggle={
               <Switch checked={form.slo} onChange={toggle("slo")} label="SLO requirement" />
             }
           />
 
           <Row
-            label="TTFT limit (ms)"
+            label={form.slo ? "TTFT limit (fallback)" : "TTFT limit (ms)"}
             note={
               form.slo
-                ? "fallback — LLMSLORequirement → ttft_metrics wins; static ttft_limit_ms only when no declared metrics"
-                : "primary static threshold — empty omits"
+                ? "static fallback — ttft_limit_ms only when SLO declares no ttft_metrics; empty omits"
+                : "static threshold (SLO off) — empty omits"
             }
+            hint={
+              form.slo
+                ? "Emergency static fallback. openresty: declared ttft_metrics > override > static ttft_limit_ms. Editable while SLO is on for bare-metal / no-metrics cases."
+                : "Primary static TTFT threshold while SLO is off (no LLMSLORequirement → no declared metrics)."
+            }
+            caption={
+              form.slo
+                ? "static fallback when no declared ttft_metrics"
+                : "static threshold — SLO is off"
+            }
+            muted={form.slo}
           >
             <Input
               className="w-32"
@@ -356,12 +370,23 @@ export function DeploySettings({
           </Row>
 
           <Row
-            label="TPS limit (tok/s)"
+            label={form.slo ? "TPS limit (fallback)" : "TPS limit (tok/s)"}
             note={
               form.slo
-                ? "fallback — LLMSLORequirement → tps_metrics wins; static tps_limit_tps only when no declared metrics"
-                : "primary static threshold — empty omits"
+                ? "static fallback — tps_limit_tps only when SLO declares no tps_metrics; empty omits"
+                : "static threshold (SLO off) — empty omits"
             }
+            hint={
+              form.slo
+                ? "Emergency static fallback. openresty: declared tps_metrics > override > static tps_limit_tps. AIMD (Adaptive concurrency) also reads the effective TPS threshold."
+                : "Primary static TPS threshold while SLO is off (no LLMSLORequirement → no declared metrics)."
+            }
+            caption={
+              form.slo
+                ? "static fallback when no declared tps_metrics"
+                : "static threshold — SLO is off"
+            }
+            muted={form.slo}
           >
             <Input
               className="w-32"
@@ -375,7 +400,7 @@ export function DeploySettings({
 
           <Row
             label="Adaptive concurrency"
-            note="AIMD ceiling when decode rate falls below the TPS limit"
+            note="AIMD on the effective TPS signal — defaults on; stays next to TPS"
             toggle={
               <Switch
                 checked={form.adaptiveCc}
@@ -590,6 +615,7 @@ function Row({
   label,
   note,
   hint,
+  caption,
   toggle,
   children,
   muted,
@@ -598,6 +624,8 @@ function Row({
   note?: string;
   // Longer hover text when note stays short (or when note is absent).
   hint?: string;
+  // Optional visible subline under the label (Routing SLO/fallback rows).
+  caption?: string;
   toggle?: React.ReactNode;
   children?: React.ReactNode;
   muted?: boolean;
@@ -614,8 +642,11 @@ function Row({
         muted && "opacity-60",
       )}
     >
-      <div className="text-sm font-medium" title={hint ?? note}>
-        {label}
+      <div className="min-w-0" title={hint ?? note}>
+        <div className="text-sm font-medium">{label}</div>
+        {caption ? (
+          <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{caption}</p>
+        ) : null}
       </div>
       <div className="flex min-h-9 items-center">{hasControl ? toggle : null}</div>
       <div className="flex min-h-9 min-w-0 items-center">
@@ -1141,7 +1172,7 @@ export function formFromPlan(plan: Plan): Form {
     image: joinImage(str("image.repository"), str("image.tag")),
     cart: bool("cart.enabled", true),
     modelRoute: bool("modelRoute.enabled"),
-    slo: bool("sloRequirement.enabled"),
+    slo: bool("sloRequirement.enabled", true),
     serviceMonitor: bool("serviceMonitor.enabled"),
     priorityClassName: str("priorityClassName"),
     schedulerName: str("schedulerName"),
