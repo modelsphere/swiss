@@ -540,11 +540,12 @@ export function DeploySettings({
   );
 }
 
-// Three columns: label, switch, control. The switch gets a column of its own
-// -- reserved whether or not a row has one -- so every input in the form lines
-// up on one right-hand edge instead of being indented by the switch beside it.
-// The control column keeps the input's height either way, so toggling a row
-// grows it sideways and never moves what is below.
+// Three columns: label, switch, control. The switch column is reserved so a
+// switch beside an input never shoves that input sideways relative to rows
+// without one. Switch-only rows put the switch in the control column instead,
+// so toggles and number fields share one start edge (Routing options especially
+// alternates the two). The control column keeps the input's height either way,
+// so toggling a row grows it sideways and never moves what is below.
 // Flag is one feature switch with its explanation under it, so several can sit
 // on one row without any of them becoming a mystery.
 function Flag({
@@ -579,6 +580,11 @@ function Row({
   children?: React.ReactNode;
   muted?: boolean;
 }) {
+  // undefined children = switch-only row: put the switch in the control
+  // column so it shares a start edge with number inputs. false/element means
+  // the row owns a control slot (even when conditionally empty), so the switch
+  // stays in its reserved column and does not jump when the input appears.
+  const hasControl = children !== undefined;
   return (
     <div
       className={cn(
@@ -589,8 +595,10 @@ function Row({
       <div className="text-sm font-medium" title={note}>
         {label}
       </div>
-      <div className="flex min-h-9 items-center">{toggle}</div>
-      <div className="flex min-h-9 min-w-0 items-center">{children}</div>
+      <div className="flex min-h-9 items-center">{hasControl ? toggle : null}</div>
+      <div className="flex min-h-9 min-w-0 items-center">
+        {hasControl ? children : toggle}
+      </div>
     </div>
   );
 }
