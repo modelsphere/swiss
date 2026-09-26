@@ -14,6 +14,7 @@ import { Nodes } from "@/routes/Nodes";
 import { SiteProfile } from "@/routes/SiteProfile";
 import { Login } from "@/routes/Login";
 import { Setup } from "@/routes/Setup";
+import { PreviewDeploySettings } from "@/routes/PreviewDeploySettings";
 import { Gate } from "@/components/Session";
 import "./index.css";
 
@@ -38,6 +39,9 @@ createRoot(document.getElementById("root")!).render(
               the setup page is what it sends you to when there is no profile
               yet -- neither can be behind the thing that redirects to it. */}
           <Route path="login" element={<Login />} />
+          {import.meta.env.DEV && (
+            <Route path="preview/deploy-settings" element={<PreviewDeploySettings />} />
+          )}
           <Route
             path="setup"
             element={

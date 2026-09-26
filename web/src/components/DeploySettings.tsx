@@ -40,6 +40,18 @@ export interface Form {
   // which is the mirror when one is configured -- the switch beside the field
   // is a view of this one value, so the two cannot name different registries.
   image: string;
+  // Named model-route knobs. Empty number fields leave chart defaults.
+  exposeRoutedPeer: boolean;
+  backendMaxConcurrency: string;
+  cartMaxLoad: string;
+  ttftLimitMs: string;
+  tpsLimitTps: string;
+  adaptiveCc: boolean;
+  adaptiveCcMin: string;
+  monitor: boolean;
+  monitorGpuType: string;
+  monitorNginx: boolean;
+  monitorRouter: boolean;
 }
 
 export const EMPTY: Form = {
@@ -60,6 +72,17 @@ export const EMPTY: Form = {
   replicaCount: "",
   route: "",
   image: "",
+  exposeRoutedPeer: true,
+  backendMaxConcurrency: "",
+  cartMaxLoad: "",
+  ttftLimitMs: "",
+  tpsLimitTps: "",
+  adaptiveCc: false,
+  adaptiveCcMin: "",
+  monitor: true,
+  monitorGpuType: "",
+  monitorNginx: true,
+  monitorRouter: true,
 };
 
 export function DeploySettings({
@@ -240,6 +263,135 @@ export function DeploySettings({
               }
             />
           )}
+
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Routing options</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            OpenResty and CART knobs for this model route. Empty number fields leave the chart default.
+          </p>
+        </CardHeader>
+        <CardContent className="divide-y pt-0">
+          <Row
+            label="Expose routed peer"
+            note="echoes the chosen backend as X-Routed-Peer — chart default on"
+            toggle={
+              <Switch
+                checked={form.exposeRoutedPeer}
+                onChange={toggle("exposeRoutedPeer")}
+                label="expose routed peer"
+              />
+            }
+          />
+
+          <Row
+            label="Backend concurrency"
+            note="per-backend peer max concurrency — empty keeps the chart default"
+          >
+            <Input
+              className="w-32"
+              value={form.backendMaxConcurrency}
+              onChange={set("backendMaxConcurrency")}
+              inputMode="numeric"
+              aria-label="backend concurrency"
+              placeholder="omit"
+            />
+          </Row>
+
+          <Row
+            label="CART"
+            note="Cache-aware router"
+            toggle={
+              <Switch checked={form.cart} onChange={toggle("cart")} label="CART" />
+            }
+          />
+
+          <Row
+            label="CART max load"
+            note={
+              form.cart
+                ? "per-worker max load — empty keeps the chart default"
+                : "enable CART to edit"
+            }
+            muted={!form.cart}
+          >
+            <Input
+              className="w-32"
+              value={form.cartMaxLoad}
+              onChange={set("cartMaxLoad")}
+              inputMode="numeric"
+              aria-label="CART max load"
+              placeholder="omit"
+              disabled={!form.cart}
+            />
+          </Row>
+
+          <Row
+            label="SLO requirement"
+            note="LLMSLORequirement"
+            toggle={
+              <Switch checked={form.slo} onChange={toggle("slo")} label="SLO requirement" />
+            }
+          />
+
+          <Row label="TTFT limit (ms)" note="empty omits the override">
+            <Input
+              className="w-32"
+              value={form.ttftLimitMs}
+              onChange={set("ttftLimitMs")}
+              inputMode="numeric"
+              aria-label="TTFT limit ms"
+              placeholder="omit"
+            />
+          </Row>
+
+          <Row label="TPS limit (tok/s)" note="empty omits the override">
+            <Input
+              className="w-32"
+              value={form.tpsLimitTps}
+              onChange={set("tpsLimitTps")}
+              inputMode="numeric"
+              aria-label="TPS limit tok/s"
+              placeholder="omit"
+            />
+          </Row>
+
+          <Row
+            label="Adaptive concurrency"
+            note="AIMD ceiling when decode rate falls below the TPS limit"
+            toggle={
+              <Switch
+                checked={form.adaptiveCc}
+                onChange={(v) =>
+                  onChange(v ? { adaptiveCc: true } : { adaptiveCc: false, adaptiveCcMin: "" })
+                }
+                label="adaptive concurrency"
+              />
+            }
+          />
+
+          <Row
+            label="Adaptive floor"
+            note={
+              form.adaptiveCc
+                ? "concurrency floor — empty omits"
+                : "enable Adaptive concurrency to edit"
+            }
+            muted={!form.adaptiveCc}
+          >
+            <Input
+              className="w-32"
+              value={form.adaptiveCcMin}
+              onChange={set("adaptiveCcMin")}
+              inputMode="numeric"
+              aria-label="adaptive floor"
+              placeholder="omit"
+              disabled={!form.adaptiveCc}
+            />
+          </Row>
         </CardContent>
       </Card>
 
@@ -249,33 +401,17 @@ export function DeploySettings({
       <details className="rounded-lg border">
         <summary className="cursor-pointer px-4 py-3 text-sm font-medium">Advanced</summary>
         <div className="divide-y border-t px-4">
-          {/* One row rather than three: these are three independent objects the
-              release either gets or does not, each a single bit, and three
-              labelled rows read as three decisions to weigh rather than a set
-              to glance at. Each still says what it is -- a switch whose only
-              explanation is a tooltip is a switch nobody reads. */}
-          <Row label="Components" note="objects rendered alongside the release">
-            <div className="grid w-full gap-x-6 gap-y-3 sm:grid-cols-3">
-              <Flag
-                checked={form.cart}
-                onChange={toggle("cart")}
-                label="CART"
-                hint="Cache-aware router"
-              />
-              <Flag
-                checked={form.slo}
-                onChange={toggle("slo")}
-                label="SLO requirement"
-                hint="LLMSLORequirement"
-              />
-              <Flag
+          <Row
+            label="ServiceMonitor"
+            note="Prometheus metrics scraped alongside the release"
+            toggle={
+              <Switch
                 checked={form.serviceMonitor}
                 onChange={toggle("serviceMonitor")}
                 label="ServiceMonitor"
-                hint="Prometheus metrics"
               />
-            </div>
-          </Row>
+            }
+          />
 
           {/* Off is the answer almost always: the catalog pins the tag and the
               site rewrites the repository to its mirror, and between them the
@@ -340,6 +476,42 @@ export function DeploySettings({
               placeholder={cluster?.schedulerName ?? "the chart's default"}
             />
           </Row>
+
+          <Row
+            label="Monitor"
+            note="writes backends into monitor's config"
+            toggle={
+              <Switch
+                checked={form.monitor}
+                onChange={toggle("monitor")}
+                label="monitor"
+              />
+            }
+          >
+            {form.monitor && (
+              <div className="flex w-full flex-col gap-3">
+                <Suggest
+                  value={form.monitorGpuType}
+                  onChange={(v) => onChange({ monitorGpuType: v })}
+                  placeholder="GPU type (optional)"
+                />
+                <div className="grid w-full gap-x-6 gap-y-3 sm:grid-cols-2">
+                  <Flag
+                    checked={form.monitorNginx}
+                    onChange={toggle("monitorNginx")}
+                    label="openresty"
+                    hint="include the openresty entry in monitor"
+                  />
+                  <Flag
+                    checked={form.monitorRouter}
+                    onChange={toggle("monitorRouter")}
+                    label="CART"
+                    hint="include the CART entry in monitor"
+                  />
+                </div>
+              </div>
+            )}
+          </Row>
         </div>
 
       </details>
@@ -368,11 +540,12 @@ export function DeploySettings({
   );
 }
 
-// Three columns: label, switch, control. The switch gets a column of its own
-// -- reserved whether or not a row has one -- so every input in the form lines
-// up on one right-hand edge instead of being indented by the switch beside it.
-// The control column keeps the input's height either way, so toggling a row
-// grows it sideways and never moves what is below.
+// Three columns: label, switch, control. The switch column is reserved so a
+// switch beside an input never shoves that input sideways relative to rows
+// without one. Switch-only rows put the switch in the control column instead,
+// so toggles and number fields share one start edge (Routing options especially
+// alternates the two). The control column keeps the input's height either way,
+// so toggling a row grows it sideways and never moves what is below.
 // Flag is one feature switch with its explanation under it, so several can sit
 // on one row without any of them becoming a mystery.
 function Flag({
@@ -399,19 +572,33 @@ function Row({
   note,
   toggle,
   children,
+  muted,
 }: {
   label: string;
   note?: string;
   toggle?: React.ReactNode;
   children?: React.ReactNode;
+  muted?: boolean;
 }) {
+  // undefined children = switch-only row: put the switch in the control
+  // column so it shares a start edge with number inputs. false/element means
+  // the row owns a control slot (even when conditionally empty), so the switch
+  // stays in its reserved column and does not jump when the input appears.
+  const hasControl = children !== undefined;
   return (
-    <div className="grid gap-x-3 gap-y-1 py-2.5 sm:grid-cols-[11rem_2.25rem_minmax(0,1fr)] sm:items-center">
+    <div
+      className={cn(
+        "grid gap-x-3 gap-y-1 py-2.5 sm:grid-cols-[11rem_2.25rem_minmax(0,1fr)] sm:items-center",
+        muted && "opacity-60",
+      )}
+    >
       <div className="text-sm font-medium" title={note}>
         {label}
       </div>
-      <div className="flex min-h-9 items-center">{toggle}</div>
-      <div className="flex min-h-9 min-w-0 items-center">{children}</div>
+      <div className="flex min-h-9 items-center">{hasControl ? toggle : null}</div>
+      <div className="flex min-h-9 min-w-0 items-center">
+        {hasControl ? children : toggle}
+      </div>
     </div>
   );
 }
@@ -563,6 +750,34 @@ function PathInput({
       {s.hint && <TabHint />}
     </div>
   );
+}
+
+
+function nginxValuesMap(v: unknown): Record<string, string> {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  const out: Record<string, string> = {};
+  for (const [key, val] of Object.entries(v as Record<string, unknown>)) {
+    if (val === undefined || val === null) continue;
+    out[key] = String(val);
+  }
+  return out;
+}
+
+function backendMaxConcurrencyOf(v: unknown): string {
+  if (!Array.isArray(v)) return "";
+  for (const p of v) {
+    if (!p || typeof p !== "object") continue;
+    const row = p as Record<string, unknown>;
+    if (row.use === "backend" && row.maxConcurrency !== undefined && row.maxConcurrency !== null) {
+      return String(row.maxConcurrency);
+    }
+  }
+  return "";
+}
+
+function truthyStr(v: string | undefined, fallback: boolean): boolean {
+  if (v === undefined || v === "") return fallback;
+  return v !== "false" && v !== "0";
 }
 
 const EFFECTS = ["", "NoSchedule", "PreferNoSchedule", "NoExecute"];
@@ -790,9 +1005,41 @@ export function planRequest(
   overrides.serviceMonitor = { enabled: f.serviceMonitor };
 
   const route = f.route.trim();
-  overrides.modelRoute = route
-    ? { enabled: on.modelRoute, nginx: { route } }
-    : { enabled: on.modelRoute };
+  const modelRoute: Record<string, unknown> = { enabled: on.modelRoute };
+  const nginx: Record<string, unknown> = {};
+  if (route) nginx.route = route;
+
+  const nginxValues: Record<string, string> = {
+    expose_routed_peer: f.exposeRoutedPeer ? "true" : "false",
+  };
+  if (f.ttftLimitMs.trim()) nginxValues.ttft_limit_ms = f.ttftLimitMs.trim();
+  if (f.tpsLimitTps.trim()) nginxValues.tps_limit_tps = f.tpsLimitTps.trim();
+  nginxValues.adaptive_cc = f.adaptiveCc ? "true" : "false";
+  if (f.adaptiveCc && f.adaptiveCcMin.trim()) nginxValues.adaptive_cc_min = f.adaptiveCcMin.trim();
+  nginx.values = nginxValues;
+
+  const maxConc = num(f.backendMaxConcurrency);
+  if (maxConc !== undefined) {
+    // Lists replace, so keep the chart's two-tier shape and only change backend.
+    nginx.peers = [
+      { use: "backend", priority: 2, maxConcurrency: maxConc },
+      { use: "backend-svc", priority: 1 },
+    ];
+  }
+  if (Object.keys(nginx).length) modelRoute.nginx = nginx;
+
+  const maxLoad = num(f.cartMaxLoad);
+  if (f.cart && maxLoad !== undefined) modelRoute.cart = { maxLoad };
+
+  const monitor: Record<string, unknown> = { enabled: f.monitor };
+  if (f.monitor) {
+    if (f.monitorGpuType.trim()) monitor.gpuType = f.monitorGpuType.trim();
+    monitor.nginx = f.monitorNginx;
+    monitor.router = f.monitorRouter;
+  }
+  modelRoute.monitor = monitor;
+
+  overrides.modelRoute = modelRoute;
 
   // A row with no key tolerates nothing; it is a half-typed row, not a value.
   const tolerations = f.tolerations
@@ -855,6 +1102,7 @@ export function formFromPlan(plan: Plan): Form {
     const v = at(path);
     return typeof v === "boolean" ? v : fallback;
   };
+  const nv = nginxValuesMap(at("modelRoute.nginx.values"));
 
   return {
     ...EMPTY,
@@ -875,6 +1123,17 @@ export function formFromPlan(plan: Plan): Form {
     serviceMonitor: bool("serviceMonitor.enabled"),
     priorityClassName: str("priorityClassName"),
     schedulerName: str("schedulerName"),
+    exposeRoutedPeer: truthyStr(nv.expose_routed_peer, true),
+    ttftLimitMs: nv.ttft_limit_ms ?? "",
+    tpsLimitTps: nv.tps_limit_tps ?? "",
+    adaptiveCc: truthyStr(nv.adaptive_cc, false),
+    adaptiveCcMin: nv.adaptive_cc_min ?? "",
+    backendMaxConcurrency: backendMaxConcurrencyOf(at("modelRoute.nginx.peers")),
+    cartMaxLoad: str("modelRoute.cart.maxLoad"),
+    monitor: bool("modelRoute.monitor.enabled", true),
+    monitorGpuType: str("modelRoute.monitor.gpuType"),
+    monitorNginx: bool("modelRoute.monitor.nginx", true),
+    monitorRouter: bool("modelRoute.monitor.router", true),
     edits:
       plan.layers?.edit && Object.keys(plan.layers.edit).length > 0
         ? toYamlish(plan.layers.edit)
