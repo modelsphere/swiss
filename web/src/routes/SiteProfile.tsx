@@ -171,6 +171,17 @@ export function SiteProfile() {
             <Row label="Cache" value={p.cache?.enabled ? "enabled" : "disabled"} />
             <Row label="Cache host path" value={p.cache?.hostPath} mono />
             <Row label="Scaler server" value={p.scaler?.serverAddress} />
+            <Row label="SLO address" value={p.scaler?.sloAddress} fallback="http://slo-api.llm-scaler.svc:80" />
+            <Row
+              label="SLO token"
+              value={
+                p.scaler?.sloTokenSecret
+                  ? `${p.scaler.sloTokenSecret} → ${p.scaler.sloTokenKey || "token"}`
+                  : undefined
+              }
+              mono
+              fallback="required"
+            />
           </Section>
 
           {p.sites && p.sites.length > 0 && (

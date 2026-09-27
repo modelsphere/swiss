@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { createPortal } from "react-dom";
+import { ChevronDown, Info } from "lucide-react";
 import type { ClusterInfo, Plan, PlanRequest, Variant } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -67,7 +69,7 @@ export const EMPTY: Form = {
   createNamespace: false,
   serviceId: "",
   localPath: "",
-  scaler: false,
+  scaler: true,
   replicaCount: "",
   route: "",
   image: "",
@@ -211,14 +213,13 @@ export function DeploySettings({
 
           <Row
             label="Autoscale"
-            note="an LLMScaler owns the replica count, bounds included"
+            note="on by default — an LLMScaler owns the replica count, bounds included"
             toggle={
               <Switch checked={form.scaler} onChange={toggle("scaler")} label="autoscale" />
             }
           >
             {!form.scaler && (
               <Input
-                className="w-32"
                 value={form.replicaCount}
                 onChange={set("replicaCount")}
                 inputMode="numeric"
@@ -291,7 +292,6 @@ export function DeploySettings({
             note="per-backend peer max concurrency — empty keeps the chart default"
           >
             <Input
-              className="w-32"
               value={form.backendMaxConcurrency}
               onChange={set("backendMaxConcurrency")}
               inputMode="numeric"
@@ -318,7 +318,6 @@ export function DeploySettings({
             muted={!form.cart}
           >
             <Input
-              className="w-32"
               value={form.cartMaxLoad}
               onChange={set("cartMaxLoad")}
               inputMode="numeric"
@@ -357,7 +356,6 @@ export function DeploySettings({
             }
           >
             <Input
-              className="w-32"
               value={form.ttftLimitMs}
               onChange={set("ttftLimitMs")}
               inputMode="numeric"
@@ -385,7 +383,6 @@ export function DeploySettings({
             }
           >
             <Input
-              className="w-32"
               value={form.tpsLimitTps}
               onChange={set("tpsLimitTps")}
               inputMode="numeric"
@@ -423,7 +420,6 @@ export function DeploySettings({
             muted={!form.adaptiveCc}
           >
             <Input
-              className="w-32"
               value={form.adaptiveCcMin}
               onChange={set("adaptiveCcMin")}
               inputMode="numeric"
@@ -460,7 +456,6 @@ export function DeploySettings({
             muted={!form.monitor}
           >
             <Input
-              className="w-48"
               value={form.monitorModel}
               onChange={set("monitorModel")}
               aria-label="monitor model"
@@ -491,8 +486,11 @@ export function DeploySettings({
       {/* Folded away, but every flag is still written into the plan either
           way -- a section nobody opens must not hand the decision back to a
           chart default. */}
-      <details className="rounded-lg border">
-        <summary className="cursor-pointer px-4 py-3 text-sm font-medium">Advanced</summary>
+      <details className="group rounded-lg border bg-card">
+        <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-medium [&::-webkit-details-marker]:hidden">
+          Advanced
+          <ChevronDown className="size-4 text-muted-foreground transition-transform group-open:rotate-180" />
+        </summary>
         <div className="divide-y border-t px-4">
           <Row
             label="ServiceMonitor"
@@ -534,7 +532,7 @@ export function DeploySettings({
                   placeholder={image.site}
                 />
               ) : (
-                <span className="truncate font-mono text-xs text-muted-foreground" title={image.site}>
+                <span className="min-w-0 truncate font-mono text-xs text-muted-foreground" title={image.site}>
                   {image.site}
                 </span>
               )}
@@ -590,7 +588,7 @@ export function DeploySettings({
             spellCheck={false}
             rows={10}
             placeholder={EDITS_PLACEHOLDER}
-            className="w-full rounded-md border bg-background px-3 py-2 font-mono text-xs"
+            className="w-full rounded-md border bg-background px-3 py-2 font-mono text-xs focus-visible:outline-2 focus-visible:outline-offset-1"
           />
         </CardContent>
       </Card>
@@ -598,12 +596,42 @@ export function DeploySettings({
   );
 }
 
+// The note used to be a native title, which waits and then draws the browser's
+// own tooltip. This one opens with the pointer and stays inside the page.
+function HoverHint({ text, children }: { text?: string; children: React.ReactNode }) {
+  const [box, setBox] = useState<{ left: number; top: number } | null>(null);
+  if (!text) return children;
+  return (
+    <span
+      className="inline-flex min-w-0 items-center gap-1"
+      onMouseEnter={(e) => {
+        const r = e.currentTarget.getBoundingClientRect();
+        const width = 256;
+        const left = Math.max(8, Math.min(r.left, window.innerWidth - width - 8));
+        setBox({ left, top: r.bottom + 6 });
+      }}
+      onMouseLeave={() => setBox(null)}
+    >
+      {children}
+      <Info className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+      {box &&
+        createPortal(
+          <span
+            role="tooltip"
+            style={{ left: box.left, top: box.top }}
+            className="pointer-events-none fixed z-50 w-64 rounded-md border bg-card px-2.5 py-2 text-xs leading-snug font-normal text-card-foreground shadow-md"
+          >
+            {text}
+          </span>,
+          document.body,
+        )}
+    </span>
+  );
+}
+
 // Three columns: label, switch, control. The switch column is reserved so a
-// switch beside an input never shoves that input sideways relative to rows
-// without one. Switch-only rows put the switch in the control column instead,
-// so toggles and number fields share one start edge (Routing options especially
-// alternates the two). The control column keeps the input's height either way,
-// so toggling a row grows it sideways and never moves what is below.
+// switch beside an input never shoves that input sideways. Every box fills
+// the control column, so they share one left edge and one right edge.
 function Row({
   label,
   note,
@@ -631,18 +659,21 @@ function Row({
   return (
     <div
       className={cn(
-        "grid gap-x-3 gap-y-1 py-2.5 sm:grid-cols-[11rem_2.25rem_minmax(0,1fr)] sm:items-center",
-        muted && "opacity-60",
+        "relative grid gap-x-3 gap-y-1 py-2.5 hover:z-30 sm:grid-cols-[11rem_3rem_minmax(0,1fr)] sm:items-center",
       )}
     >
-      <div className="min-w-0" title={hint ?? note}>
-        <div className="text-sm font-medium">{label}</div>
+      <div className={cn("min-w-0", muted && "opacity-60")}>
+        <HoverHint text={hint ?? note}>
+          <span className={cn("text-sm font-medium", label.includes("(fallback)") && "text-warning")}>
+            {label}
+          </span>
+        </HoverHint>
         {caption ? (
           <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{caption}</p>
         ) : null}
       </div>
       <div className="flex min-h-9 items-center">{hasControl ? toggle : null}</div>
-      <div className="flex min-h-9 min-w-0 items-center">
+      <div className={cn("flex min-h-9 min-w-0 items-center", muted && "opacity-60")}>
         {hasControl ? children : toggle}
       </div>
     </div>
@@ -912,7 +943,7 @@ function Select({
       aria-label={label}
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className="h-9 rounded-md border bg-background px-2 text-sm"
+      className="h-9 rounded-md border bg-background px-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-1"
     >
       {options.map((o) => (
         <option key={o} value={o}>
@@ -934,13 +965,13 @@ function Products({
 }) {
   if (options.length === 0) {
     return (
-      <span className="text-xs text-muted-foreground">
+      <span className="w-full text-xs text-muted-foreground">
         no GPU product reported by this cluster
       </span>
     );
   }
   return (
-    <div className="flex flex-wrap gap-1.5">
+    <div className="flex w-full flex-wrap gap-1.5">
       {options.map((o) => {
         const active = selected.includes(o);
         return (
@@ -953,8 +984,8 @@ function Products({
             }
             className={
               active
-                ? "rounded-full border border-foreground px-2.5 py-1 text-xs font-medium"
-                : "rounded-full border px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground"
+                ? "rounded-full border border-success/40 bg-success/15 px-2.5 py-1 text-xs font-medium text-success"
+                : "rounded-full border bg-background px-2.5 py-1 text-xs text-muted-foreground hover:border-foreground/30 hover:text-foreground"
             }
           >
             {o}

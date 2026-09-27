@@ -182,7 +182,13 @@ export interface SiteProfile {
   registry?: { mirror?: string };
   model: { pathTemplate: string; overrides?: Record<string, string> };
   cache?: { enabled?: boolean; hostPath?: string };
-  scaler?: { serverAddress?: string; serverHeaders?: Record<string, string> };
+  scaler?: {
+    serverAddress?: string;
+    sloAddress?: string;
+    sloTokenSecret?: string;
+    sloTokenKey?: string;
+    serverHeaders?: Record<string, string>;
+  };
   route?: {
     // The public base URL openresty is served on; a model's URL is
     // <gateway>/<route>. Display only -- no check calls it.
@@ -650,4 +656,50 @@ export const deployApi = {
     ),
   uninstall: (ns: string, release: string) =>
     del<UninstallResult>(`/api/releases/${encodeURIComponent(ns)}/${encodeURIComponent(release)}`),
+  slo: (ns: string, release: string) =>
+    get<SLOConfig>(`/api/releases/${encodeURIComponent(ns)}/${encodeURIComponent(release)}/slo`),
+  saveSLO: (ns: string, release: string, body: SLOEdit) =>
+    put<SLOConfig>(`/api/releases/${encodeURIComponent(ns)}/${encodeURIComponent(release)}/slo`, body),
+  resetSLO: (ns: string, release: string) =>
+    del<SLOConfig>(`/api/releases/${encodeURIComponent(ns)}/${encodeURIComponent(release)}/slo`),
 };
+
+// One coverage row. TTFT thresholds are seconds; OTPS thresholds are tok/s.
+export interface SLOMetric {
+  type: string;
+  threshold: number;
+}
+
+export interface SLOSection {
+  default?: { metrics?: SLOMetric[] };
+  ranges?: unknown[];
+}
+
+export interface SLOBound {
+  type: string;
+  value: number;
+}
+
+// Public shape of slo-api GET/PUT /config/{route}. The installed CR is often
+// only a service id and a minimum replica count, which arrives here as
+// highPriority false and minimumDeployment, with no ttft or otps.
+export interface SLOConfig {
+  found: boolean;
+  route?: string;
+  // CRD field, 0..10. highPriority on the wire is only true when this is 10.
+  priority?: number;
+  highPriority?: boolean;
+  minimumDeployment?: SLOBound;
+  maximumDeployment?: SLOBound;
+  ttft?: SLOSection;
+  otps?: SLOSection;
+}
+
+export interface SLOEdit {
+  route?: string;
+  priority?: number;
+  minimumDeployment?: SLOBound;
+  maximumDeployment?: SLOBound;
+  ttft?: SLOSection;
+  otps?: SLOSection;
+}

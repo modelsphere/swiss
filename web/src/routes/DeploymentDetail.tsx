@@ -2,13 +2,14 @@ import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, TriangleAlert } from "lucide-react";
-import { api, deployApi, type PlanStatus, type ReleaseStatus as Status } from "@/lib/api";
+import { api, deployApi, type Plan, type PlanStatus, type ReleaseStatus as Status } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, Input } from "@/components/ui/input";
 import { Provenance } from "@/components/Provenance";
 import { ReleaseStatus } from "@/components/ReleaseStatus";
+import { SLOCard } from "@/components/SLOCard";
 import { ErrorState, Loading } from "@/components/States";
 
 export function DeploymentDetail() {
@@ -82,6 +83,10 @@ export function DeploymentDetail() {
       </div>
 
       <InstallStatus status={s} />
+
+      {s.planStatus?.phase === "applied" && sloEnabled(plan.data) && (
+        <SLOCard namespace={namespace} release={release} canEdit={!!cluster.data?.allowDeploy} />
+      )}
 
       <ReleaseStatus namespace={namespace} release={release} />
 
@@ -229,6 +234,14 @@ function Uninstall({
       </CardContent>
     </Card>
   );
+}
+
+// The form layer is what the operator set. Compose writes sloRequirement.enabled
+// there explicitly, so a missing key is off rather than the chart's default.
+function sloEnabled(plan?: Plan): boolean {
+  const raw = plan?.layers?.form?.sloRequirement;
+  if (!raw || typeof raw !== "object") return false;
+  return (raw as { enabled?: boolean }).enabled === true;
 }
 
 function PhaseBadge({ phase }: { phase: string }) {

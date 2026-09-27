@@ -52,7 +52,15 @@ cache:
   # hostPath: /mnt/disk0/sglang-cache
 
 scaler:
+  # What the chart receives.
   serverAddress: http://decision-gen.llm-scaler.svc:80
+  # Same service. swissd calls this to read and edit LLMSLORequirement
+  # thresholds after install. It is not copied into chart values.
+  sloAddress: http://slo-api.llm-scaler.svc:80
+  # Bearer token for that API. The profile names the Secret; the token is
+  # not written here. Key defaults to "token". A bare name is swissd's namespace.
+  # sloTokenSecret: llm-scaler/slo-api
+  # sloTokenKey: token
 
 route:
   # Where callers reach openresty from outside, e.g. https://llm.example.com.

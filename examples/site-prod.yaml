@@ -38,6 +38,9 @@ cache:
 
 scaler:
   serverAddress: http://decision-gen.llm-scaler.svc:80
+  sloAddress: http://slo-api.llm-scaler.svc:80
+  # sloTokenSecret: llm-scaler/slo-api
+  # sloTokenKey: token
 
 route:
   # Where callers reach openresty from outside. Display only: swissd shows a

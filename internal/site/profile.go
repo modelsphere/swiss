@@ -94,10 +94,46 @@ type Cache struct {
 }
 
 type Scaler struct {
-	// ServerAddress is the decision server or the Prometheus query API,
-	// depending on which provider a deploy selects.
-	ServerAddress string            `yaml:"serverAddress,omitempty" json:"serverAddress,omitempty"`
-	ServerHeaders map[string]string `yaml:"serverHeaders,omitempty" json:"serverHeaders,omitempty"`
+	// ServerAddress is what the chart receives: the decision server or the
+	// Prometheus query API, depending on which provider a deploy selects.
+	ServerAddress string `yaml:"serverAddress,omitempty" json:"serverAddress,omitempty"`
+	// SLOAddress is the SLO API swissd calls to read and edit LLMSLORequirement
+	// thresholds. Same service as ServerAddress. It is not copied into chart
+	// values. Empty means DefaultSLOAddress.
+	SLOAddress string `yaml:"sloAddress,omitempty" json:"sloAddress,omitempty"`
+	// SLOTokenSecret is "namespace/name" of the Secret holding the bearer
+	// token, SLOTokenKey the key within it. A bare name is swissd's own
+	// namespace. The profile is a ConfigMap, so the token is not written here.
+	SLOTokenSecret string            `yaml:"sloTokenSecret,omitempty" json:"sloTokenSecret,omitempty"`
+	SLOTokenKey    string            `yaml:"sloTokenKey,omitempty" json:"sloTokenKey,omitempty"`
+	ServerHeaders  map[string]string `yaml:"serverHeaders,omitempty" json:"serverHeaders,omitempty"`
+}
+
+// DefaultSLOAddress is the in-cluster SLO API when the profile names none.
+const DefaultSLOAddress = "http://slo-api.llm-scaler.svc:80"
+
+// SLOServer is the address swissd calls, defaulted.
+func (sc Scaler) SLOServer() string {
+	if a := strings.TrimRight(strings.TrimSpace(sc.SLOAddress), "/"); a != "" {
+		return a
+	}
+	return DefaultSLOAddress
+}
+
+// SLOTokenRef qualifies a bare secret name with swissd's namespace.
+func (sc Scaler) SLOTokenRef(ns string) string {
+	if sc.SLOTokenSecret == "" || ns == "" || strings.Contains(sc.SLOTokenSecret, "/") {
+		return sc.SLOTokenSecret
+	}
+	return ns + "/" + sc.SLOTokenSecret
+}
+
+// SLOTokenKeyName is the data key the token is read from.
+func (sc Scaler) SLOTokenKeyName() string {
+	if sc.SLOTokenKey != "" {
+		return sc.SLOTokenKey
+	}
+	return "token"
 }
 
 type Route struct {

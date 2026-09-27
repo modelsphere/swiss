@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils";
 
-// Track and knob are drawn from primary / primary-foreground, which swap
-// between themes, so both states stay legible in light and dark.
+// On is the success green, off is the muted track. The knob stays white in
+// both themes so the two states read at a glance rather than as black on white.
 export function Switch({
   checked,
   onChange,
@@ -22,19 +22,17 @@ export function Switch({
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cn(
-        "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors",
-        "focus-visible:outline-2 focus-visible:outline-offset-2",
-        "disabled:cursor-not-allowed disabled:opacity-60",
-        checked ? "bg-primary" : "bg-muted",
+        "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors",
+        "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-success",
+        "disabled:cursor-not-allowed disabled:opacity-50",
+        checked ? "border-success bg-success" : "border-border bg-muted",
         !disabled && "cursor-pointer",
       )}
     >
       <span
         className={cn(
-          "size-3.5 rounded-full transition-transform",
-          checked
-            ? "translate-x-[1.125rem] bg-primary-foreground"
-            : "translate-x-0.5 bg-muted-foreground",
+          "absolute top-1/2 size-4 -translate-y-1/2 rounded-full bg-white shadow-sm ring-1 ring-black/10 transition-[left]",
+          checked ? "left-[22px]" : "left-0.5",
         )}
       />
     </button>

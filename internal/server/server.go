@@ -181,6 +181,12 @@ func (s *Server) Handler() http.Handler {
 	// Not behind allowDeploy: it changes nothing in the cluster. It spends a few
 	// tokens of GPU time, which is the same bargain as the /v1/models probe.
 	mux.HandleFunc("POST /api/releases/{namespace}/{release}/chat", s.handleChat)
+	// The chart created the requirement. Thresholds are a later edit, made
+	// through the SLO server so helm's field manager is not asked to give
+	// them up. GET is a read; PUT is refused below when deploys are off.
+	mux.HandleFunc("GET /api/releases/{namespace}/{release}/slo", s.handleSLO)
+	mux.HandleFunc("PUT /api/releases/{namespace}/{release}/slo", s.handleSLO)
+	mux.HandleFunc("DELETE /api/releases/{namespace}/{release}/slo", s.handleSLO)
 
 	if s.cfg.Server.AllowDeploy {
 		mux.HandleFunc("POST /api/plans", s.handlePlan)

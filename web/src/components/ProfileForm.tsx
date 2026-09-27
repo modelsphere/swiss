@@ -221,10 +221,34 @@ export function ProfileForm({
             onChange={(e) => setIn("cache", { hostPath: e.target.value })}
           />
         </Field>
-        <Field label="Scaler server" hint="The decision server or the Prometheus query API, depending on the provider a deploy picks.">
+        <Field label="Scaler server" hint="What the chart receives: the decision server, or the Prometheus query API, depending on the provider a deploy picks.">
           <Input
             value={value.scaler?.serverAddress ?? ""}
             onChange={(e) => setIn("scaler", { serverAddress: e.target.value })}
+          />
+        </Field>
+        <Field
+          label="SLO address"
+          hint="Same service. swissd calls this to read and edit LLMSLORequirement thresholds after install. It is not copied into chart values."
+        >
+          <Input
+            value={value.scaler?.sloAddress ?? ""}
+            placeholder="http://slo-api.llm-scaler.svc:80"
+            onChange={(e) => setIn("scaler", { sloAddress: e.target.value })}
+          />
+        </Field>
+        <Field label="SLO token secret" hint="ns/name of the Secret holding the bearer token, or a bare name in swissd's namespace. The token is not stored in this profile.">
+          <Input
+            value={value.scaler?.sloTokenSecret ?? ""}
+            placeholder="llm-scaler/slo-api"
+            onChange={(e) => setIn("scaler", { sloTokenSecret: e.target.value })}
+          />
+        </Field>
+        <Field label="SLO token key" hint="Key inside that Secret. Defaults to token.">
+          <Input
+            value={value.scaler?.sloTokenKey ?? ""}
+            placeholder="token"
+            onChange={(e) => setIn("scaler", { sloTokenKey: e.target.value })}
           />
         </Field>
         <Pairs
