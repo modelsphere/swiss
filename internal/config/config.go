@@ -37,9 +37,9 @@ type Config struct {
 }
 
 type Cluster struct {
-	// Name labels every plan composed here and names this cluster in the
-	// switcher. Required by swissd; the CLI falls back to the profile's name.
-	Name    string  `yaml:"name,omitempty"`
+	// Profile is this instance's one site profile. The cluster's name is
+	// profile.name, written at setup. Until that profile exists swissd only
+	// waits for it.
 	Profile Profile `yaml:"profile"`
 
 	// Namespaces bounds what swissd reads and deploys. Empty means cluster-wide,
@@ -257,9 +257,6 @@ func (c *Config) Validate() error {
 func (c *Config) ValidateServer() error {
 	if err := c.Validate(); err != nil {
 		return err
-	}
-	if c.Cluster.Name == "" {
-		return fmt.Errorf("%s: cluster.name is required for swissd -- it labels every plan composed here", c.origin())
 	}
 	if !c.Server.Auth.Disabled && c.Server.Auth.Dir == "" {
 		return fmt.Errorf("%s: server.auth.dir is required -- mount the credential Secret, or set server.auth.disabled to run without a login", c.origin())

@@ -45,7 +45,7 @@ export function Setup() {
   return (
     <div className="mx-auto max-w-3xl space-y-5 px-4 py-8">
       <div>
-        <h1 className="text-xl font-semibold">Set up {template.data.cluster}</h1>
+        <h1 className="text-xl font-semibold">Set up this cluster</h1>
         <p className="mt-2 text-sm text-muted-foreground">
           The site profile is the cluster-shaped layer: what the public catalog cannot know
           and a deploy form should not have to retype — where charts come from, where weights

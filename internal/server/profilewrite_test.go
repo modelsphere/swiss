@@ -43,8 +43,8 @@ func TestProfileTemplateIsAProfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the template must parse: %v", err)
 	}
-	if p.Name != "prod-b300" {
-		t.Errorf("the template names the cluster it was served for, got %q", p.Name)
+	if p.Name != "this-cluster" {
+		t.Errorf("the template is a starting name the operator replaces, got %q", p.Name)
 	}
 	// The setup page opens on the form, which binds to an object rather than
 	// to the text.
@@ -52,7 +52,7 @@ func TestProfileTemplateIsAProfile(t *testing.T) {
 	if !ok {
 		t.Fatalf("the template must carry the parsed profile too: %v", body)
 	}
-	if parsed["name"] != "prod-b300" {
+	if parsed["name"] != "this-cluster" {
 		t.Errorf("parsed template: %v", parsed)
 	}
 }

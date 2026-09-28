@@ -12,7 +12,6 @@ data:
   swiss.yaml: |
     catalog: {{ .Values.config.catalog | quote }}
     cluster:
-      name: {{ required "config.cluster.name is required -- it is recorded against every plan composed here" .Values.config.cluster.name | quote }}
       profile:
         configMap: {{ include "swiss.effectiveProfileRef" . | quote }}
         key: {{ .Values.config.cluster.profileKey | quote }}

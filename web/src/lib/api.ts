@@ -208,7 +208,8 @@ export interface SiteProfile {
 
 export interface ProfileResponse {
   source: string;
-  cluster: string;
+  // The profile's name, once one exists. Absent until setup.
+  cluster?: string;
   // Absent when the stored document does not parse: there is then nothing
   // swissd can compose against, which is the same state as having no profile.
   profile?: SiteProfile;

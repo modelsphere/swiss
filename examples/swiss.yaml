@@ -14,10 +14,6 @@
 catalog: https://models.example.com/swiss-catalog/
 
 cluster:
-  # Labels every plan composed here, and names this cluster in the switcher.
-  # Required by swissd.
-  name: prod-b300
-
   # Where the site profile is read from. Exactly one source, named explicitly
   # rather than sniffed: "swiss/site-profile" is a plausible relative path as
   # well as a plausible ConfigMap reference, and guessing wrong means composing

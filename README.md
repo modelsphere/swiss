@@ -62,7 +62,6 @@ POST /api/plans /api/diff /api/apply /api/install     (allowDeploy only)
 docker build -t harbor.4pd.io/hardcore-tech/swissd:$(./hack/bump.sh) .
 
 helm install swiss ./helm/swiss -n swiss --create-namespace \
-  --set config.cluster.name=prod-b300 \
   --set 'rbac.namespaces={modelforge,kimi}'
 ```
 

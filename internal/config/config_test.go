@@ -25,7 +25,6 @@ func TestRelativePathsResolveAgainstTheConfigFile(t *testing.T) {
 	p := write(t, dir, "swiss.yaml", `
 catalog: ./catalog
 cluster:
-  name: c
   profile:
     file: ./profile.yaml
 `)
@@ -46,7 +45,6 @@ func TestURLAndAbsolutePathsAreLeftAlone(t *testing.T) {
 	p := write(t, dir, "swiss.yaml", `
 catalog: https://models.example.com/catalog/
 cluster:
-  name: c
   profile:
     file: /etc/swiss/profile.yaml
 `)
@@ -68,8 +66,8 @@ cluster:
 func TestProfileNeedsExactlyOneSource(t *testing.T) {
 	dir := t.TempDir()
 	for name, body := range map[string]string{
-		"neither": "catalog: ./c\ncluster:\n  name: c\n  profile: {}\n",
-		"both":    "catalog: ./c\ncluster:\n  name: c\n  profile: {file: ./p.yaml, configMap: swiss/p}\n",
+		"neither": "catalog: ./c\ncluster:\n  profile: {}\n",
+		"both":    "catalog: ./c\ncluster:\n  profile: {file: ./p.yaml, configMap: swiss/p}\n",
 	} {
 		c, err := Load(write(t, dir, name+".yaml", body))
 		if err != nil {
@@ -83,7 +81,7 @@ func TestProfileNeedsExactlyOneSource(t *testing.T) {
 
 func TestConfigMapMustBeNamespaced(t *testing.T) {
 	dir := t.TempDir()
-	c, err := Load(write(t, dir, "swiss.yaml", "catalog: ./c\ncluster:\n  name: c\n  profile: {configMap: site-profile}\n"))
+	c, err := Load(write(t, dir, "swiss.yaml", "catalog: ./c\ncluster:\n  profile: {configMap: site-profile}\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,18 +90,19 @@ func TestConfigMapMustBeNamespaced(t *testing.T) {
 	}
 }
 
-// The CLI does not need a cluster name; swissd records it against every plan.
-func TestOnlyTheServerRequiresAClusterName(t *testing.T) {
+// The cluster's name is the profile's name, set at setup. The server config
+// does not carry a second one, before or after.
+func TestServerConfigNeedsNoClusterName(t *testing.T) {
 	dir := t.TempDir()
-	c, err := Load(write(t, dir, "swiss.yaml", "catalog: ./c\ncluster:\n  profile: {file: ./p.yaml}\n"))
+	c, err := Load(write(t, dir, "swiss.yaml", "catalog: ./c\ncluster:\n  profile: {file: ./p.yaml}\nserver:\n  auth: {disabled: true}\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Validate(); err != nil {
 		t.Errorf("the CLI should accept this: %v", err)
 	}
-	if err := c.ValidateServer(); err == nil {
-		t.Error("swissd should refuse a config with no cluster.name")
+	if err := c.ValidateServer(); err != nil {
+		t.Errorf("swissd should accept a config with no cluster name: %v", err)
 	}
 }
 
@@ -116,7 +115,7 @@ func TestUnknownKeyIsATypoNotASettingThatDoesNothing(t *testing.T) {
 
 func TestDefaults(t *testing.T) {
 	dir := t.TempDir()
-	c, err := Load(write(t, dir, "swiss.yaml", "catalog: ./c\ncluster:\n  name: c\n  profile: {configMap: swiss/p}\n"))
+	c, err := Load(write(t, dir, "swiss.yaml", "catalog: ./c\ncluster:\n  profile: {configMap: swiss/p}\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +128,7 @@ func TestDefaults(t *testing.T) {
 // credential happens to be configured is a default that ships open.
 func TestSwissdRefusesToRunWithNoLoginUnlessItIsAskedTo(t *testing.T) {
 	dir := t.TempDir()
-	base := "catalog: ./c\ncluster:\n  name: c\n  profile: {configMap: swiss/p}\n"
+	base := "catalog: ./c\ncluster:\n  profile: {configMap: swiss/p}\n"
 
 	c, err := Load(write(t, dir, "bare.yaml", base))
 	if err != nil {
@@ -164,7 +163,7 @@ func TestSwissdRefusesToRunWithNoLoginUnlessItIsAskedTo(t *testing.T) {
 func TestAuthDirResolvesAgainstTheConfigFile(t *testing.T) {
 	dir := t.TempDir()
 	c, err := Load(write(t, dir, "swiss.yaml",
-		"catalog: ./c\ncluster:\n  name: c\n  profile: {configMap: swiss/p}\nserver:\n  auth: {dir: ./auth}\n"))
+		"catalog: ./c\ncluster:\n  profile: {configMap: swiss/p}\nserver:\n  auth: {dir: ./auth}\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +177,6 @@ func TestGPUProductLabelsConfig(t *testing.T) {
 	c, err := Load(write(t, dir, "swiss.yaml", `
 catalog: ./c
 cluster:
-  name: c
   profile: {configMap: swiss/p}
 server:
   auth: {disabled: true}

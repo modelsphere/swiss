@@ -26,10 +26,6 @@ config:
   catalog: "https://models.example.com/swiss-catalog/"
 
   cluster:
-    # REQUIRED. Labels every plan composed here and names this cluster in the
-    # switcher. There is no default worth guessing: it ends up recorded against
-    # real deploys.
-    name: ""
     # The site profile ConfigMap, "namespace/name". Empty means <release>-profile
     # in this namespace, which swissd creates the first time the profile is
     # saved from the web. The chart writes no profile of its own: two writers of

@@ -73,6 +73,15 @@ type clusterInfo struct {
 	Warnings          []string    `json:"warnings,omitempty"`
 }
 
+// clusterName is the profile's name. Empty until setup has written one.
+func (s *Server) clusterName(ctx context.Context) string {
+	p, err := s.Profile(ctx)
+	if err != nil || p == nil {
+		return ""
+	}
+	return p.Name
+}
+
 // handleCluster is what the nav header renders: which cluster this is, what it
 // is wired to, and which swissd version is answering. The version matters --
 // N instances will drift, and seeing that in the switcher beats debugging a bug
@@ -82,25 +91,19 @@ func (s *Server) handleCluster(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	info := clusterInfo{
-		Name:        s.cfg.Cluster.Name,
 		Profile:     s.cfg.Cluster.Profile.Ref(),
 		Catalog:     s.cfg.Catalog,
 		Version:     s.version,
 		AllowDeploy: s.cfg.Server.AllowDeploy,
 	}
 	if p, err := s.Profile(ctx); err == nil {
+		// One instance, one profile. Its name is the cluster name.
+		info.Name = p.Name
 		info.ProfileName, info.Namespace, info.ChartRepo = p.Name, p.Namespace, p.ChartRepo
-		if info.Name == "" {
-			info.Name = p.Name
-		}
 		info.PriorityClassName = p.Schedule.PriorityClassName
 		info.SchedulerName = p.Schedule.SchedulerName
-		current := p.Name
-		if current == "" {
-			current = info.Name
-		}
 		for _, st := range p.Sites {
-			if st.Name != current {
+			if st.Name != p.Name {
 				info.Sites = append(info.Sites, st)
 			}
 		}
@@ -122,12 +125,10 @@ func (s *Server) handleSites(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := contextWithTimeout(r, 15*time.Second)
 	defer cancel()
 
-	self := s.cfg.Cluster.Name
+	self := ""
 	var sites []site.Site
 	if p, err := s.Profile(ctx); err == nil {
-		if p.Name != "" {
-			self = p.Name
-		}
+		self = p.Name
 		for _, st := range p.Sites {
 			if st.Name != self {
 				sites = append(sites, st)
@@ -211,8 +212,7 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := map[string]any{
-		"source":  s.cfg.Cluster.Profile.Ref(),
-		"cluster": s.cfg.Cluster.Name,
+		"source": s.cfg.Cluster.Profile.Ref(),
 		// The stored text, which is what the editor edits. The parsed view
 		// above is what swissd composes against; showing only that would mean
 		// an edit round trip silently dropping every comment in the file.
@@ -220,6 +220,7 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	if p, err := s.Profile(ctx); err == nil {
 		out["profile"] = p
+		out["cluster"] = p.Name
 	} else {
 		out["error"] = err.Error()
 	}
@@ -230,7 +231,7 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 // rather than duplicated in the app: the default and the thing that validates
 // it have to be one definition.
 func (s *Server) handleProfileTemplate(w http.ResponseWriter, _ *http.Request) {
-	raw := site.DefaultYAML(s.cfg.Cluster.Name)
+	raw := site.DefaultYAML("")
 	// Parsed as well as raw: the setup page opens on the form, which binds to
 	// an object, and the text is what its YAML tab shows. A default that does
 	// not parse is a bug this endpoint should report rather than hide.
@@ -240,7 +241,6 @@ func (s *Server) handleProfileTemplate(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"cluster": s.cfg.Cluster.Name,
 		"source":  s.cfg.Cluster.Profile.Ref(),
 		"profile": p,
 		"yaml":    raw,
@@ -385,7 +385,7 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body := map[string]any{
-		"cluster": s.cfg.Cluster.Name,
+		"cluster": s.clusterName(ctx),
 		"nodes":   out,
 		"summary": map[string]any{"nodes": len(out), "gpus": totalGPUs, "gpusUsed": usedGPUs},
 	}
@@ -512,7 +512,7 @@ func (s *Server) handleDeployments(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"cluster":     s.cfg.Cluster.Name,
+		"cluster":     s.clusterName(ctx),
 		"catalogRef":  refOrEmpty(cat, catErr),
 		"page":        page,
 		"perPage":     perPage,

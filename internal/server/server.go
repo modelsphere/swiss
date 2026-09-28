@@ -226,7 +226,7 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	errc := make(chan error, 1)
 	go func() {
-		s.log.Info("swissd listening", "addr", s.cfg.Server.Addr, "cluster", s.cfg.Cluster.Name, "version", s.version)
+		s.log.Info("swissd listening", "addr", s.cfg.Server.Addr, "version", s.version)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			errc <- err
 		}

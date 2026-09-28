@@ -69,7 +69,7 @@ func TestClusterEndpointCarriesProfileAndSites(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, body)
 	}
-	if body["name"] != "prod-b300" || body["namespace"] != "modelforge" {
+	if body["name"] != "prod" || body["namespace"] != "modelforge" {
 		t.Errorf("unexpected cluster info: %v", body)
 	}
 	if body["catalogRef"] == "" || body["version"] != "test" {
@@ -270,11 +270,10 @@ func TestExampleConfigLoads(t *testing.T) {
 	}
 }
 
-func testConfig(cluster string) *config.Config {
+func testConfig(string) *config.Config {
 	c := &config.Config{
 		Catalog: "../../../swiss-catalog",
 		Cluster: config.Cluster{
-			Name:    cluster,
 			Profile: config.Profile{ConfigMap: "swiss/site-profile", Key: "profile.yaml"},
 		},
 		// No login: these tests are about what the endpoints answer, not about
