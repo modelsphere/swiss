@@ -1,8 +1,17 @@
 import { useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Plus, X } from "lucide-react";
 import type { ClusterInfo, Plan, PlanRequest, Variant } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import {
+  DIRECTIVES,
+  DIRECTIVES_BY_KEY,
+  MAX_VALUES,
+  directiveGroups,
+  rejectKey,
+} from "@/lib/routeDirectives";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { HoverHint } from "@/components/ui/hint";
 import { Switch } from "@/components/ui/switch";
@@ -49,7 +58,11 @@ export interface Form {
   ttftLimitMs: string;
   tpsLimitTps: string;
   adaptiveCc: boolean;
-  adaptiveCcMin: string;
+  adaptiveCcMinFrac: string;
+  // Everything else openresty takes, added a row at a time rather than listed:
+  // there are thirty of them, two are usually set, and a form that shows all
+  // thirty is a form nobody reads. Ordered, so a row stays where it was added.
+  nginxExtras: { key: string; value: string }[];
   monitor: boolean;
   monitorModel: string;
   monitorGpuType: string;
@@ -79,7 +92,8 @@ export const EMPTY: Form = {
   ttftLimitMs: "",
   tpsLimitTps: "",
   adaptiveCc: true,
-  adaptiveCcMin: "",
+  adaptiveCcMinFrac: "",
+  nginxExtras: [],
   monitor: true,
   monitorModel: "",
   monitorGpuType: "",
@@ -398,36 +412,70 @@ export function DeploySettings({
               <Switch
                 checked={form.adaptiveCc}
                 onChange={(v) =>
-                  onChange(v ? { adaptiveCc: true } : { adaptiveCc: false, adaptiveCcMin: "" })
+                  onChange(v ? { adaptiveCc: true } : { adaptiveCc: false, adaptiveCcMinFrac: "" })
                 }
                 label="adaptive concurrency"
               />
             }
           />
 
+          {/* The floor, as a fraction of the static peer max. The absolute
+              floor is the other half of the same decision and lives in Added
+              settings: one of the two is usually enough, and this is the one
+              that applies when neither is set. */}
           <Row
-            label="Adaptive floor"
+            label="Adaptive floor fraction"
             note={
-              form.adaptiveCc
-                ? "adaptive_cc_min — empty omits"
-                : "enable Adaptive concurrency to edit"
+              !form.adaptiveCc
+                ? "enable Adaptive concurrency to edit"
+                : fracOutOfRange(form.adaptiveCcMinFrac)
+                  ? "must be over 0 and at most 1 — openresty ignores anything else"
+                  : extraValue(form, "adaptive_cc_min")
+                    ? "unused while Adaptive floor is set"
+                    : "adaptive_cc_min_frac — empty leaves openresty's 0.4"
             }
             hint={
               form.adaptiveCc
-                ? "adaptive_cc_min — AIMD concurrency floor (lower clamp); empty omits and openresty derives floor from static peer max × min_frac; only applies when Adaptive concurrency is on"
+                ? "adaptive_cc_min_frac — the floor as a fraction of the static peer max, used only when the absolute Adaptive floor is unset. 0 < frac <= 1; openresty's default is 0.4, so a route switching to adaptive drops to 40% of static capacity and climbs back at about +2%/20s. Out of range is not an error there: it logs and silently uses 0.4."
                 : "enable Adaptive concurrency to edit"
             }
-            muted={!form.adaptiveCc}
+            muted={!form.adaptiveCc || !!extraValue(form, "adaptive_cc_min")}
           >
             <Input
-              value={form.adaptiveCcMin}
-              onChange={set("adaptiveCcMin")}
-              inputMode="numeric"
-              aria-label="adaptive floor"
-              placeholder="omit"
+              value={form.adaptiveCcMinFrac}
+              onChange={set("adaptiveCcMinFrac")}
+              inputMode="decimal"
+              aria-label="adaptive floor fraction"
+              placeholder="0.4"
               disabled={!form.adaptiveCc}
             />
           </Row>
+
+          {form.nginxExtras.map((row, i) => (
+            <ExtraRow
+              key={`${row.key}-${i}`}
+              row={row}
+              adaptiveOn={form.adaptiveCc}
+              onChange={(value) =>
+                onChange({
+                  nginxExtras: form.nginxExtras.map((r, j) => (j === i ? { ...r, value } : r)),
+                })
+              }
+              onRemove={() =>
+                onChange({ nginxExtras: form.nginxExtras.filter((_, j) => j !== i) })
+              }
+            />
+          ))}
+
+          <AddSetting
+            taken={form.nginxExtras.map((r) => r.key)}
+            used={NAMED_VALUES.size + form.nginxExtras.length}
+            onAdd={(key) =>
+              onChange({
+                nginxExtras: [...form.nginxExtras, { key, value: initialValue(key) }],
+              })
+            }
+          />
 
           <Row
             label="Monitor"
@@ -983,6 +1031,220 @@ extraArgs:
 
 const num = (v: string) => (v.trim() === "" ? undefined : Number(v));
 
+function extraValue(f: Form, key: string): string {
+  return f.nginxExtras.find((r) => r.key === key)?.value.trim() ?? "";
+}
+
+// A boolean row is written out the moment it is added, at openresty's own
+// default. A switch showing "off" for a key that defaults on, only because
+// nothing has been typed yet, is the kind of quiet lie this card exists to
+// avoid; everything else starts empty, which omits the key.
+function initialValue(key: string): string {
+  const d = DIRECTIVES_BY_KEY.get(key);
+  if (d?.kind !== "boolean") return "";
+  return d.fallback === "on" ? "true" : "false";
+}
+
+// One added setting. A key this build does not know still gets a row -- the
+// values map is free-form by design, and a route carrying a knob newer than
+// this UI must still be editable rather than invisible.
+function ExtraRow({
+  row,
+  adaptiveOn,
+  onChange,
+  onRemove,
+}: {
+  row: { key: string; value: string };
+  adaptiveOn: boolean;
+  onChange: (value: string) => void;
+  onRemove: () => void;
+}) {
+  const d = DIRECTIVES_BY_KEY.get(row.key);
+  const label = d?.label ?? row.key;
+  const idle = !!d?.needsAdaptive && !adaptiveOn;
+  return (
+    <Row
+      label={label}
+      note={
+        idle
+          ? `${row.key} — enable Adaptive concurrency for this to do anything`
+          : `${row.key} — empty leaves ${d ? d.fallback : "openresty's default"}`
+      }
+      hint={d?.detail ?? `${row.key} — passed to openresty's route table untouched.`}
+      muted={idle}
+    >
+      <div className="flex items-center gap-2">
+        {d?.kind === "boolean" ? (
+          <div className="flex h-9 min-w-0 flex-1 items-center gap-2.5">
+            <Switch
+              checked={row.value === "true"}
+              onChange={(v) => onChange(v ? "true" : "false")}
+              label={label}
+            />
+            <span className="text-sm text-muted-foreground">
+              {row.value === "true" ? "on" : "off"}
+            </span>
+          </div>
+        ) : (
+          <Input
+            value={row.value}
+            onChange={(e) => onChange(e.target.value)}
+            inputMode={d?.kind === "number" ? "decimal" : undefined}
+            placeholder={d?.fallback ?? "value"}
+            aria-label={label}
+            className="min-w-0 flex-1"
+          />
+        )}
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          aria-label={`Remove ${label}`}
+          className="size-8 shrink-0 px-0 text-muted-foreground hover:text-foreground"
+          onClick={onRemove}
+        >
+          <X className="size-4" />
+        </Button>
+      </div>
+    </Row>
+  );
+}
+
+// The picker. Thirty knobs listed permanently would bury the five that are set
+// on a normal route, so they live behind this: each one names what openresty
+// does without it, because leaving it out is the usual right answer.
+function AddSetting({
+  taken,
+  used,
+  onAdd,
+}: {
+  taken: string[];
+  used: number;
+  onAdd: (key: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [custom, setCustom] = useState("");
+  const full = used >= MAX_VALUES;
+  const customError = custom.trim() ? rejectKey(custom, taken) : "";
+
+  const add = (key: string) => {
+    onAdd(key);
+    setCustom("");
+    setOpen(false);
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 py-3">
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="-ml-3 text-muted-foreground hover:text-foreground"
+        onClick={() => setOpen(true)}
+        disabled={full}
+      >
+        <Plus className="size-3.5" />
+        Add setting
+      </Button>
+      <span className="text-xs text-muted-foreground">
+        {full
+          ? `${MAX_VALUES} values is the CRD's cap for one route`
+          : `${used} of ${MAX_VALUES} route values used`}
+      </span>
+
+      <Dialog
+        open={open}
+        onClose={() => setOpen(false)}
+        title="Add a route setting"
+        subtitle="openresty's own tuning knobs, sent verbatim. Each says what happens without it — leaving one out is usually the right answer."
+      >
+        <div className="space-y-5">
+          {directiveGroups().map((group) => {
+            const rows = DIRECTIVES.filter((d) => d.group === group && !taken.includes(d.key));
+            if (rows.length === 0) return null;
+            return (
+              <div key={group} className="space-y-1.5">
+                <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  {group}
+                </div>
+                <div className="divide-y rounded-md border">
+                  {rows.map((d) => (
+                    <button
+                      key={d.key}
+                      type="button"
+                      className="block w-full px-3 py-2.5 text-left hover:bg-muted/50"
+                      onClick={() => add(d.key)}
+                    >
+                      <div className="flex flex-wrap items-baseline gap-x-2">
+                        <span className="text-sm font-medium">{d.label}</span>
+                        <span className="font-mono text-xs text-muted-foreground">{d.key}</span>
+                        <span className="ml-auto text-xs text-muted-foreground">
+                          without it: {d.fallback}
+                        </span>
+                      </div>
+                      <p className="mt-0.5 text-xs leading-snug text-muted-foreground">{d.detail}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+
+          {/* The map is free-form on purpose: openresty gains knobs without a
+              chart change, and this build should not be what stops one being
+              set. Only what the chain below refuses is refused here. */}
+          <div className="space-y-1.5">
+            <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Something else
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                value={custom}
+                onChange={(e) => setCustom(e.target.value)}
+                placeholder="openresty key, e.g. tps_min_tokens"
+                aria-label="custom route setting key"
+                className="min-w-0 flex-1 sm:max-w-xs"
+              />
+              <Button
+                type="button"
+                size="sm"
+                disabled={!custom.trim() || !!customError}
+                onClick={() => add(custom.trim())}
+              >
+                Add
+              </Button>
+            </div>
+            <p className={cn("text-xs leading-snug", customError ? "text-warning" : "text-muted-foreground")}>
+              {customError || "Any key openresty's route factory reads. It reaches it untouched."}
+            </p>
+          </div>
+        </div>
+      </Dialog>
+    </div>
+  );
+}
+
+// The route values that have a row of their own. Everything else in the live
+// route's map is an added row, so nothing a route carries goes unshown.
+const NAMED_VALUES = new Set([
+  "expose_routed_peer",
+  "ttft_limit_ms",
+  "tps_limit_tps",
+  "adaptive_cc",
+  "adaptive_cc_min_frac",
+]);
+
+// openresty refuses a fraction outside (0, 1] by logging and using its own
+// default, which reads afterwards as a route silently sitting at 40% of static
+// capacity with nothing saying why. Said here instead, where it can still be
+// corrected.
+function fracOutOfRange(raw: string): boolean {
+  const s = raw.trim();
+  if (s === "") return false;
+  const n = Number(s);
+  return !Number.isFinite(n) || n <= 0 || n > 1;
+}
+
 // imageOf pairs the image the catalog pins with the one the site mirrors it to,
 // both as repository:tag. Undefined when the variant carries no image: there is
 // then nothing to show and nothing to choose between.
@@ -1059,7 +1321,16 @@ export function planRequest(
   if (f.ttftLimitMs.trim()) nginxValues.ttft_limit_ms = f.ttftLimitMs.trim();
   if (f.tpsLimitTps.trim()) nginxValues.tps_limit_tps = f.tpsLimitTps.trim();
   nginxValues.adaptive_cc = f.adaptiveCc ? "true" : "false";
-  if (f.adaptiveCc && f.adaptiveCcMin.trim()) nginxValues.adaptive_cc_min = f.adaptiveCcMin.trim();
+  if (f.adaptiveCc && f.adaptiveCcMinFrac.trim()) {
+    nginxValues.adaptive_cc_min_frac = f.adaptiveCcMinFrac.trim();
+  }
+  // An added row with no value is a row somebody opened and left: the key is
+  // omitted, which is what leaves openresty's own default in force. Adding the
+  // row and clearing it is how a value is taken back off the route.
+  for (const { key, value } of f.nginxExtras) {
+    const k = key.trim();
+    if (k && value.trim()) nginxValues[k] = value.trim();
+  }
   nginx.values = nginxValues;
 
   const maxConc = num(f.backendMaxConcurrency);
@@ -1173,7 +1444,12 @@ export function formFromPlan(plan: Plan): Form {
     ttftLimitMs: nv.ttft_limit_ms ?? "",
     tpsLimitTps: nv.tps_limit_tps ?? "",
     adaptiveCc: truthyStr(nv.adaptive_cc, true),
-    adaptiveCcMin: nv.adaptive_cc_min ?? "",
+    adaptiveCcMinFrac: nv.adaptive_cc_min_frac ?? "",
+    // Whatever else the live route carries, named row or not: an upgrade has
+    // to show what is set, including a key this build has never heard of.
+    nginxExtras: Object.entries(nv)
+      .filter(([k]) => !NAMED_VALUES.has(k))
+      .map(([key, value]) => ({ key, value: String(value ?? "") })),
     backendMaxConcurrency: backendMaxConcurrencyOf(at("modelRoute.nginx.peers")),
     cartMaxLoad: str("modelRoute.cart.maxLoad"),
     monitor: bool("modelRoute.monitor.enabled", true),

@@ -9,6 +9,12 @@ export function PreviewDeploySettings() {
     modelRoute: true,
     route: "glm-5",
     cart: true,
+    // One known knob and one this build has never heard of: a route carrying a
+    // key newer than the UI still has to be editable rather than invisible.
+    nginxExtras: [
+      { key: "adaptive_cc_min", value: "8" },
+      { key: "some_future_knob", value: "7" },
+    ],
   });
   return (
     <div className="mx-auto max-w-3xl space-y-4 p-6">
@@ -18,7 +24,8 @@ export function PreviewDeploySettings() {
           Core deploy settings, Routing options (SLO-first TTFT/TPS, CART, adaptive, monitor), then Advanced.
           SLO, adaptive concurrency, and autoscale default on. Static TTFT/TPS stay fully visible when SLO is on
           and are labeled "(fallback)" with captions. Monitor (enable, model, GPU type) lives on Routing.
-          CART max load and Adaptive floor mute until their switch is on.
+          CART max load and the adaptive rows mute until their switch is on. Adaptive floor fraction is a
+          named row; every other openresty knob is added from the Add setting dialog, including a custom key.
           ServiceMonitor lives under Advanced. No backend required.
         </p>
       </div>
