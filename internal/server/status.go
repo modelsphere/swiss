@@ -388,7 +388,7 @@ func (s *Server) entrypointHeaders(ctx context.Context, cfg site.RouteAuth, req 
 		if name == "" {
 			name = "apiKey"
 		}
-		if key = data[name]; key == "" {
+		if key = firstKey(data[name]); key == "" {
 			return nil, fmt.Errorf("secret %s has no key %q", ref, name)
 		}
 	}
@@ -396,6 +396,16 @@ func (s *Server) entrypointHeaders(ctx context.Context, cfg site.RouteAuth, req 
 		hdr.Set(cfg.HeaderName(), cfg.KeyPrefix()+key)
 	}
 	return hdr, nil
+}
+
+// firstKey reads a bare key or llm-openresty's "key1:owner1,key2:owner2".
+func firstKey(entry string) string {
+	for _, pair := range strings.Split(entry, ",") {
+		if key, _, _ := strings.Cut(strings.TrimSpace(pair), ":"); key != "" {
+			return strings.TrimSpace(key)
+		}
+	}
+	return ""
 }
 
 // sentHeaderNames is what a result may report: names, never values.

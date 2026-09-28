@@ -50,6 +50,18 @@ func TestCustomHeaderCarriesTheBareKey(t *testing.T) {
 	}
 }
 
+// llm-openresty's own Secret holds "key1:owner1,key2:owner2"; only the key is a credential.
+func TestOpenrestyKeyListSendsTheFirstKey(t *testing.T) {
+	probe := liveProbe()
+	probe.Secrets = map[string]map[string]string{"llm-route/openresty": {"keys": " sk-one:ops, sk-two:dev"}}
+	s := New(testConfig("prod-b300"), probe, discardLogger(), "test")
+
+	h := headersFor(t, s, site.RouteAuth{SecretRef: "llm-route/openresty", SecretKey: "keys"}, entrypointAuth{})
+	if got := h.Get("Authorization"); got != "Bearer sk-one" {
+		t.Fatalf("Authorization = %q, want the first key without its owner", got)
+	}
+}
+
 // A request-supplied key wins outright: testing a credential before writing it
 // into the cluster is the reason the override exists.
 func TestRequestKeyOverridesTheProfile(t *testing.T) {
