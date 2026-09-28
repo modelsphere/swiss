@@ -20,6 +20,16 @@ type Profile struct {
 	// Namespace a release lands in unless the deploy overrides it.
 	Namespace string `yaml:"namespace,omitempty" json:"namespace,omitempty"`
 
+	// Catalog is where the model catalog is read from -- an https base or an
+	// absolute path, the same shape the config file takes.
+	//
+	// Set here it wins over swissd's config file. Which catalog a cluster reads
+	// is a property of the cluster, like the chart repo and the image mirror
+	// below it, and this is the document an operator can edit without a helm
+	// upgrade. The config value stays the install-time default, and remains
+	// what `swiss` on a laptop uses: the CLI cannot read this ConfigMap.
+	Catalog string `yaml:"catalog,omitempty" json:"catalog,omitempty"`
+
 	// ChartRepo is where charts are pulled from -- the registry the catalog
 	// deliberately does not name. Empty means a local chart path, which is fine
 	// for the CLI and not for a server.
@@ -250,6 +260,14 @@ func Parse(raw []byte, origin string) (*Profile, error) {
 	}
 	if p.Model.PathTemplate == "" {
 		return nil, fmt.Errorf("%s: model.pathTemplate is required -- the catalog gives an identity, not a path", origin)
+	}
+	// A relative catalog path has no meaning here: this document is read from a
+	// ConfigMap, so there is no file for it to be relative to. Refused rather
+	// than resolved against whatever swissd's working directory happens to be.
+	p.Catalog = strings.TrimSpace(p.Catalog)
+	if c := p.Catalog; c != "" &&
+		!strings.HasPrefix(c, "http://") && !strings.HasPrefix(c, "https://") && !strings.HasPrefix(c, "/") {
+		return nil, fmt.Errorf("%s: catalog %q must be an http:// or https:// url, or an absolute path", origin, c)
 	}
 	// A half-filled site is a dead entry in the switcher: a name that goes
 	// nowhere, or an address with nothing to click. Refused here rather than

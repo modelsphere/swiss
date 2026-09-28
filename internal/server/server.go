@@ -41,9 +41,16 @@ type Server struct {
 	creds  func() (auth.Credentials, error)
 	logins failures
 
-	mu        sync.Mutex
-	cat       *catalog.Catalog
-	catAt     time.Time
+	// catCache survives this process: the index it holds is what a restart
+	// renders when the catalog cannot be reached.
+	catCache *catalog.Cache
+
+	mu    sync.Mutex
+	cat   *catalog.Catalog
+	catAt time.Time
+	// catLoc is the location s.cat was opened from, so a profile that repoints
+	// the catalog invalidates it rather than waiting out the TTL.
+	catLoc    string
 	profile   *site.Profile
 	profileAt time.Time
 }
@@ -52,7 +59,11 @@ func New(cfg *config.Config, probe cluster.Probe, log *slog.Logger, version stri
 	if k, ok := probe.(*cluster.Kube); ok && len(cfg.Server.GPUProductLabels) > 0 {
 		k.GPUProductLabels = cfg.Server.GPUProductLabelsMap()
 	}
-	return &Server{cfg: cfg, probe: probe, log: log, version: version, namespace: cluster.SelfNamespace()}
+	return &Server{
+		cfg: cfg, probe: probe, log: log, version: version,
+		namespace: cluster.SelfNamespace(),
+		catCache:  catalog.NewCache(cfg.Server.CatalogCacheDir()),
+	}
 }
 
 // cached returns what has already been fetched, without fetching.
@@ -82,25 +93,72 @@ func (s *Server) SetCredentials(f func() (auth.Credentials, error)) { s.creds = 
 // previous catalog is kept and served: a published catalog going briefly
 // unreachable should not empty the marketplace.
 func (s *Server) Catalog(ctx context.Context) (*catalog.Catalog, error) {
+	loc, _ := s.CatalogLocation(ctx)
+	if loc == "" {
+		return nil, fmt.Errorf("no catalog: set catalog in the site profile, or in %s", s.cfg.Origin)
+	}
+
 	s.mu.Lock()
-	cached, at := s.cat, s.catAt
+	cached, at, was := s.cat, s.catAt, s.catLoc
 	s.mu.Unlock()
-	if cached != nil && time.Since(at) < s.cfg.Server.CacheTTL {
+	// A cache keyed on time alone would serve the old catalog for a whole TTL
+	// after the profile is repointed -- and, worse, the fallbacks below would
+	// keep serving it rather than reporting a location that does not answer.
+	if cached != nil && was == loc && time.Since(at) < s.cfg.Server.CacheTTL {
 		return cached, nil
 	}
 
-	c, err := catalog.Open(ctx, s.cfg.Catalog)
+	f, err := catalog.NewFetcher(loc)
 	if err != nil {
-		if cached != nil {
+		return nil, err
+	}
+	c, err := catalog.OpenFetcher(ctx, f)
+	if err != nil {
+		if cached != nil && was == loc {
 			s.log.WarnContext(ctx, "catalog refresh failed, serving previous", "err", err, "ref", cached.Ref)
 			return cached, nil
 		}
+		// Nothing in memory for this location: this process may have just
+		// started, which is exactly when an unreachable catalog would otherwise
+		// mean an empty marketplace.
+		if disk, wrote, derr := s.catCache.Open(f, loc); derr == nil {
+			s.log.WarnContext(ctx, "catalog unreachable, serving the cached index",
+				"err", err, "cachedAt", wrote, "ref", disk.Ref, "catalog", loc)
+			s.keepCatalog(disk, loc)
+			return disk, nil
+		}
 		return nil, err
 	}
-	s.mu.Lock()
-	s.cat, s.catAt = c, time.Now()
-	s.mu.Unlock()
+	if err := s.catCache.Save(loc, c); err != nil {
+		s.log.WarnContext(ctx, "catalog index cache not written", "err", err, "dir", s.catCache.Dir())
+	}
+	s.keepCatalog(c, loc)
 	return c, nil
+}
+
+func (s *Server) keepCatalog(c *catalog.Catalog, loc string) {
+	s.mu.Lock()
+	s.cat, s.catAt, s.catLoc = c, time.Now(), loc
+	s.mu.Unlock()
+}
+
+// CatalogLocation is the catalog this instance reads, and where that was said:
+// the site profile when it names one, otherwise the config file. The profile is
+// the document an operator can edit, so it wins; the config value is the
+// install-time default and what the CLI, which cannot read the profile's
+// ConfigMap, has to go on.
+//
+// An unreadable profile is not a reason to lose the catalog: the configured
+// default stands in, and the caller that needed the profile reports that
+// separately.
+func (s *Server) CatalogLocation(ctx context.Context) (loc, from string) {
+	if p, err := s.Profile(ctx); err == nil && p.Catalog != "" {
+		return p.Catalog, "profile"
+	}
+	if s.cfg.Catalog == "" {
+		return "", ""
+	}
+	return s.cfg.Catalog, "config"
 }
 
 // Profile reads the site profile from the ConfigMap in this cluster.

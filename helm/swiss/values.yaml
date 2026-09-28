@@ -23,6 +23,11 @@ config:
   # The catalog: an https base or a path. index.json is appended when the
   # location does not already name a .json file. No git; a catalog is a
   # published index plus the documents it points at.
+  #
+  # The default, not the last word: a site profile naming a catalog of its own
+  # wins, which is how it gets repointed from the web without a helm upgrade.
+  # This value is what a fresh install reads until then, and what `swiss` on a
+  # laptop reads always -- the CLI cannot read the profile ConfigMap.
   catalog: "https://models.example.com/swiss-catalog/"
 
   cluster:

@@ -11,6 +11,10 @@
 # An https base or a local path. index.json is appended when the location does
 # not already name a .json file. No git: a catalog is a published index plus the
 # documents it points at.
+#
+# For swissd this is the default: a site profile naming a catalog of its own
+# wins, so the catalog can be repointed from the web without a helm upgrade.
+# For the CLI it is the only source -- it cannot read the profile's ConfigMap.
 catalog: https://models.example.com/swiss-catalog/
 
 cluster:
@@ -37,6 +41,13 @@ server:
 
   # How long a fetched catalog or profile is reused before refetching.
   cacheTTL: 60s
+
+  # Where the last catalog index is kept, so a restart while the catalog is
+  # unreachable still has a marketplace to render. Empty puts it beside the
+  # database. Whether it survives a restart is a property of what is mounted
+  # there: on an emptyDir this buys nothing the in-memory cache does not
+  # already give.
+  # cacheDir: /var/lib/swiss/catalog-cache
 
   # The site login: one account, read from a mounted Secret. A directory rather
   # than an API read, because that is what a Secret volume is -- the kubelet

@@ -1,6 +1,7 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Plus, X } from "lucide-react";
-import { type Site, type SiteProfile } from "@/lib/api";
+import { api, type Site, type SiteProfile } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -25,6 +26,13 @@ export function ProfileForm({
     onChange({ ...value, [key]: v });
   const setIn = <K extends keyof SiteProfile>(key: K, patch: Partial<SiteProfile[K]>) =>
     onChange({ ...value, [key]: { ...(value[key] as object), ...patch } as SiteProfile[K] });
+
+  // The catalog swissd falls back to when this document names none. Shown as
+  // the box's placeholder, so leaving it empty says which catalog that is
+  // rather than the word "default". Absent during first-run setup, where there
+  // is no cluster to ask yet.
+  const cluster = useQuery({ queryKey: ["cluster"], queryFn: api.cluster, retry: false });
+  const configuredCatalog = cluster.data?.catalogFrom === "config" ? cluster.data.catalog : "";
 
   return (
     <div className="space-y-6">
@@ -66,7 +74,20 @@ export function ProfileForm({
         </Field>
       </Group>
 
-      <Group title="Charts and images" hint="The registry the catalog deliberately does not name.">
+      <Group
+        title="Catalog, charts and images"
+        hint="Where the models come from, and the registries the catalog deliberately does not name."
+      >
+        <Field
+          label="Catalog"
+          hint="An https base, or an absolute path. Set here it wins over swissd's config file, so the catalog moves without a helm upgrade. Empty falls back to the configured one, which is also what the CLI uses."
+        >
+          <Input
+            value={value.catalog ?? ""}
+            placeholder={configuredCatalog || "the catalog swissd was configured with"}
+            onChange={(e) => set("catalog", e.target.value)}
+          />
+        </Field>
         <Field label="Chart repo" hint="e.g. oci://harbor.example.com/charts. Empty means a local chart path.">
           <Input
             value={value.chartRepo ?? ""}

@@ -1,10 +1,10 @@
 import { useState } from "react";
-import { createPortal } from "react-dom";
-import { ChevronDown, Info } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import type { ClusterInfo, Plan, PlanRequest, Variant } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { HoverHint } from "@/components/ui/hint";
 import { Switch } from "@/components/ui/switch";
 
 // One form, two routes. Deploy composes it against a catalog model and Upgrade
@@ -593,39 +593,6 @@ export function DeploySettings({
         </CardContent>
       </Card>
     </fieldset>
-  );
-}
-
-// The note used to be a native title, which waits and then draws the browser's
-// own tooltip. This one opens with the pointer and stays inside the page.
-function HoverHint({ text, children }: { text?: string; children: React.ReactNode }) {
-  const [box, setBox] = useState<{ left: number; top: number } | null>(null);
-  if (!text) return children;
-  return (
-    <span
-      className="inline-flex min-w-0 items-center gap-1"
-      onMouseEnter={(e) => {
-        const r = e.currentTarget.getBoundingClientRect();
-        const width = 256;
-        const left = Math.max(8, Math.min(r.left, window.innerWidth - width - 8));
-        setBox({ left, top: r.bottom + 6 });
-      }}
-      onMouseLeave={() => setBox(null)}
-    >
-      {children}
-      <Info className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-      {box &&
-        createPortal(
-          <span
-            role="tooltip"
-            style={{ left: box.left, top: box.top }}
-            className="pointer-events-none fixed z-50 w-64 rounded-md border bg-card px-2.5 py-2 text-xs leading-snug font-normal text-card-foreground shadow-md"
-          >
-            {text}
-          </span>,
-          document.body,
-        )}
-    </span>
   );
 }
 

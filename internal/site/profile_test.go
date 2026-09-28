@@ -68,6 +68,38 @@ func TestModelURLJoinsTheGatewayAndRoute(t *testing.T) {
 	}
 }
 
+// The catalog set here wins over swissd's config file, so what it may say is
+// checked when the profile is parsed rather than when a fetch fails.
+func TestCatalogValidation(t *testing.T) {
+	const head = "name: prod\nmodel:\n  pathTemplate: /models/{{name}}\n"
+
+	for name, want := range map[string]string{
+		"https://models.example.com/swiss-catalog/": "https://models.example.com/swiss-catalog/",
+		"http://models.internal/catalog/":           "http://models.internal/catalog/",
+		"/mnt/disk0/swiss-catalog":                  "/mnt/disk0/swiss-catalog",
+		"  https://models.example.com/c/  ":         "https://models.example.com/c/",
+		"":                                          "",
+	} {
+		p, err := Parse([]byte(head+"catalog: \""+name+"\"\n"), "test")
+		if err != nil {
+			t.Errorf("catalog %q must parse: %v", name, err)
+			continue
+		}
+		if p.Catalog != want {
+			t.Errorf("catalog %q parsed to %q, want %q", name, p.Catalog, want)
+		}
+	}
+
+	// This document is read from a ConfigMap, so a relative path has nothing to
+	// be relative to -- refused rather than resolved against whatever directory
+	// swissd happens to be started in.
+	for _, bad := range []string{"swiss-catalog", "./swiss-catalog", "../catalog", "oci://harbor/catalog"} {
+		if _, err := Parse([]byte(head+"catalog: \""+bad+"\"\n"), "test"); err == nil {
+			t.Errorf("catalog %q must be refused", bad)
+		}
+	}
+}
+
 func TestSitesValidation(t *testing.T) {
 	valid := `
 name: prod

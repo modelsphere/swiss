@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -230,10 +232,29 @@ func TestReadyzDoesNotFetchTheCatalog(t *testing.T) {
 	}
 }
 
+// A copy of the shipped catalog that a test can break, so "unreachable" can be
+// simulated without also changing which catalog is configured -- two different
+// things that a single nonexistent path used to conflate.
+func catalogCopy(t *testing.T) (dir, index string) {
+	t.Helper()
+	raw, err := os.ReadFile("../../../swiss-catalog/index.json")
+	if err != nil {
+		t.Skipf("no catalog beside this checkout: %v", err)
+	}
+	dir = t.TempDir()
+	index = filepath.Join(dir, "index.json")
+	if err := os.WriteFile(index, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dir, index
+}
+
 // A published catalog going briefly unreachable should not empty the
 // marketplace, so a failed refresh keeps serving what was last fetched.
 func TestCatalogRefreshFailureServesPrevious(t *testing.T) {
+	dir, index := catalogCopy(t)
 	cfg := testConfig("c")
+	cfg.Catalog = dir
 	cfg.Server.CacheTTL = time.Nanosecond
 	s := New(cfg, fakeProbe(), discardLogger(), "test")
 
@@ -241,13 +262,119 @@ func TestCatalogRefreshFailureServesPrevious(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.cfg.Catalog = "/nonexistent/catalog"
+	if err := os.Remove(index); err != nil {
+		t.Fatal(err)
+	}
 	again, err := s.Catalog(t.Context())
 	if err != nil {
 		t.Fatalf("a failed refresh must fall back, not fail: %v", err)
 	}
 	if again.Ref != first.Ref {
 		t.Error("fallback did not serve the previously fetched catalog")
+	}
+}
+
+// The fallback is per location. Serving the old catalog's models after the
+// profile is repointed somewhere that does not answer would report success for
+// a cluster reading a catalog nobody configured.
+func TestCatalogRepointedSomewhereDeadDoesNotServeTheOldOne(t *testing.T) {
+	dir, _ := catalogCopy(t)
+	cfg := testConfig("c")
+	cfg.Catalog = dir
+	cfg.Server.CacheTTL = time.Hour
+	s := New(cfg, fakeProbe(), discardLogger(), "test")
+
+	if _, err := s.Catalog(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	s.cfg.Catalog = filepath.Join(t.TempDir(), "gone")
+	if _, err := s.Catalog(t.Context()); err == nil {
+		t.Error("a new location that does not answer must be reported, not papered over")
+	}
+}
+
+// The restart case the on-disk cache exists for: nothing in memory, and the
+// catalog unreachable at the moment the process comes back.
+func TestCatalogServesTheCachedIndexAfterARestart(t *testing.T) {
+	dir, index := catalogCopy(t)
+	cfg := testConfig("c")
+	cfg.Catalog = dir
+	cfg.Server.CacheDir = t.TempDir()
+
+	first, err := New(cfg, fakeProbe(), discardLogger(), "test").Catalog(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(index); err != nil {
+		t.Fatal(err)
+	}
+
+	// A second Server is this process restarting: same config, empty memory.
+	restarted, err := New(cfg, fakeProbe(), discardLogger(), "test").Catalog(t.Context())
+	if err != nil {
+		t.Fatalf("an unreachable catalog must fall back to the cached index: %v", err)
+	}
+	if restarted.Ref != first.Ref {
+		t.Errorf("ref %s, want the cached %s", restarted.Ref, first.Ref)
+	}
+}
+
+// With no cache directory there is nowhere durable to write, and the fallback
+// is the in-memory one alone -- which a restart does not have.
+func TestCatalogWithoutACacheDirFailsAfterARestart(t *testing.T) {
+	dir, index := catalogCopy(t)
+	cfg := testConfig("c")
+	cfg.Catalog = dir
+	if cfg.Server.CacheDir != "" || cfg.Server.CatalogCacheDir() != "" {
+		t.Fatal("this test needs a config with no cache directory")
+	}
+	if _, err := New(cfg, fakeProbe(), discardLogger(), "test").Catalog(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(index); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(cfg, fakeProbe(), discardLogger(), "test").Catalog(t.Context()); err == nil {
+		t.Error("without a cache there is nothing to fall back to; the error must surface")
+	}
+}
+
+// The profile is the document an operator can edit, so it wins; the config
+// value is the install default and what the CLI, which cannot read the
+// profile's ConfigMap, still has to go on.
+func TestCatalogLocationPrefersTheProfile(t *testing.T) {
+	cfg := testConfig("c")
+	cfg.Catalog = "/from/config"
+
+	s := New(cfg, fakeProbe(), discardLogger(), "test")
+	if loc, from := s.CatalogLocation(t.Context()); loc != "/from/config" || from != "config" {
+		t.Errorf("a profile naming no catalog must fall back to the config: %q %q", loc, from)
+	}
+
+	withCatalog := cluster.Fake{
+		Maps: map[string]map[string]string{
+			"swiss/site-profile": {"profile.yaml": profileYAML + "catalog: /from/profile\n"},
+		},
+	}
+	s = New(cfg, withCatalog, discardLogger(), "test")
+	if loc, from := s.CatalogLocation(t.Context()); loc != "/from/profile" || from != "profile" {
+		t.Errorf("the profile has to win: %q %q", loc, from)
+	}
+}
+
+// An unreadable profile is not a reason to lose the catalog: the configured
+// default stands in, and the profile failure is reported on its own.
+func TestCatalogLocationSurvivesAnUnreadableProfile(t *testing.T) {
+	cfg := testConfig("c")
+	cfg.Catalog = "/from/config"
+	broken := cluster.Fake{
+		Maps: map[string]map[string]string{
+			"swiss/site-profile": {"profile.yaml": "name: [this is not a profile\n"},
+		},
+	}
+	s := New(cfg, broken, discardLogger(), "test")
+	if loc, from := s.CatalogLocation(t.Context()); loc != "/from/config" || from != "config" {
+		t.Errorf("got %q from %q, want the configured default", loc, from)
 	}
 }
 

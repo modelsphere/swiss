@@ -83,6 +83,13 @@ type Server struct {
 	// CacheTTL bounds how long a fetched catalog or profile is reused.
 	CacheTTL time.Duration `yaml:"cacheTTL,omitempty"`
 
+	// CacheDir is where the last catalog index is written, so a restart while
+	// the catalog is unreachable still has a marketplace to render. Empty puts
+	// it beside the database, and failing that in the system temp dir -- where
+	// it is ephemeral, and the cache is then worth no more than the in-memory
+	// one. A durable cache wants a durable volume.
+	CacheDir string `yaml:"cacheDir,omitempty"`
+
 	// Auth is the site login. On unless explicitly turned off: a default that
 	// depends on whether a credential happens to be configured is a default
 	// that ships open.
@@ -92,6 +99,26 @@ type Server struct {
 	// to candidate node label keys used to categorize each GPU SKU per vendor.
 	// When empty, DefaultGPUProductLabels is used.
 	GPUProductLabels map[string]StringList `yaml:"gpuProductLabels,omitempty"`
+}
+
+// CatalogCacheDir is where the catalog index cache lives: cacheDir when set,
+// otherwise beside the database, which is the one directory an install is
+// already expected to be able to write. Whether what lands there survives a
+// restart is a property of what is mounted, not of this choice -- on an
+// emptyDir it buys nothing the in-memory cache does not already give.
+//
+// Empty when neither is configured, which turns the cache off rather than
+// picking a directory nobody asked for: a process with no database path has
+// nowhere durable to write anyway, and scattering files through the system
+// temp dir is worse than not caching.
+func (s Server) CatalogCacheDir() string {
+	if s.CacheDir != "" {
+		return s.CacheDir
+	}
+	if s.Database != "" {
+		return filepath.Join(filepath.Dir(s.Database), "catalog-cache")
+	}
+	return ""
 }
 
 // GPUProductLabelsMap returns the configured GPUProductLabels as map[string][]string.

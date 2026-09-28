@@ -22,6 +22,10 @@ type Catalog struct {
 	// the index bytes. Recorded in every plan, so a deploy can be traced back.
 	Ref string
 
+	// raw is the index as published, kept so a Cache writes back the exact
+	// bytes Ref was computed over rather than a re-marshalling of them.
+	raw []byte
+
 	mu      sync.Mutex
 	entries map[string]Entry
 }
@@ -42,7 +46,7 @@ func OpenFetcher(ctx context.Context, f Fetcher) (*Catalog, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Catalog{Fetcher: f, Index: idx, Ref: contentRef(raw), entries: map[string]Entry{}}, nil
+	return &Catalog{Fetcher: f, Index: idx, Ref: contentRef(raw), raw: raw, entries: map[string]Entry{}}, nil
 }
 
 // Entry fetches and validates one model at one version, memoised. An empty

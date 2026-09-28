@@ -61,16 +61,19 @@ type clusterInfo struct {
 	ProfileName string `json:"profileName,omitempty"`
 	// The scheduling defaults this cluster applies, so a deploy form can show
 	// what it will get rather than an empty box.
-	PriorityClassName string      `json:"priorityClassName,omitempty"`
-	SchedulerName     string      `json:"schedulerName,omitempty"`
-	Namespace         string      `json:"namespace,omitempty"`
-	ChartRepo         string      `json:"chartRepo,omitempty"`
-	Catalog           string      `json:"catalog"`
-	CatalogRef        string      `json:"catalogRef,omitempty"`
-	Version           string      `json:"version"`
-	AllowDeploy       bool        `json:"allowDeploy"`
-	Sites             []site.Site `json:"sites,omitempty"`
-	Warnings          []string    `json:"warnings,omitempty"`
+	PriorityClassName string `json:"priorityClassName,omitempty"`
+	SchedulerName     string `json:"schedulerName,omitempty"`
+	Namespace         string `json:"namespace,omitempty"`
+	ChartRepo         string `json:"chartRepo,omitempty"`
+	Catalog           string `json:"catalog"`
+	// CatalogFrom is which document named it, "profile" or "config": with two
+	// places to set it, the UI has to say which one is in force.
+	CatalogFrom string      `json:"catalogFrom,omitempty"`
+	CatalogRef  string      `json:"catalogRef,omitempty"`
+	Version     string      `json:"version"`
+	AllowDeploy bool        `json:"allowDeploy"`
+	Sites       []site.Site `json:"sites,omitempty"`
+	Warnings    []string    `json:"warnings,omitempty"`
 }
 
 // clusterName is the profile's name. Empty until setup has written one.
@@ -90,9 +93,11 @@ func (s *Server) handleCluster(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := contextWithTimeout(r, 15*time.Second)
 	defer cancel()
 
+	loc, from := s.CatalogLocation(ctx)
 	info := clusterInfo{
 		Profile:     s.cfg.Cluster.Profile.Ref(),
-		Catalog:     s.cfg.Catalog,
+		Catalog:     loc,
+		CatalogFrom: from,
 		Version:     s.version,
 		AllowDeploy: s.cfg.Server.AllowDeploy,
 	}
