@@ -72,6 +72,10 @@ type applyRequest struct {
 	// recorded in the audit log and beside the release, and read by nothing --
 	// a diff says what changed, and only a person can say why.
 	Note string `json:"note,omitempty"`
+	// ForceConflicts lets the upgrade take fields another manager owns, which
+	// is what a hand `kubectl edit` leaves behind. Per apply, never stored in
+	// the plan -- see exec.ApplyOptions.
+	ForceConflicts bool `json:"forceConflicts,omitempty"`
 }
 
 func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
@@ -394,13 +398,14 @@ func (s *Server) handleApply(mode exec.Mode) http.HandlerFunc {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		s.applyPlan(ctx, w, p, mode, req.ExpectRevision, actionName(mode), req.Note)
+		s.applyPlan(ctx, w, p, mode, req.ExpectRevision, actionName(mode), req.Note,
+			exec.ApplyOptions{ForceConflicts: req.ForceConflicts})
 	}
 }
 
 // applyPlan is the cluster-changing half, shared by apply, install and
 // rollback. They differ in where the plan came from and in nothing after that.
-func (s *Server) applyPlan(ctx context.Context, w http.ResponseWriter, p *plan.Plan, mode exec.Mode, expectRevision int, action, note string) {
+func (s *Server) applyPlan(ctx context.Context, w http.ResponseWriter, p *plan.Plan, mode exec.Mode, expectRevision int, action, note string, opts exec.ApplyOptions) {
 	st, err := exec.Lookup(ctx, s.probe, p.Release.Namespace, p.Release.Name)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
@@ -447,6 +452,7 @@ func (s *Server) applyPlan(ctx context.Context, w http.ResponseWriter, p *plan.P
 	started := time.Now()
 	if err := s.writePlan(ctx, p, planStatus{
 		Phase: phaseApplying, Action: action, StartedAt: stamp(started), Note: note,
+		Forced: opts.ForceConflicts,
 	}); err != nil {
 		msg := "plan not recorded, nothing applied: " + err.Error()
 		if !p.CreateNamespace && apierrors.IsNotFound(err) {
@@ -460,7 +466,14 @@ func (s *Server) applyPlan(ctx context.Context, w http.ResponseWriter, p *plan.P
 	ctx, cancel := detach(ctx)
 	defer cancel()
 
-	res, applyErr := s.runner().Apply(ctx, p)
+	// Logged as well as recorded: taking fields from another manager is the one
+	// apply that silently undoes somebody else's hand edit, and the log is
+	// where that is noticed by anyone not watching this release.
+	if opts.ForceConflicts {
+		s.log.WarnContext(ctx, "applying with --force-conflicts: fields owned by another manager will be overwritten",
+			"release", p.Release.Name, "namespace", p.Release.Namespace, "action", action)
+	}
+	res, applyErr := s.runner().Apply(ctx, p, opts)
 
 	// Looked up before the audit write, so the row can name the revision this
 	// produced -- which is what makes the log a list of rollback targets rather
@@ -476,7 +489,7 @@ func (s *Server) applyPlan(ctx context.Context, w http.ResponseWriter, p *plan.P
 	status := planStatus{
 		Phase: phaseApplied, Action: action,
 		StartedAt: stamp(started), UpdatedAt: stamp(time.Now()),
-		Revision: after.Revision, Note: note,
+		Revision: after.Revision, Note: note, Forced: opts.ForceConflicts,
 	}
 	if applyErr != nil {
 		status.Phase, status.Error = phaseFailed, applyErr.Error()
@@ -609,6 +622,11 @@ type planStatus struct {
 	// because etcd is the half that is backed up: the reason a release was
 	// rolled back outlives the sqlite file it was also recorded in.
 	Note string `yaml:"note,omitempty" json:"note,omitempty"`
+	// Forced records that this apply took fields another manager owned. It
+	// belongs beside the release rather than only in the plan, because the plan
+	// deliberately does not carry it: this says the hand edits that were on
+	// this release are gone, and which apply removed them.
+	Forced bool `yaml:"forced,omitempty" json:"forced,omitempty"`
 }
 
 func stamp(t time.Time) string { return t.UTC().Format(time.RFC3339) }

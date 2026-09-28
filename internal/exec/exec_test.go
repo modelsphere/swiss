@@ -24,6 +24,54 @@ func testPlan() *plan.Plan {
 	}
 }
 
+// The flag goes to helm upgrade alone. helmfile's apply runs helm-diff first,
+// in the same invocation, and helm-diff does not know --force-conflicts: sent
+// through --args it would fail the apply before anything was upgraded.
+func TestForceConflictsGoesToTheUpgradeOnly(t *testing.T) {
+	if got := (ApplyOptions{}).args(); got != nil {
+		t.Errorf("an unforced apply must add no arguments, got %q", got)
+	}
+	got := ApplyOptions{ForceConflicts: true}.args()
+	want := []string{"--sync-args", "--force-conflicts"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("args = %q, want %q", got, want)
+	}
+}
+
+// End to end through a fake helmfile, so the flag is asserted where it lands
+// rather than where it is assembled.
+func TestApplyPassesForceConflictsToHelmfile(t *testing.T) {
+	dir := t.TempDir()
+	bin, log := filepath.Join(dir, "helmfile"), filepath.Join(dir, "calls.log")
+	script := "#!/bin/sh\necho \"$*\" >> " + log + "\nexit 0\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r := Runner{HelmfileBin: bin}
+
+	if _, err := r.Apply(t.Context(), testPlan(), ApplyOptions{ForceConflicts: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Apply(t.Context(), testPlan(), ApplyOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(calls) != 2 {
+		t.Fatalf("want two applies, got %q", calls)
+	}
+	if !strings.Contains(calls[0], "--sync-args --force-conflicts") {
+		t.Errorf("forced apply did not carry the flag: %q", calls[0])
+	}
+	if strings.Contains(calls[1], "force") {
+		t.Errorf("an unforced apply must carry nothing of the sort: %q", calls[1])
+	}
+}
+
 func TestMaterializeWritesAValuesFileAndAOneReleaseHelmfile(t *testing.T) {
 	ws, err := Runner{}.Materialize(testPlan())
 	if err != nil {

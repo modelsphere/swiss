@@ -23,6 +23,7 @@ type deployFlags struct {
 	yes                                                     bool
 	revision                                                int
 	createNamespace                                         bool
+	forceConflicts                                          bool
 }
 
 func (d *deployFlags) bind(c *cobra.Command) {
@@ -135,7 +136,8 @@ func applyCmd(mode exec.Mode) *cobra.Command {
 				return err
 			}
 
-			res, err := d.runner().Apply(cmd.Context(), p)
+			res, err := d.runner().Apply(cmd.Context(), p,
+				exec.ApplyOptions{ForceConflicts: d.forceConflicts})
 			fmt.Print(res.Output)
 			if err != nil {
 				return err
@@ -153,6 +155,12 @@ func applyCmd(mode exec.Mode) *cobra.Command {
 	if mode == Install {
 		c.Flags().BoolVar(&d.createNamespace, "create-namespace", false,
 			"compose helmfile's createNamespace into the plan, so helm creates the namespace")
+	} else {
+		// Named after helm's own flag rather than --force, because helm has a
+		// --force-replace as well and they are not the same favour: this one
+		// takes ownership of fields, that one deletes the resource.
+		c.Flags().BoolVar(&d.forceConflicts, "force-conflicts", false,
+			"take fields a hand `kubectl edit` left another manager owning, which helm's server-side apply otherwise refuses to overwrite")
 	}
 	return c
 }

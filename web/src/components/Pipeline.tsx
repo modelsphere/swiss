@@ -6,7 +6,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
+import { HoverHint } from "@/components/ui/hint";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { Tabs } from "@/components/ui/tabs";
 import { DiffView } from "@/components/DiffView";
 import { Provenance } from "@/components/Provenance";
@@ -66,6 +68,10 @@ export function Pipeline({
   // Why, in the operator's own words. Recorded with the run and written beside
   // the release: the diff says what moved, and nothing but this says why.
   const [note, setNote] = useState("");
+  // Off every time the dialog is built. Forcing is a decision about one apply,
+  // and a switch that remembered yes would force the next upgrade too --
+  // quietly, because nobody sets it twice.
+  const [force, setForce] = useState(false);
   const [open, setOpen] = useState(false);
   // Set when the compose button is clicked, so the dialog opens on the plan
   // that click produced rather than on whatever was lying around. Composing is
@@ -129,7 +135,7 @@ export function Pipeline({
           ? deployApi.install(plan!.hash, note.trim())
           : // expectRevision is the optimistic lock the dry run computed. It
             // always exists here: nothing reaches this call without one.
-            deployApi.apply(plan!.hash, diff?.revision, note.trim()),
+            deployApi.apply(plan!.hash, diff?.revision, note.trim(), force),
     onSuccess: (r) => {
       onApplied(r);
       onTab("status");
@@ -240,6 +246,8 @@ export function Pipeline({
               applied={applied}
               note={note}
               onNote={setNote}
+              force={force}
+              onForce={setForce}
               diffPending={diffM.isPending}
               applyPending={applyM.isPending}
               dryRunDone={dryRunDone}
@@ -355,6 +363,8 @@ function Action({
   applied,
   note,
   onNote,
+  force,
+  onForce,
   diffPending,
   applyPending,
   dryRunDone,
@@ -371,6 +381,8 @@ function Action({
   applied: ApplyResult | null;
   note: string;
   onNote: (v: string) => void;
+  force: boolean;
+  onForce: (v: boolean) => void;
   diffPending: boolean;
   applyPending: boolean;
   dryRunDone: boolean;
@@ -395,9 +407,10 @@ function Action({
         install ? " when the release is created" : ", and pins the revision"
       }.`
     : canApply && diff
-      ? diff.exists
-        ? `Asserting the release is still at revision ${diff.revision}.`
-        : "The release does not exist; this creates it."
+      ? (diff.exists
+          ? `Asserting the release is still at revision ${diff.revision}.`
+          : "The release does not exist; this creates it.") +
+        (force ? " Fields a hand edit left kubectl owning will be overwritten." : "")
       : "";
 
   return (
@@ -418,6 +431,19 @@ function Action({
           }
           className="min-w-48 flex-1 sm:max-w-md"
         />
+
+        {/* Upgrades only. An install has no live object whose fields another
+            manager could own, and a rollback restores a plan that applied
+            cleanly once -- forcing during one would be a second surprise on
+            top of the one being undone. */}
+        {!install && !rollbackTo && (
+          <HoverHint text="helm applies server-side, so a field changed by hand with kubectl belongs to kubectl and an upgrade refuses to overwrite it. This takes those fields back — the hand edits on this release are replaced by what the plan says, and are not recoverable from here.">
+            <span className="flex items-center gap-2 text-sm">
+              <Switch checked={force} onChange={onForce} label="force conflicts" />
+              <span className={force ? "text-warning" : "text-muted-foreground"}>Force conflicts</span>
+            </span>
+          </HoverHint>
+        )}
 
         <div className="ml-auto">
           {!dryRunDone ? (

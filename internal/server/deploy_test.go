@@ -302,6 +302,53 @@ func TestCreateNamespaceIsOffUnlessComposed(t *testing.T) {
 	}
 }
 
+// The mirror image of createNamespace: forcing is an apply-time choice, so it
+// must be recorded beside the release and must not reach the plan. A plan that
+// carried it would force again on every later apply and on any rollback that
+// replays it -- and the plan is also the record of what was done.
+func TestForceConflictsIsRecordedBesideTheReleaseNotInThePlan(t *testing.T) {
+	srv, s := deployServer(t, true)
+	_, body := post(t, srv, "/api/plans", map[string]any{"model": "modelforge", "release": "glm-53"})
+	hash, _ := body["hash"].(string)
+	// The apply itself fails -- the test profile names no chart source -- but
+	// the write-ahead that precedes it is what carries the record.
+	post(t, srv, "/api/apply", map[string]any{"planHash": hash, "forceConflicts": true})
+
+	files := writtenFiles(t, s, "modelforge", "glm-53")
+	if !strings.Contains(files["status.yaml"], "forced: true") {
+		t.Errorf("a forced apply must say so beside the release: %q", files["status.yaml"])
+	}
+	if strings.Contains(files[plan.MetaFile], "force") {
+		t.Errorf("the plan must not carry it: %q", files[plan.MetaFile])
+	}
+}
+
+// And nothing turns it on by itself.
+func TestForceConflictsIsOffUnlessAskedFor(t *testing.T) {
+	srv, s := deployServer(t, true)
+	_, body := post(t, srv, "/api/plans", map[string]any{"model": "modelforge", "release": "glm-53"})
+	hash, _ := body["hash"].(string)
+	post(t, srv, "/api/apply", map[string]any{"planHash": hash})
+
+	if status := writtenFiles(t, s, "modelforge", "glm-53")["status.yaml"]; strings.Contains(status, "forced") {
+		t.Errorf("an ordinary apply must record no forcing: %q", status)
+	}
+}
+
+func writtenFiles(t *testing.T, s *Server, namespace, release string) map[string]string {
+	t.Helper()
+	w, ok := s.writer.(*fakeWriter)
+	if !ok {
+		t.Fatalf("writer is %T", s.writer)
+	}
+	ref := namespace + "/" + cluster.PlanConfigMapPrefix + release
+	data, ok := w.written[ref]
+	if !ok {
+		t.Fatalf("no plan written at %s: %v", ref, w.written)
+	}
+	return data
+}
+
 func writtenPlan(t *testing.T, s *Server, namespace, release string) *plan.Plan {
 	t.Helper()
 	w, ok := s.writer.(*fakeWriter)

@@ -121,18 +121,55 @@ const (
 	Install
 )
 
+// ApplyOptions are the apply-time decisions that are not part of the plan.
+//
+// Deliberately not composed into the plan, unlike createNamespace: this is a
+// recovery choice for one apply. A plan carrying it would force again on every
+// later apply and on every rollback that replays it, and the plan is also the
+// record of what was done -- "always force" is not what anyone meant by it.
+type ApplyOptions struct {
+	// ForceConflicts lets helm's server-side apply overwrite fields another
+	// field manager owns.
+	//
+	// helm v4 applies server-side, so a hand `kubectl edit` on a live object
+	// leaves kubectl owning every field it touched, and the next upgrade fails
+	// with a conflict instead of overwriting them. This is the escape hatch for
+	// that, and it says what it does: swiss takes those fields back, and the
+	// hand edit is gone.
+	//
+	// Not helm's --force-replace, which deletes and recreates the resource. On
+	// a release holding a 40-minute model load that is an outage, and it is not
+	// what a field-ownership conflict asks for.
+	ForceConflicts bool
+}
+
+// helmfile runs helm-diff and then helm upgrade inside one apply, so the flag
+// goes through --sync-args, which reaches the upgrade alone. Through --args it
+// would also reach helm-diff, which does not know it and would fail the apply
+// before anything ran.
+func (o ApplyOptions) args() []string {
+	var sync []string
+	if o.ForceConflicts {
+		sync = append(sync, "--force-conflicts")
+	}
+	if len(sync) == 0 {
+		return nil
+	}
+	return []string{"--sync-args", strings.Join(sync, " ")}
+}
+
 // Apply leaves helmfile's own diff in the output rather than suppressing it.
 // An apply already computes one to decide what to send; printing it makes the
 // audit entry say what changed, which is the only record of it once the
 // workspace is gone.
-func (r Runner) Apply(ctx context.Context, p *plan.Plan) (Result, error) {
+func (r Runner) Apply(ctx context.Context, p *plan.Plan, opts ApplyOptions) (Result, error) {
 	ws, err := r.Materialize(p)
 	if err != nil {
 		return Result{}, err
 	}
 	defer ws.Close()
 
-	out, _, err := r.run(ctx, ws, "apply")
+	out, _, err := r.run(ctx, ws, append([]string{"apply"}, opts.args()...)...)
 	return Result{Output: out, Changed: err == nil}, err
 }
 

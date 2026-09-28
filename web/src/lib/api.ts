@@ -624,8 +624,11 @@ export const deployApi = {
   // expectRevision is the optimistic lock a diff computed. It is left out when
   // no diff was run, and the server reads a missing revision as asserting
   // nothing rather than as revision zero.
-  apply: (planHash: string, expectRevision?: number, note?: string) =>
-    post<ApplyResult>("/api/apply", { planHash, expectRevision, note }),
+  // forceConflicts is per apply and never stored in the plan: it says "take the
+  // fields a hand kubectl edit left another manager owning", which is a
+  // decision about this one upgrade rather than about the release.
+  apply: (planHash: string, expectRevision?: number, note?: string, forceConflicts?: boolean) =>
+    post<ApplyResult>("/api/apply", { planHash, expectRevision, note, forceConflicts }),
   install: (planHash: string, note?: string) =>
     post<ApplyResult>("/api/install", { planHash, note }),
   probe: (ns: string, release: string, auth: EntrypointAuth = {}) =>

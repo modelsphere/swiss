@@ -249,7 +249,10 @@ func (s *Server) handleRollback(w http.ResponseWriter, r *http.Request) {
 			"expectRevision is required: send the revision you were looking at, so a rollback cannot overwrite an apply that landed in between")
 		return
 	}
-	s.applyPlan(ctx, w, p, exec.Upgrade, req.ExpectRevision, "rollback", req.Note)
+	// No force here: a rollback restores a plan that was applied cleanly once,
+	// and taking fields from another manager during one would be a second
+	// surprise on top of the one being undone.
+	s.applyPlan(ctx, w, p, exec.Upgrade, req.ExpectRevision, "rollback", req.Note, exec.ApplyOptions{})
 }
 
 // archivedPlan reads the workspace that produced a revision, and checks it
