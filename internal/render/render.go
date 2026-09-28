@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/modelsphere/swiss/internal/plan"
 	"gopkg.in/yaml.v3"
@@ -65,11 +66,13 @@ func (e Exec) Template(ctx context.Context, p *plan.Plan) (string, error) {
 	}
 	f.Close()
 
-	args := []string{
-		"template", p.Release.Name, chart,
-		"--namespace", p.Release.Namespace,
-		"--values", f.Name(),
+	args := []string{"template", p.Release.Name}
+	if p.Chart.Repo != "" && !strings.HasPrefix(p.Chart.Repo, "oci://") {
+		args = append(args, "--repo", p.Chart.Repo, p.Chart.Name)
+	} else {
+		args = append(args, chart)
 	}
+	args = append(args, "--namespace", p.Release.Namespace, "--values", f.Name())
 	if p.Chart.Repo != "" {
 		args = append(args, "--version", p.Chart.Version)
 	}
