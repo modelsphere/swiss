@@ -45,7 +45,8 @@ func TestHelmfileCarriesTheDeployDeclaration(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"wait: false", "atomic: false", "historyMax: 20", "--three-way-merge",
+		"wait: false", "atomic: false", "historyMax: 20",
+		"--three-way-merge", "--server-side=true",
 		"chart: charts/sglang", "version: 0.8.0",
 		"namespace: modelforge", "values:", "- form.yaml",
 	} {

@@ -139,7 +139,11 @@ func TestHelmDefaultsMatchTheRepo(t *testing.T) {
 	if d.HistoryMax != 20 {
 		t.Errorf("historyMax = %d, want 20", d.HistoryMax)
 	}
-	if len(d.DiffArgs) != 1 || d.DiffArgs[0] != "--three-way-merge" {
+	// The dry run has to use the model the apply uses: helm v4 applies
+	// server-side, and helm-diff's own default follows the release's history
+	// rather than the apply, which is how a hand-edited field diffs clean and
+	// then fails the upgrade.
+	if len(d.DiffArgs) != 2 || d.DiffArgs[0] != "--three-way-merge" || d.DiffArgs[1] != "--server-side=true" {
 		t.Errorf("diffArgs = %v", d.DiffArgs)
 	}
 }

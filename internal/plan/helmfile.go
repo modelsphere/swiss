@@ -44,11 +44,28 @@ type HelmfileDoc struct {
 	Releases     []HelmfileRelease `yaml:"releases" json:"releases"`
 }
 
+// The dry run has to compute the change the same way the apply will, or it is
+// a confident answer about a different operation.
+//
+// helm v4 applies server-side, where what happens to a field is decided by
+// which manager owns it. helm-diff's --server-side defaults to "auto", taking
+// its value from the previous release's method, so pinning it true keeps the
+// diff on the apply's model rather than on whatever the release's history
+// implies. Without this a field set by the chart and then edited by hand shows
+// no diff at all -- and the upgrade that follows fails on a conflict the dry
+// run never mentioned.
+//
+// --three-way-merge is the older client-side model, kept because it is what
+// answers for a release that is not applied server-side.
+func diffArgs() []string {
+	return []string{"--three-way-merge", "--server-side=true"}
+}
+
 func defaults(createNamespace bool) HelmDefaults {
 	return HelmDefaults{
 		Wait: false, Atomic: false, CleanupOnFail: false,
 		CreateNS: createNamespace, HistoryMax: 20,
-		DiffArgs: []string{"--three-way-merge"},
+		DiffArgs: diffArgs(),
 	}
 }
 
