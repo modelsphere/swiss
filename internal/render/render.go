@@ -50,7 +50,7 @@ func (e Exec) Template(ctx context.Context, p *plan.Plan) (string, error) {
 		return "", err
 	}
 
-	vals, err := yaml.Marshal(p.Values)
+	vals, err := yaml.Marshal(p.Values())
 	if err != nil {
 		return "", err
 	}
