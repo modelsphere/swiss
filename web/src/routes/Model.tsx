@@ -3,10 +3,20 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, ExternalLink } from "lucide-react";
 import { api, type Node, type Variant } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
+import {
+  type Kind,
+  comparison,
+  formatUplift,
+  httpLink,
+  UPLIFT_HELP,
+  variantKind,
+  workloadSummary,
+} from "@/lib/catalog";
 import { gpuCount, matchesVendor, vendorLabel } from "@/lib/gpu";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ErrorState, Loading } from "@/components/States";
+import { WorkloadList } from "@/components/Uplift";
 import { cn } from "@/lib/utils";
 
 export function Model() {
@@ -26,6 +36,11 @@ export function Model() {
   if (model.error) return <ErrorState what={name} error={model.error} />;
 
   const e = model.data.entry;
+  const indexed = catalog.data?.index.models.find((m) => m.name === name);
+  // Roles and the uplift come from the model's recorded tuning, via the index.
+  // The entry itself carries none: it is metadata, not part of the version.
+  const tuning = indexed?.tuning;
+  const cmp = comparison(e.variants, e.version, tuning);
   return (
     <div className="space-y-5">
       <Link to="/catalog" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
@@ -49,7 +64,7 @@ export function Model() {
         name={name}
         current={e.version}
         versions={
-          catalog.data?.index.models.find((m) => m.name === name)?.versions.map((v) => v.version) ?? []
+          indexed?.versions.map((v) => v.version) ?? []
         }
         onPick={(v) => setParams(v ? { version: v } : {})}
       />
@@ -61,6 +76,14 @@ export function Model() {
             <VariantCard
               key={v.id}
               v={v}
+              kind={variantKind(v, tuning)}
+              uplift={
+                cmp?.optimized === v.id && cmp.uplift != null
+                  ? formatUplift(cmp.uplift) + (cmp.version !== e.version ? ` on v${cmp.version}` : "")
+                  : undefined
+              }
+              upliftTitle={cmp?.optimized === v.id && cmp.workloads.length ? workloadSummary(cmp) : undefined}
+              workloads={cmp?.optimized === v.id && cmp.workloads.length ? cmp.workloads : undefined}
               nodes={nodes.data?.nodes}
               model={e.name}
               version={version}
@@ -112,16 +135,27 @@ function VersionPicker({
 
 function VariantCard({
   v,
+  kind,
+  uplift,
+  upliftTitle,
+  workloads,
   nodes,
   model,
   version,
 }: {
   v: Variant;
+  kind: Kind;
+  // The headline, "+58%", with "on v1.0.0" when measured on another version.
+  // Which workload it is for is on the line below, with the others.
+  uplift?: string;
+  upliftTitle?: string;
+  workloads?: { name: string; uplift: number }[];
   nodes?: Node[];
   model: string;
   version: string;
 }) {
   const fit = fitness(v, nodes);
+  const link = httpLink(v.link);
   return (
     <Card className="flex h-full flex-col">
       <CardHeader className="flex-row items-start justify-between gap-3">
@@ -129,13 +163,24 @@ function VariantCard({
           <CardTitle className="flex flex-wrap items-center gap-2 text-base">
             {v.id}
             {v.default && <Badge variant="muted">default</Badge>}
+            {kind.optimized && (
+              <Badge variant="success" title={upliftTitle ? `${upliftTitle}. ${UPLIFT_HELP}` : UPLIFT_HELP}>
+                optimized{uplift && ` ${uplift}`}
+              </Badge>
+            )}
+            {kind.baseline && <Badge variant="outline">baseline</Badge>}
             <Badge variant="outline">{v.engine}</Badge>
           </CardTitle>
+          {workloads && (
+            <p className="text-xs leading-6 text-muted-foreground" title={UPLIFT_HELP}>
+              vs baseline: <WorkloadList workloads={workloads} />
+            </p>
+          )}
           {v.description && <p className="text-sm text-muted-foreground">{v.description}</p>}
         </div>
-        {v.link && (
+        {link && (
           <a
-            href={v.link}
+            href={link}
             target="_blank"
             rel="noreferrer"
             className={cn(buttonVariants({ variant: "outline", size: "sm" }), "shrink-0 gap-1.5")}

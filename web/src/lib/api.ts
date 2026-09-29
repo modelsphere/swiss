@@ -98,9 +98,26 @@ export interface IndexModel {
   description?: string;
   family?: string;
   tags?: string[];
+  // true, or the reason as a string. Existing deploys still resolve it.
+  deprecated?: boolean | string;
+  tuning?: Tuning[];
   source: { hf: string; revision?: string; sizeGiB?: number };
   latest: string;
   versions: IndexVersion[];
+}
+
+// A measured result from metadata.yaml: a tuned variant against a baseline, in
+// one version. Display only, and not checked by swissd -- ids may dangle.
+export interface Tuning {
+  version: string;
+  baseline: string;
+  optimized: string;
+  // The headline: percent gained on the tuning benchmark, 44 meaning +44%.
+  uplift?: number;
+  // Every workload the benchmark ran, when it ran more than one.
+  workloads?: { name: string; uplift: number }[];
+  // A file beside metadata.yaml in the catalog, such as an AutoTune report.
+  report?: string;
 }
 
 export interface CatalogResponse {

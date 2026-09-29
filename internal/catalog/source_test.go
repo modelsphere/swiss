@@ -166,6 +166,39 @@ func TestIndexRejectsAVersionWithoutADigest(t *testing.T) {
 	}
 }
 
+// An index is parsed with unknown fields refused, so a swissd that predates a
+// field fails to load any catalog that publishes it. tuning is declared here
+// before the catalog starts writing it.
+func TestIndexCarriesTuning(t *testing.T) {
+	withTuning := strings.Replace(index(map[string]string{"1.1.0": testEntryV2}),
+		`"latest":"1.1.0"`,
+		`"tuning":[{"version":"1.1.0","baseline":"v","optimized":"v","uplift":58,`+
+			`"workloads":[{"name":"50k + 1.5k","uplift":58},{"name":"8k + 1k","uplift":23.4}],`+
+			`"report":"m-h100-report.html"}],"latest":"1.1.0"`, 1)
+	idx, err := parseIndex([]byte(withTuning))
+	if err != nil {
+		t.Fatalf("an index with tuning must parse: %v", err)
+	}
+	m, _ := idx.Model("m")
+	if len(m.Tuning) != 1 || m.Tuning[0].Uplift == nil || *m.Tuning[0].Uplift != 58 || m.Tuning[0].Report != "m-h100-report.html" {
+		t.Fatalf("tuning did not survive parsing: %+v", m.Tuning)
+	}
+	if w := m.Tuning[0].Workloads; len(w) != 2 || w[1].Name != "8k + 1k" || w[1].Uplift != 23.4 {
+		t.Fatalf("workloads did not survive parsing: %+v", w)
+	}
+}
+
+// Tuning is display only: a pair naming variants the index does not have is
+// the catalog CI's to catch, not a reason to refuse the catalog for deploys.
+func TestIndexToleratesADanglingTuning(t *testing.T) {
+	dangling := strings.Replace(index(map[string]string{"1.1.0": testEntryV2}),
+		`"latest":"1.1.0"`,
+		`"tuning":[{"version":"9.9.9","baseline":"gone","optimized":"also-gone"}],"latest":"1.1.0"`, 1)
+	if _, err := parseIndex([]byte(dangling)); err != nil {
+		t.Fatalf("a dangling tuning pair must not refuse the index: %v", err)
+	}
+}
+
 func TestIndexRejectsAnUnpublishedLatest(t *testing.T) {
 	// index() always names 1.1.0 as latest; publishing only 1.0.0 makes it dangle.
 	if _, err := parseIndex([]byte(index(map[string]string{"1.0.0": testEntry}))); err == nil {

@@ -25,9 +25,38 @@ type IndexModel struct {
 	Family      string         `json:"family,omitempty"`
 	Tags        []string       `json:"tags,omitempty"`
 	Deprecated  any            `json:"deprecated,omitempty"`
+	Tuning      []IndexTuning  `json:"tuning,omitempty"`
 	Source      IndexSource    `json:"source"`
 	Latest      string         `json:"latest"`
 	Versions    []IndexVersion `json:"versions"`
+}
+
+// IndexTuning is a measured result: a tuned variant against a baseline, in one
+// published version. It comes from metadata.yaml, so a re-measurement needs no
+// new version, and nothing composes from it -- it is for display.
+//
+// parseIndex does not check that the ids or the version exist. A mistake in a
+// display field must not stop a catalog loading for deploys; the catalog's own
+// CI checks it, and the UI skips a pair whose variants it cannot find.
+type IndexTuning struct {
+	Version   string `json:"version"`
+	Baseline  string `json:"baseline"`
+	Optimized string `json:"optimized"`
+	// The headline: percent gained on the tuning benchmark, 44 meaning +44%.
+	// Absent when the pair is recorded without a number.
+	Uplift *float64 `json:"uplift,omitempty"`
+	// Every workload the benchmark ran, when it ran more than one. The
+	// headline is one of these.
+	Workloads []IndexWorkload `json:"workloads,omitempty"`
+	// A file beside metadata.yaml, such as an AutoTune HTML report.
+	Report string `json:"report,omitempty"`
+}
+
+// IndexWorkload is one workload's result, e.g. "50k + 1.5k" (input + output
+// tokens) at +58%.
+type IndexWorkload struct {
+	Name   string  `json:"name"`
+	Uplift float64 `json:"uplift"`
 }
 
 // IndexVersion is one published version of a model. Digest is a sha256 of the
