@@ -26,10 +26,18 @@ swissd --config swissd.yaml -web-dir web/dist
 | route | shows |
 | --- | --- |
 | `/` | deployments, untracked first |
-| `/catalog` | the catalog index |
-| `/catalog/:name` | one model's entry, with a per-variant fit check |
-| `/deploy/:name` | tabs: plan (form + advanced + editor) / diff / apply / status |
+| `/catalog?catalog=` | one catalog's index |
+| `/catalog/:name?catalog=` | one model's entry, with a per-variant fit check |
+| `/deploy/:name?catalog=` | tabs: plan (form + advanced + editor) / diff / apply / status |
 | `/upgrade/:ns/:release` | pick a model version -> what moves -> diff -> approve |
+
+With several catalogs in the site profile, `?catalog=` names the one a page
+works in, and it rides along on every link from the catalog to a model to its
+deploy. Without it those pages use the catalog marked `default`, or ask which
+one first when none is; with one catalog there is nothing to ask. An upgrade
+needs none: it stays on the catalog its release belongs to -- the one its plan
+names, or for a plan that names none (deployed before the list, or from the
+CLI) the one at the location it records, else the default.
 
 ## Notes
 

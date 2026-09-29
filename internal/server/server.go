@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -45,14 +47,18 @@ type Server struct {
 	// renders when the catalog cannot be reached.
 	catCache *catalog.Cache
 
-	mu    sync.Mutex
-	cat   *catalog.Catalog
-	catAt time.Time
-	// catLoc is the location s.cat was opened from, so a profile that repoints
-	// the catalog invalidates it rather than waiting out the TTL.
-	catLoc    string
+	mu sync.Mutex
+	// cats is every catalog opened so far, by location. Keyed on the location
+	// rather than the name, so a profile that repoints a name opens the new
+	// catalog instead of serving the old one for the rest of the TTL.
+	cats      map[string]openCatalog
 	profile   *site.Profile
 	profileAt time.Time
+}
+
+type openCatalog struct {
+	cat *catalog.Catalog
+	at  time.Time
 }
 
 func New(cfg *config.Config, probe cluster.Probe, log *slog.Logger, version string) *Server {
@@ -63,14 +69,21 @@ func New(cfg *config.Config, probe cluster.Probe, log *slog.Logger, version stri
 		cfg: cfg, probe: probe, log: log, version: version,
 		namespace: cluster.SelfNamespace(),
 		catCache:  catalog.NewCache(cfg.Server.CatalogCacheDir()),
+		cats:      map[string]openCatalog{},
 	}
 }
 
-// cached returns what has already been fetched, without fetching.
-func (s *Server) cached() (*catalog.Catalog, *site.Profile) {
+// cached returns what has already been fetched, without fetching: the refs of
+// the catalogs opened so far, and the profile.
+func (s *Server) cached() ([]string, *site.Profile) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.cat, s.profile
+	refs := make([]string, 0, len(s.cats))
+	for _, oc := range s.cats {
+		refs = append(refs, oc.cat.Ref)
+	}
+	sort.Strings(refs)
+	return refs, s.profile
 }
 
 // SetStore installs the database. Without one swissd is read-only.
@@ -86,26 +99,28 @@ func (s *Server) SetWriter(w cluster.Writer) { s.writer = w }
 // SetCredentials overrides where the login comes from, for tests.
 func (s *Server) SetCredentials(f func() (auth.Credentials, error)) { s.creds = f }
 
-// Catalog returns the opened catalog, refetching once the TTL has passed.
+// Catalog opens a catalog by name; see CatalogRepo for what an empty name means.
+func (s *Server) Catalog(ctx context.Context, name string) (*catalog.Catalog, site.CatalogRepo, error) {
+	repo, err := s.CatalogRepo(ctx, name)
+	if err != nil {
+		return nil, repo, err
+	}
+	c, err := s.openCatalog(ctx, repo.URL)
+	return c, repo, err
+}
+
+// openCatalog returns the catalog at loc, refetching once the TTL has passed.
 //
 // A catalog fetch is one HTTP GET of index.json, so the TTL is about not doing
 // it per request rather than about the fetch being expensive. On failure the
 // previous catalog is kept and served: a published catalog going briefly
 // unreachable should not empty the marketplace.
-func (s *Server) Catalog(ctx context.Context) (*catalog.Catalog, error) {
-	loc, _ := s.CatalogLocation(ctx)
-	if loc == "" {
-		return nil, fmt.Errorf("no catalog: set catalog in the site profile, or in %s", s.cfg.Origin)
-	}
-
+func (s *Server) openCatalog(ctx context.Context, loc string) (*catalog.Catalog, error) {
 	s.mu.Lock()
-	cached, at, was := s.cat, s.catAt, s.catLoc
+	cached, have := s.cats[loc]
 	s.mu.Unlock()
-	// A cache keyed on time alone would serve the old catalog for a whole TTL
-	// after the profile is repointed -- and, worse, the fallbacks below would
-	// keep serving it rather than reporting a location that does not answer.
-	if cached != nil && was == loc && time.Since(at) < s.cfg.Server.CacheTTL {
-		return cached, nil
+	if have && time.Since(cached.at) < s.cfg.Server.CacheTTL {
+		return cached.cat, nil
 	}
 
 	f, err := catalog.NewFetcher(loc)
@@ -114,9 +129,9 @@ func (s *Server) Catalog(ctx context.Context) (*catalog.Catalog, error) {
 	}
 	c, err := catalog.OpenFetcher(ctx, f)
 	if err != nil {
-		if cached != nil && was == loc {
-			s.log.WarnContext(ctx, "catalog refresh failed, serving previous", "err", err, "ref", cached.Ref)
-			return cached, nil
+		if have {
+			s.log.WarnContext(ctx, "catalog refresh failed, serving previous", "err", err, "ref", cached.cat.Ref, "catalog", loc)
+			return cached.cat, nil
 		}
 		// Nothing in memory for this location: this process may have just
 		// started, which is exactly when an unreachable catalog would otherwise
@@ -138,27 +153,122 @@ func (s *Server) Catalog(ctx context.Context) (*catalog.Catalog, error) {
 
 func (s *Server) keepCatalog(c *catalog.Catalog, loc string) {
 	s.mu.Lock()
-	s.cat, s.catAt, s.catLoc = c, time.Now(), loc
+	s.cats[loc] = openCatalog{cat: c, at: time.Now()}
 	s.mu.Unlock()
 }
 
-// CatalogLocation is the catalog this instance reads, and where that was said:
-// the site profile when it names one, otherwise the config file. The profile is
-// the document an operator can edit, so it wins; the config value is the
-// install-time default and what the CLI, which cannot read the profile's
-// ConfigMap, has to go on.
+// Catalogs is the catalog repos this instance deploys from, and where the list
+// was said: the site profile when it names any, otherwise the config file's one
+// catalog, under the name "default". The profile is the document an operator
+// can edit, so it wins; the config value is the install-time default and what
+// the CLI, which cannot read the profile's ConfigMap, has to go on.
 //
-// An unreadable profile is not a reason to lose the catalog: the configured
+// An unreadable profile is not a reason to lose the catalogs: the configured
 // default stands in, and the caller that needed the profile reports that
 // separately.
-func (s *Server) CatalogLocation(ctx context.Context) (loc, from string) {
-	if p, err := s.Profile(ctx); err == nil && p.Catalog != "" {
-		return p.Catalog, "profile"
+func (s *Server) Catalogs(ctx context.Context) (repos []site.CatalogRepo, from string) {
+	if p, err := s.Profile(ctx); err == nil {
+		if repos := p.CatalogRepos(); len(repos) > 0 {
+			return repos, "profile"
+		}
 	}
 	if s.cfg.Catalog == "" {
-		return "", ""
+		return nil, ""
 	}
-	return s.cfg.Catalog, "config"
+	return []site.CatalogRepo{{Name: site.DefaultCatalogName, URL: s.cfg.Catalog}}, "config"
+}
+
+// CatalogRepo resolves a catalog by name. An empty name is the catalog when
+// there is exactly one, and otherwise the one the profile marks default. With
+// several and no default it is refused, so neither a look at the catalog nor a
+// deploy lands on whichever one happens to be listed first.
+func (s *Server) CatalogRepo(ctx context.Context, name string) (site.CatalogRepo, error) {
+	repos, _ := s.Catalogs(ctx)
+	if len(repos) == 0 {
+		return site.CatalogRepo{}, fmt.Errorf("no catalog: set catalogs in the site profile, or catalog in %s", s.cfg.Origin)
+	}
+	if name == "" {
+		if len(repos) == 1 {
+			return repos[0], nil
+		}
+		for _, r := range repos {
+			if r.Default {
+				return r, nil
+			}
+		}
+		return site.CatalogRepo{}, fmt.Errorf("%d catalogs are configured (%s) and none is the default: name one", len(repos), catalogNames(repos))
+	}
+	for _, r := range repos {
+		if r.Name == name {
+			return r, nil
+		}
+	}
+	return site.CatalogRepo{}, fmt.Errorf("no catalog named %q (have: %s)", name, catalogNames(repos))
+}
+
+// CatalogFrom finds the configured repo a plan was composed from. A plan
+// records the catalog's source -- the location as the fetcher normalized it,
+// index.json appended and a path made absolute -- so that is what is compared.
+func (s *Server) CatalogFrom(ctx context.Context, source string) (site.CatalogRepo, bool) {
+	repos, _ := s.Catalogs(ctx)
+	for _, r := range repos {
+		if catalogSource(r.URL) == source {
+			return r, true
+		}
+	}
+	return site.CatalogRepo{}, false
+}
+
+// ReleaseCatalog is the configured catalog a release belongs to, from what its
+// plan recorded: the catalog it names; for a plan that names none, the one at
+// the location it records; and otherwise the default, or the only catalog.
+// That last step is the migration path: a release deployed before this site
+// listed catalogs -- or from the CLI, which records no name -- keeps upgrading
+// from the site's default without anyone editing its plan.
+//
+// A plan that names a catalog the site no longer lists is refused rather than
+// sent to the default: it says where it came from, and that is not there.
+func (s *Server) ReleaseCatalog(ctx context.Context, name, source string) (site.CatalogRepo, error) {
+	repos, _ := s.Catalogs(ctx)
+	if name != "" {
+		for _, r := range repos {
+			if r.Name == name {
+				return r, nil
+			}
+		}
+		return site.CatalogRepo{}, fmt.Errorf("it was deployed from catalog %q, which this site no longer lists -- add it back to catalogs in the site profile", name)
+	}
+	if source != "" {
+		if r, ok := s.CatalogFrom(ctx, source); ok {
+			return r, nil
+		}
+	}
+	r, err := s.CatalogRepo(ctx, "")
+	if err != nil {
+		if len(repos) > 1 {
+			return r, fmt.Errorf("its plan names no catalog this site lists (it records %q) and there is no default to stand in -- mark one catalog default in the site profile", source)
+		}
+		return r, err
+	}
+	return r, nil
+}
+
+// catalogSource is a location as a plan records it. Empty when it does not
+// parse, which matches nothing.
+func catalogSource(loc string) string {
+	f, err := catalog.NewFetcher(loc)
+	if err != nil {
+		return ""
+	}
+	return f.String()
+}
+
+func catalogNames(repos []site.CatalogRepo) string {
+	names := make([]string, len(repos))
+	for i, r := range repos {
+		names[i] = r.Name
+	}
+	return strings.Join(names, ", ")
 }
 
 // Profile reads the site profile from the ConfigMap in this cluster.

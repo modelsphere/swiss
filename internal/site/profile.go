@@ -20,14 +20,22 @@ type Profile struct {
 	// Namespace a release lands in unless the deploy overrides it.
 	Namespace string `yaml:"namespace,omitempty" json:"namespace,omitempty"`
 
-	// Catalog is where the model catalog is read from -- an https base or an
-	// absolute path, the same shape the config file takes.
+	// Catalogs are the catalog repos this site deploys from, each under a name
+	// the pages and plan requests use. Viewing the catalog or deploying picks
+	// one; with a single repo there is nothing to pick, and with several the one
+	// marked default is picked unless another is named.
 	//
-	// Set here it wins over swissd's config file. Which catalog a cluster reads
-	// is a property of the cluster, like the chart repo and the image mirror
-	// below it, and this is the document an operator can edit without a helm
-	// upgrade. The config value stays the install-time default, and remains
-	// what `swiss` on a laptop uses: the CLI cannot read this ConfigMap.
+	// Set here they win over swissd's config file. Which catalogs a cluster
+	// reads is a property of the cluster, like the chart repo and the image
+	// mirror below, and this is the document an operator can edit without a
+	// helm upgrade. The config file names one catalog, which stays the
+	// install-time default and what `swiss` on a laptop uses: the CLI cannot
+	// read this ConfigMap.
+	Catalogs []CatalogRepo `yaml:"catalogs,omitempty" json:"catalogs,omitempty"`
+
+	// Catalog is the single-catalog spelling from before there could be
+	// several, read as one repo named "default". Setting both it and Catalogs
+	// is refused rather than merged: which one wins would be a guess.
 	Catalog string `yaml:"catalog,omitempty" json:"catalog,omitempty"`
 
 	// ChartRepo is where charts are pulled from -- the registry the catalog
@@ -261,13 +269,42 @@ func Parse(raw []byte, origin string) (*Profile, error) {
 	if p.Model.PathTemplate == "" {
 		return nil, fmt.Errorf("%s: model.pathTemplate is required -- the catalog gives an identity, not a path", origin)
 	}
-	// A relative catalog path has no meaning here: this document is read from a
-	// ConfigMap, so there is no file for it to be relative to. Refused rather
-	// than resolved against whatever swissd's working directory happens to be.
 	p.Catalog = strings.TrimSpace(p.Catalog)
-	if c := p.Catalog; c != "" &&
-		!strings.HasPrefix(c, "http://") && !strings.HasPrefix(c, "https://") && !strings.HasPrefix(c, "/") {
-		return nil, fmt.Errorf("%s: catalog %q must be an http:// or https:// url, or an absolute path", origin, c)
+	if p.Catalog != "" && len(p.Catalogs) > 0 {
+		return nil, fmt.Errorf("%s: catalog and catalogs are both set -- move catalog into catalogs", origin)
+	}
+	if err := checkCatalogURL(p.Catalog); err != nil {
+		return nil, fmt.Errorf("%s: catalog %w", origin, err)
+	}
+	// A name is what a page and a plan request select by, so it has to be
+	// unique; a url listed twice is two names for one catalog, which a
+	// deployment row could only report under one of them.
+	names, urls := map[string]bool{}, map[string]string{}
+	dflt := ""
+	for i, c := range p.Catalogs {
+		c.Name, c.URL = strings.TrimSpace(c.Name), strings.TrimSpace(c.URL)
+		p.Catalogs[i] = c
+		switch {
+		case c.Name == "" || c.URL == "":
+			return nil, fmt.Errorf("%s: catalogs[%d] needs both name and url", origin, i)
+		case !validCatalogName(c.Name):
+			return nil, fmt.Errorf("%s: catalogs[%d] name %q must be lowercase letters, digits, '.', '-' or '_', starting with a letter or digit", origin, i, c.Name)
+		case names[c.Name]:
+			return nil, fmt.Errorf("%s: catalogs[%d]: name %q is listed twice", origin, i, c.Name)
+		case urls[c.URL] != "":
+			return nil, fmt.Errorf("%s: catalogs[%d]: %s is already listed as %q", origin, i, c.URL, urls[c.URL])
+		}
+		if err := checkCatalogURL(c.URL); err != nil {
+			return nil, fmt.Errorf("%s: catalogs[%d] url %w", origin, i, err)
+		}
+		names[c.Name], urls[c.URL] = true, c.Name
+		// Two defaults is no default: which one a page opens in would be a guess.
+		if c.Default {
+			if dflt != "" {
+				return nil, fmt.Errorf("%s: catalogs %q and %q are both marked default -- at most one is", origin, dflt, c.Name)
+			}
+			dflt = c.Name
+		}
 	}
 	// A half-filled site is a dead entry in the switcher: a name that goes
 	// nowhere, or an address with nothing to click. Refused here rather than
@@ -284,6 +321,56 @@ func Parse(raw []byte, origin string) (*Profile, error) {
 		}
 	}
 	return &p, nil
+}
+
+// CatalogRepo is one catalog a site deploys from.
+type CatalogRepo struct {
+	// Name is what the pages, a plan request and a deployment row call it.
+	Name string `yaml:"name" json:"name"`
+	// URL is an https base or an absolute path, the shape the config file takes.
+	URL string `yaml:"url" json:"url"`
+	// Default is the catalog a page opens in, and a request uses, when none is
+	// named. At most one is; with none, several catalogs have to be named.
+	Default bool `yaml:"default,omitempty" json:"default,omitempty"`
+}
+
+// DefaultCatalogName is what a lone catalog is called: the profile's legacy
+// catalog field, or the one in swissd's config file.
+const DefaultCatalogName = "default"
+
+// CatalogRepos is the list a site deploys from: Catalogs, or a lone Catalog
+// read as one repo named "default". Empty when the profile names none.
+func (p Profile) CatalogRepos() []CatalogRepo {
+	if len(p.Catalogs) > 0 {
+		return p.Catalogs
+	}
+	if p.Catalog != "" {
+		return []CatalogRepo{{Name: DefaultCatalogName, URL: p.Catalog}}
+	}
+	return nil
+}
+
+// checkCatalogURL refuses a relative path. It has no meaning here: this
+// document is read from a ConfigMap, so there is no file for it to be relative
+// to, and resolving it against whatever swissd's working directory happens to
+// be would be a guess.
+func checkCatalogURL(c string) error {
+	if c != "" && !strings.HasPrefix(c, "http://") && !strings.HasPrefix(c, "https://") && !strings.HasPrefix(c, "/") {
+		return fmt.Errorf("%q must be an http:// or https:// url, or an absolute path", c)
+	}
+	return nil
+}
+
+func validCatalogName(n string) bool {
+	for i, r := range n {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+		case i > 0 && (r == '.' || r == '-' || r == '_'):
+		default:
+			return false
+		}
+	}
+	return n != "" && len(n) <= 63
 }
 
 // LocalPath renders model.localPath for one model.

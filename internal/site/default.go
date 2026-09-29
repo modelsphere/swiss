@@ -27,12 +27,17 @@ name: {{cluster}}
 # Where releases land unless a deploy overrides it.
 namespace: modelforge
 
-# Where the model catalog is read from: an https base, or an absolute path.
-# Set here it wins over swissd's own config file, so the catalog can be
-# repointed from the web without a helm upgrade. Left out, the configured
-# default stands -- which is also what the CLI uses, since it cannot read this
-# ConfigMap.
-# catalog: https://models.example.com/swiss-catalog/
+# The model catalogs this site deploys from, each an https base or an absolute
+# path under a name the pages select by. Viewing the catalog or deploying picks
+# one; with a single catalog there is nothing to pick. Set here they win over
+# swissd's own config file, so catalogs can be added from the web without a
+# helm upgrade. Left out, the configured default stands -- which is also what
+# the CLI uses, since it cannot read this ConfigMap.
+# With several, the one marked default is used unless a page names another.
+# catalogs:
+#   - name: public
+#     url: https://models.example.com/swiss-catalog/
+#     default: true
 
 # Where charts are pulled from -- the registry the catalog deliberately does
 # not name.

@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, createContext, useContext, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowDown, ArrowUp, ExternalLink, LayoutGrid, Search, Table2 } from "lucide-react";
@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Empty, ErrorState, Loading } from "@/components/States";
 import { WorkloadList } from "@/components/Uplift";
+import { CatalogGate, CatalogSwitch, useCatalogChoice, withCatalog } from "@/components/CatalogChoice";
 import {
   type Comparison,
   type Facets,
@@ -104,9 +105,19 @@ function useFilters() {
     );
   };
 
-  // Clears the filters, keeps the view.
+  // Clears the filters; the view and the catalog stay.
   const reset = () =>
-    setParams(filters.view === "cards" ? { view: "cards" } : {}, { replace: true });
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams();
+        for (const k of ["view", "catalog"]) {
+          const v = prev.get(k);
+          if (v) next.set(k, v);
+        }
+        return next;
+      },
+      { replace: true },
+    );
 
   return { filters, set, reset };
 }
@@ -124,20 +135,36 @@ function matches(x: Facets, f: Filters): boolean {
   );
 }
 
+// The catalog being browsed, for the links below it: a model page and a deploy
+// have to open in the same catalog.
+const CatalogName = createContext("");
+
 export function Catalog() {
-  const { data, isPending, error } = useQuery({ queryKey: ["catalog"], queryFn: api.catalog });
+  const choice = useCatalogChoice();
+  const { data, isPending, error } = useQuery({
+    queryKey: ["catalog", choice.selected],
+    queryFn: () => api.catalog(choice.selected),
+    enabled: !!choice.selected,
+  });
   const { filters: f, set, reset } = useFilters();
   const all = useMemo(() => data?.index.models.map(facetsOf) ?? [], [data]);
 
-  if (isPending) return <Loading what="catalog" />;
-  if (error) return <ErrorState what="catalog" error={error} />;
+  if (choice.isPending) return <Loading what="catalogs" />;
+  if (choice.error) return <ErrorState what="catalogs" error={choice.error} />;
+  if (!choice.selected) {
+    return <CatalogGate catalogs={choice.catalogs} named={choice.named} choose={choice.choose} what="browse" />;
+  }
+  if (isPending) return <Loading what={`catalog ${choice.selected}`} />;
+  if (error) return <ErrorState what={`catalog ${choice.selected}`} error={error} />;
 
   const shown = all.filter((x) => matches(x, f)).sort(sorters[f.sort]);
 
   return (
+    <CatalogName.Provider value={choice.selected}>
     <div className="space-y-4">
-      <div className="flex flex-wrap items-baseline gap-2">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <h1 className="text-lg font-semibold">Catalog</h1>
+        <CatalogSwitch catalogs={choice.catalogs} selected={choice.selected} choose={choice.choose} />
         <span className="text-sm text-muted-foreground">{data.source}</span>
         <code className="ml-auto text-xs text-muted-foreground">{data.ref.slice(0, 19)}</code>
       </div>
@@ -162,6 +189,7 @@ export function Catalog() {
         </>
       )}
     </div>
+    </CatalogName.Provider>
   );
 }
 
@@ -464,6 +492,7 @@ function CatalogTable({ rows, sort, set }: { rows: Facets[]; sort: SortKey; set:
 }
 
 function ModelCard({ f, set }: { f: Facets; set: Update }) {
+  const catalog = useContext(CatalogName);
   const m = f.model;
   return (
     <Card className="flex h-full flex-col gap-3 p-4">
@@ -524,7 +553,7 @@ function ModelCard({ f, set }: { f: Facets; set: Update }) {
 
       <div className="mt-auto flex items-center gap-2">
         <DeployButton f={f} />
-        <Link to={`/catalog/${encodeURIComponent(m.name)}`}>
+        <Link to={withCatalog(`/catalog/${encodeURIComponent(m.name)}`, catalog)}>
           <Button size="sm" variant="ghost">
             Details
           </Button>
@@ -535,11 +564,12 @@ function ModelCard({ f, set }: { f: Facets; set: Update }) {
 }
 
 function ModelName({ f, className }: { f: Facets; className?: string }) {
+  const catalog = useContext(CatalogName);
   const m = f.model;
   return (
     <div className={cn("flex flex-wrap items-center gap-2", className)}>
       <Link
-        to={`/catalog/${encodeURIComponent(m.name)}`}
+        to={withCatalog(`/catalog/${encodeURIComponent(m.name)}`, catalog)}
         className="font-semibold hover:underline"
         title={m.description}
       >
@@ -673,6 +703,7 @@ function Chip({ onClick, hue, children }: { onClick: () => void; hue?: Hue; chil
 }
 
 function DeployButton({ f }: { f: Facets }) {
+  const catalog = useContext(CatalogName);
   const m = f.model;
   // A variant is a hardware and parallelism decision, so it is the operator's
   // to make: deploying the default because it sorted first is how a model ends
@@ -683,7 +714,7 @@ function DeployButton({ f }: { f: Facets }) {
 
   if (only) {
     return (
-      <Link to={deployTo(m.name, only.id)}>
+      <Link to={deployTo(m.name, only.id, catalog)}>
         <Button size="sm">Deploy</Button>
       </Link>
     );
@@ -725,7 +756,7 @@ function DeployButton({ f }: { f: Facets }) {
                         <span>Docs</span>
                       </a>
                     )}
-                    <Link to={deployTo(m.name, v.id)}>
+                    <Link to={deployTo(m.name, v.id, catalog)}>
                       <Button size="sm">Deploy</Button>
                     </Link>
                   </div>
@@ -745,6 +776,6 @@ function DeployButton({ f }: { f: Facets }) {
   );
 }
 
-function deployTo(model: string, variant: string): string {
-  return `/deploy/${encodeURIComponent(model)}?variant=${encodeURIComponent(variant)}`;
+function deployTo(model: string, variant: string, catalog: string): string {
+  return withCatalog(`/deploy/${encodeURIComponent(model)}?variant=${encodeURIComponent(variant)}`, catalog);
 }

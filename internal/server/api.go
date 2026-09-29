@@ -38,10 +38,10 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 		checks["cluster"] = "ok"
 	}
 
-	cat, prof := s.cached()
+	refs, prof := s.cached()
 	checks["catalog"] = "not fetched"
-	if cat != nil {
-		checks["catalog"] = cat.Ref
+	if len(refs) > 0 {
+		checks["catalog"] = strings.Join(refs, ", ")
 	}
 	checks["profile"] = "not fetched"
 	if prof != nil {
@@ -65,15 +65,31 @@ type clusterInfo struct {
 	SchedulerName     string `json:"schedulerName,omitempty"`
 	Namespace         string `json:"namespace,omitempty"`
 	ChartRepo         string `json:"chartRepo,omitempty"`
-	Catalog           string `json:"catalog"`
-	// CatalogFrom is which document named it, "profile" or "config": with two
-	// places to set it, the UI has to say which one is in force.
-	CatalogFrom string      `json:"catalogFrom,omitempty"`
-	CatalogRef  string      `json:"catalogRef,omitempty"`
-	Version     string      `json:"version"`
-	AllowDeploy bool        `json:"allowDeploy"`
-	Sites       []site.Site `json:"sites,omitempty"`
-	Warnings    []string    `json:"warnings,omitempty"`
+	// Catalog and CatalogRef are the default catalog's -- or the first's, with
+	// no default -- for a page that predates the list below.
+	Catalog string `json:"catalog"`
+	// CatalogFrom is which document named the catalogs, "profile" or "config":
+	// with two places to set them, the UI has to say which one is in force.
+	CatalogFrom string `json:"catalogFrom,omitempty"`
+	CatalogRef  string `json:"catalogRef,omitempty"`
+	// Catalogs is every catalog a page may select, in the profile's order.
+	Catalogs    []catalogInfo `json:"catalogs,omitempty"`
+	Version     string        `json:"version"`
+	AllowDeploy bool          `json:"allowDeploy"`
+	Sites       []site.Site   `json:"sites,omitempty"`
+	Warnings    []string      `json:"warnings,omitempty"`
+}
+
+// catalogInfo is one selectable catalog. Source is its location as a plan
+// records it, so a page can tell which catalog a release came from.
+type catalogInfo struct {
+	Name   string `json:"name"`
+	URL    string `json:"url"`
+	Source string `json:"source"`
+	// Ref is empty when the catalog could not be read; a warning says why.
+	Ref string `json:"ref,omitempty"`
+	// Default is the catalog a page opens in when none is named.
+	Default bool `json:"default,omitempty"`
 }
 
 // clusterName is the profile's name. Empty until setup has written one.
@@ -93,10 +109,9 @@ func (s *Server) handleCluster(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := contextWithTimeout(r, 15*time.Second)
 	defer cancel()
 
-	loc, from := s.CatalogLocation(ctx)
+	repos, from := s.Catalogs(ctx)
 	info := clusterInfo{
 		Profile:     s.cfg.Cluster.Profile.Ref(),
-		Catalog:     loc,
 		CatalogFrom: from,
 		Version:     s.version,
 		AllowDeploy: s.cfg.Server.AllowDeploy,
@@ -115,10 +130,23 @@ func (s *Server) handleCluster(w http.ResponseWriter, r *http.Request) {
 	} else {
 		info.Warnings = append(info.Warnings, "profile: "+err.Error())
 	}
-	if c, err := s.Catalog(ctx); err == nil {
-		info.CatalogRef = c.Ref
-	} else {
+	if len(repos) == 0 {
+		_, err := s.CatalogRepo(ctx, "")
 		info.Warnings = append(info.Warnings, "catalog: "+err.Error())
+	}
+	for _, r := range repos {
+		ci := catalogInfo{Name: r.Name, URL: r.URL, Source: catalogSource(r.URL), Default: r.Default}
+		if c, err := s.openCatalog(ctx, r.URL); err == nil {
+			ci.Ref = c.Ref
+		} else {
+			info.Warnings = append(info.Warnings, fmt.Sprintf("catalog %s: %v", r.Name, err))
+		}
+		info.Catalogs = append(info.Catalogs, ci)
+	}
+	for i, c := range info.Catalogs {
+		if i == 0 || c.Default {
+			info.Catalog, info.CatalogRef = c.URL, c.Ref
+		}
 	}
 	writeJSON(w, http.StatusOK, info)
 }
@@ -149,21 +177,39 @@ func (s *Server) handleSites(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := contextWithTimeout(r, 20*time.Second)
 	defer cancel()
-	c, err := s.Catalog(ctx)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+	c, repo, ok := s.catalogFor(ctx, w, r)
+	if !ok {
 		return
 	}
 	// The index only. A marketplace listing must not cost one fetch per model.
-	writeJSON(w, http.StatusOK, map[string]any{"ref": c.Ref, "source": c.Fetcher.String(), "index": c.Index})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"name": repo.Name, "ref": c.Ref, "source": c.Fetcher.String(), "index": c.Index,
+	})
+}
+
+// catalogFor opens the catalog a request names with ?catalog=. Naming none is
+// fine when there is one; with several it is a 400, as is a name that is not
+// configured -- the request is wrong, not the catalog. A catalog that cannot be
+// read is a 502.
+func (s *Server) catalogFor(ctx context.Context, w http.ResponseWriter, r *http.Request) (*catalog.Catalog, site.CatalogRepo, bool) {
+	repo, err := s.CatalogRepo(ctx, r.URL.Query().Get("catalog"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return nil, repo, false
+	}
+	c, err := s.openCatalog(ctx, repo.URL)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return nil, repo, false
+	}
+	return c, repo, true
 }
 
 func (s *Server) handleCatalogModel(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := contextWithTimeout(r, 20*time.Second)
 	defer cancel()
-	c, err := s.Catalog(ctx)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+	c, _, ok := s.catalogFor(ctx, w, r)
+	if !ok {
 		return
 	}
 	e, err := c.Entry(ctx, r.PathValue("model"), r.URL.Query().Get("version"))
@@ -410,13 +456,20 @@ type deployment struct {
 	Model      string `json:"model,omitempty"`
 	Variant    string `json:"variant,omitempty"`
 	CatalogRef string `json:"catalogRef,omitempty"`
-	Version    string `json:"version,omitempty"`
-	Phase      string `json:"phase,omitempty"`
-	Drift      string `json:"drift,omitempty"`
+	// Catalog is the name of the configured catalog this was deployed from.
+	// Empty when the site no longer lists it, or the plan predates recording it.
+	Catalog string `json:"catalog,omitempty"`
+	Version string `json:"version,omitempty"`
+	Phase   string `json:"phase,omitempty"`
+	Drift   string `json:"drift,omitempty"`
 	// Route is the path the entrypoint publishes this release on, derived from
 	// the plan the way the detail view derives it. Empty when the plan names no
 	// route.
 	Route string `json:"route,omitempty"`
+
+	// What the plan recorded about its catalog, for finding the configured
+	// catalog the release belongs to.
+	source, catalogName string
 }
 
 // Paging bounds. A page is what the request pays for: the managed set is a name
@@ -455,7 +508,15 @@ func (s *Server) handleDeployments(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	cat, catErr := s.Catalog(ctx)
+	// Each release is compared with the catalog it belongs to, as that catalog
+	// reads now: its ref, by name.
+	repos, _ := s.Catalogs(ctx)
+	current := map[string]string{}
+	for _, r := range repos {
+		if c, err := s.openCatalog(ctx, r.URL); err == nil {
+			current[r.Name] = c.Ref
+		}
+	}
 
 	total := len(refs)
 	page, perPage := pageParams(r)
@@ -507,7 +568,12 @@ func (s *Server) handleDeployments(w http.ResponseWriter, r *http.Request) {
 		if d == nil {
 			continue
 		}
-		if cat != nil && catErr == nil && d.CatalogRef != "" && d.CatalogRef != cat.Ref {
+		// The same resolution an upgrade uses, so the row names the catalog an
+		// upgrade would compose from.
+		if repo, err := s.ReleaseCatalog(ctx, d.catalogName, d.source); err == nil {
+			d.Catalog = repo.Name
+		}
+		if ref, ok := current[d.Catalog]; ok && d.CatalogRef != "" && d.CatalogRef != ref {
 			behind++
 			if d.Drift == "" {
 				d.Drift = "catalog moved since this was deployed"
@@ -518,7 +584,7 @@ func (s *Server) handleDeployments(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"cluster":     s.clusterName(ctx),
-		"catalogRef":  refOrEmpty(cat, catErr),
+		"catalogRef":  singleRef(repos, current),
 		"page":        page,
 		"perPage":     perPage,
 		"deployments": out,
@@ -562,6 +628,7 @@ func (s *Server) deploymentRow(ctx context.Context, rel cluster.Release) *deploy
 	}
 	if p, err := parsePlanSummary([]byte(rel.SwissFiles[plan.MetaFile])); err == nil {
 		d.Model, d.Variant, d.CatalogRef, d.Version = p.Model, p.Variant, p.Ref, p.Version
+		d.source, d.catalogName = p.Catalog, p.CatalogName
 	} else {
 		d.Drift = "plan unreadable: " + err.Error()
 	}
@@ -581,9 +648,11 @@ func pageParams(r *http.Request) (page, perPage int) {
 	return page, perPage
 }
 
-func refOrEmpty(c *catalog.Catalog, err error) string {
-	if err != nil || c == nil {
+// singleRef is the catalog's ref when there is one catalog. With several, no
+// one ref describes the page; each row carries its own.
+func singleRef(repos []site.CatalogRepo, current map[string]string) string {
+	if len(repos) != 1 {
 		return ""
 	}
-	return c.Ref
+	return current[repos[0].Name]
 }

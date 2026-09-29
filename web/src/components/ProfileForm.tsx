@@ -27,12 +27,16 @@ export function ProfileForm({
   const setIn = <K extends keyof SiteProfile>(key: K, patch: Partial<SiteProfile[K]>) =>
     onChange({ ...value, [key]: { ...(value[key] as object), ...patch } as SiteProfile[K] });
 
-  // The catalog swissd falls back to when this document names none. Shown as
-  // the box's placeholder, so leaving it empty says which catalog that is
-  // rather than the word "default". Absent during first-run setup, where there
-  // is no cluster to ask yet.
+  // The catalog swissd falls back to when this document lists none, so an
+  // empty list says which catalog that is rather than the word "default".
+  // Absent during first-run setup, where there is no cluster to ask yet.
   const cluster = useQuery({ queryKey: ["cluster"], queryFn: api.cluster, retry: false });
   const configuredCatalog = cluster.data?.catalogFrom === "config" ? cluster.data.catalog : "";
+
+  // A profile from before the list names one catalog; it is shown as the one
+  // row it means, and saved back as the list.
+  const catalogs = value.catalogs ?? (value.catalog ? [{ name: "default", url: value.catalog }] : []);
+  const setCatalogs = (list: CatalogRepo[]) => onChange({ ...value, catalogs: list, catalog: undefined });
 
   return (
     <div className="space-y-6">
@@ -79,14 +83,10 @@ export function ProfileForm({
         hint="Where the models come from, and the registries the catalog deliberately does not name."
       >
         <Field
-          label="Catalog"
-          hint="An https base, or an absolute path. Set here it wins over swissd's config file, so the catalog moves without a helm upgrade. Empty falls back to the configured one, which is also what the CLI uses."
+          label="Catalogs"
+          hint="Each an https base or an absolute path, under the name the pages select it by. With several, pages open in the one marked default, or ask which one first when none is. Set here they win over swissd's config file, so catalogs change without a helm upgrade."
         >
-          <Input
-            value={value.catalog ?? ""}
-            placeholder={configuredCatalog || "the catalog swissd was configured with"}
-            onChange={(e) => set("catalog", e.target.value)}
-          />
+          <Catalogs value={catalogs} onChange={setCatalogs} configured={configuredCatalog} />
         </Field>
         <Field label="Chart repo" hint="e.g. oci://harbor.example.com/charts. Empty means a local chart path.">
           <Input
@@ -287,6 +287,102 @@ export function ProfileForm({
       >
         <Sites value={value.sites ?? []} onChange={(sites) => set("sites", sites)} />
       </Group>
+    </div>
+  );
+}
+
+type CatalogRepo = { name: string; url: string; default?: boolean };
+
+// Catalogs is the list a page selects from. swissd refuses the profile over a
+// row without a name or url, a name that is not lowercase, a name or url listed
+// twice, or a relative path -- flagged here so the save is not the first to say.
+function Catalogs({
+  value,
+  onChange,
+  configured,
+}: {
+  value: CatalogRepo[];
+  onChange: (v: CatalogRepo[]) => void;
+  configured: string;
+}) {
+  const patch = (i: number, p: Partial<CatalogRepo>) =>
+    onChange(value.map((c, j) => (i === j ? { ...c, ...p } : c)));
+  const names = value.map((c) => c.name.trim());
+  const urls = value.map((c) => c.url.trim());
+  const problem = value.some(
+    (_, i) =>
+      !names[i] ||
+      !urls[i] ||
+      !/^[a-z0-9][a-z0-9._-]*$/.test(names[i]) ||
+      names.indexOf(names[i]) !== i ||
+      urls.indexOf(urls[i]) !== i ||
+      !/^(https?:\/\/|\/)/.test(urls[i]),
+  );
+
+  return (
+    <div className="space-y-2">
+      {value.length === 0 && (
+        <p className="text-xs text-muted-foreground">
+          None listed: swissd uses the one in its config file
+          {configured ? (
+            <>
+              , <code className="break-all">{configured}</code>
+            </>
+          ) : null}
+          . That is also what the CLI uses.
+        </p>
+      )}
+      {value.map((c, i) => (
+        <div key={i} className="flex flex-wrap items-center gap-2">
+          <Input
+            className="w-40"
+            value={c.name}
+            onChange={(e) => patch(i, { name: e.target.value })}
+            placeholder="name"
+            aria-label="catalog name"
+          />
+          <Input
+            className="min-w-0 flex-1 font-mono text-xs"
+            value={c.url}
+            onChange={(e) => patch(i, { url: e.target.value })}
+            placeholder="https://models.example.com/swiss-catalog/"
+            aria-label="catalog url"
+          />
+          {/* At most one default: checking one clears the others. */}
+          <label className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={!!c.default}
+              onChange={(e) =>
+                onChange(value.map((x, j) => ({ ...x, default: e.target.checked && i === j ? true : undefined })))
+              }
+            />
+            default
+          </label>
+          <button
+            type="button"
+            onClick={() => onChange(value.filter((_, j) => j !== i))}
+            aria-label={`remove ${c.name || "catalog"}`}
+            className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+      ))}
+      {problem && (
+        <p className="text-xs text-warning">
+          Every catalog needs a unique lowercase name and a unique url starting with http://, https:// or
+          /; swissd will refuse the profile otherwise.
+        </p>
+      )}
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        onClick={() => onChange([...value, { name: "", url: "" }])}
+      >
+        <Plus className="size-4" /> Add catalog
+      </Button>
     </div>
   );
 }

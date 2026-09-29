@@ -18,8 +18,12 @@ type planSummary struct {
 	Digest  string
 	Variant string
 	Ref     string
-	Profile string
-	Hash    string
+	// Catalog is the location the plan was composed from, as the fetcher
+	// normalized it, and CatalogName the site's name for it, when recorded.
+	Catalog     string
+	CatalogName string
+	Profile     string
+	Hash        string
 	// Chart is "name-version", the way helm names a chart everywhere else here.
 	Chart string
 }
@@ -36,11 +40,13 @@ func parseStatus(raw []byte) planStatus {
 func parsePlanSummary(raw []byte) (planSummary, error) {
 	var doc struct {
 		Source struct {
-			Model   string `yaml:"model" json:"model"`
-			Version string `yaml:"version" json:"version"`
-			Digest  string `yaml:"digest" json:"digest"`
-			Variant string `yaml:"variant" json:"variant"`
-			Ref     string `yaml:"ref" json:"ref"`
+			Model       string `yaml:"model" json:"model"`
+			Version     string `yaml:"version" json:"version"`
+			Digest      string `yaml:"digest" json:"digest"`
+			Variant     string `yaml:"variant" json:"variant"`
+			Ref         string `yaml:"ref" json:"ref"`
+			Catalog     string `yaml:"catalog" json:"catalog"`
+			CatalogName string `yaml:"catalogName" json:"catalogName"`
 		} `yaml:"source" json:"source"`
 		Chart struct {
 			Name    string `yaml:"name" json:"name"`
@@ -56,7 +62,7 @@ func parsePlanSummary(raw []byte) (planSummary, error) {
 	}
 	return planSummary{
 		Model: doc.Source.Model, Version: doc.Source.Version, Digest: doc.Source.Digest,
-		Variant: doc.Source.Variant, Ref: doc.Source.Ref,
+		Variant: doc.Source.Variant, Ref: doc.Source.Ref, Catalog: doc.Source.Catalog, CatalogName: doc.Source.CatalogName,
 		Profile: doc.Profile, Hash: doc.Hash,
 		Chart: chartRef(doc.Chart.Name, doc.Chart.Version),
 	}, nil

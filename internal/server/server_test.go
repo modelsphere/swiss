@@ -258,14 +258,14 @@ func TestCatalogRefreshFailureServesPrevious(t *testing.T) {
 	cfg.Server.CacheTTL = time.Nanosecond
 	s := New(cfg, fakeProbe(), discardLogger(), "test")
 
-	first, err := s.Catalog(t.Context())
+	first, _, err := s.Catalog(t.Context(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(index); err != nil {
 		t.Fatal(err)
 	}
-	again, err := s.Catalog(t.Context())
+	again, _, err := s.Catalog(t.Context(), "")
 	if err != nil {
 		t.Fatalf("a failed refresh must fall back, not fail: %v", err)
 	}
@@ -284,11 +284,11 @@ func TestCatalogRepointedSomewhereDeadDoesNotServeTheOldOne(t *testing.T) {
 	cfg.Server.CacheTTL = time.Hour
 	s := New(cfg, fakeProbe(), discardLogger(), "test")
 
-	if _, err := s.Catalog(t.Context()); err != nil {
+	if _, _, err := s.Catalog(t.Context(), ""); err != nil {
 		t.Fatal(err)
 	}
 	s.cfg.Catalog = filepath.Join(t.TempDir(), "gone")
-	if _, err := s.Catalog(t.Context()); err == nil {
+	if _, _, err := s.Catalog(t.Context(), ""); err == nil {
 		t.Error("a new location that does not answer must be reported, not papered over")
 	}
 }
@@ -301,7 +301,7 @@ func TestCatalogServesTheCachedIndexAfterARestart(t *testing.T) {
 	cfg.Catalog = dir
 	cfg.Server.CacheDir = t.TempDir()
 
-	first, err := New(cfg, fakeProbe(), discardLogger(), "test").Catalog(t.Context())
+	first, _, err := New(cfg, fakeProbe(), discardLogger(), "test").Catalog(t.Context(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +310,7 @@ func TestCatalogServesTheCachedIndexAfterARestart(t *testing.T) {
 	}
 
 	// A second Server is this process restarting: same config, empty memory.
-	restarted, err := New(cfg, fakeProbe(), discardLogger(), "test").Catalog(t.Context())
+	restarted, _, err := New(cfg, fakeProbe(), discardLogger(), "test").Catalog(t.Context(), "")
 	if err != nil {
 		t.Fatalf("an unreachable catalog must fall back to the cached index: %v", err)
 	}
@@ -328,13 +328,13 @@ func TestCatalogWithoutACacheDirFailsAfterARestart(t *testing.T) {
 	if cfg.Server.CacheDir != "" || cfg.Server.CatalogCacheDir() != "" {
 		t.Fatal("this test needs a config with no cache directory")
 	}
-	if _, err := New(cfg, fakeProbe(), discardLogger(), "test").Catalog(t.Context()); err != nil {
+	if _, _, err := New(cfg, fakeProbe(), discardLogger(), "test").Catalog(t.Context(), ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(index); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := New(cfg, fakeProbe(), discardLogger(), "test").Catalog(t.Context()); err == nil {
+	if _, _, err := New(cfg, fakeProbe(), discardLogger(), "test").Catalog(t.Context(), ""); err == nil {
 		t.Error("without a cache there is nothing to fall back to; the error must surface")
 	}
 }
@@ -342,13 +342,13 @@ func TestCatalogWithoutACacheDirFailsAfterARestart(t *testing.T) {
 // The profile is the document an operator can edit, so it wins; the config
 // value is the install default and what the CLI, which cannot read the
 // profile's ConfigMap, still has to go on.
-func TestCatalogLocationPrefersTheProfile(t *testing.T) {
+func TestCatalogsPreferTheProfile(t *testing.T) {
 	cfg := testConfig("c")
 	cfg.Catalog = "/from/config"
 
 	s := New(cfg, fakeProbe(), discardLogger(), "test")
-	if loc, from := s.CatalogLocation(t.Context()); loc != "/from/config" || from != "config" {
-		t.Errorf("a profile naming no catalog must fall back to the config: %q %q", loc, from)
+	if repos, from := s.Catalogs(t.Context()); len(repos) != 1 || repos[0].URL != "/from/config" || repos[0].Name != "default" || from != "config" {
+		t.Errorf("a profile naming no catalog must fall back to the config: %+v %q", repos, from)
 	}
 
 	withCatalog := cluster.Fake{
@@ -357,14 +357,14 @@ func TestCatalogLocationPrefersTheProfile(t *testing.T) {
 		},
 	}
 	s = New(cfg, withCatalog, discardLogger(), "test")
-	if loc, from := s.CatalogLocation(t.Context()); loc != "/from/profile" || from != "profile" {
-		t.Errorf("the profile has to win: %q %q", loc, from)
+	if repos, from := s.Catalogs(t.Context()); len(repos) != 1 || repos[0].URL != "/from/profile" || from != "profile" {
+		t.Errorf("the profile has to win: %+v %q", repos, from)
 	}
 }
 
 // An unreadable profile is not a reason to lose the catalog: the configured
 // default stands in, and the profile failure is reported on its own.
-func TestCatalogLocationSurvivesAnUnreadableProfile(t *testing.T) {
+func TestCatalogsSurviveAnUnreadableProfile(t *testing.T) {
 	cfg := testConfig("c")
 	cfg.Catalog = "/from/config"
 	broken := cluster.Fake{
@@ -373,8 +373,8 @@ func TestCatalogLocationSurvivesAnUnreadableProfile(t *testing.T) {
 		},
 	}
 	s := New(cfg, broken, discardLogger(), "test")
-	if loc, from := s.CatalogLocation(t.Context()); loc != "/from/config" || from != "config" {
-		t.Errorf("got %q from %q, want the configured default", loc, from)
+	if repos, from := s.Catalogs(t.Context()); len(repos) != 1 || repos[0].URL != "/from/config" || from != "config" {
+		t.Errorf("got %+v from %q, want the configured default", repos, from)
 	}
 }
 

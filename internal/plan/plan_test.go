@@ -37,6 +37,31 @@ func TestHelmfileIsNotInTheHash(t *testing.T) {
 	}
 }
 
+// The catalog's name labels the location beside it and renders nothing, and a
+// swissd older than the field drops it on read -- so it must not move the
+// hash, or that swissd would refuse the plan as edited.
+func TestCatalogNameIsNotInTheHash(t *testing.T) {
+	a, b := testPlan(), testPlan()
+	a.Source.Catalog = "https://models.example.com/swiss-catalog/index.json"
+	b.Source = a.Source
+	b.Source.CatalogName = "public"
+	if err := a.ComputeHash(); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.ComputeHash(); err != nil {
+		t.Fatal(err)
+	}
+	if a.Hash != b.Hash {
+		t.Fatal("the catalog's name must not change the hash")
+	}
+	// Read back by a swissd that does not know the field, the plan still
+	// verifies.
+	b.Source.CatalogName = ""
+	if err := b.VerifyHash(); err != nil {
+		t.Fatalf("a plan with its name dropped must still verify: %v", err)
+	}
+}
+
 func TestHelmfileCarriesTheDeployDeclaration(t *testing.T) {
 	p := testPlan()
 	p.Chart.Repo = "https://harbor.4pd.io/chartrepo/hardcore-tech"

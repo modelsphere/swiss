@@ -26,11 +26,14 @@ type planRequest struct {
 	// FromRelease recomposes a deployed release: its stored plan supplies the
 	// form layer, the model and the variant, and only the catalog layer moves.
 	FromRelease string `json:"fromRelease,omitempty"`
-	Model       string `json:"model"`
-	Version     string `json:"version,omitempty"`
-	Variant     string `json:"variant,omitempty"`
-	Release     string `json:"release,omitempty"`
-	Namespace   string `json:"namespace,omitempty"`
+	// Catalog names the configured catalog to compose from. Required when the
+	// site lists several; an upgrade stays on the one its release came from.
+	Catalog   string `json:"catalog,omitempty"`
+	Model     string `json:"model"`
+	Version   string `json:"version,omitempty"`
+	Variant   string `json:"variant,omitempty"`
+	Release   string `json:"release,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
 	// ServiceID is the identity modelRoute, sloRequirement and the scaler all
 	// key off, and LocalPath overrides the site's path template. Both are form
 	// values; they are named here rather than left to Overrides because a
@@ -111,7 +114,7 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 	if req.Model == "" {
 		return nil, fmt.Errorf("model is required")
 	}
-	cat, err := s.Catalog(ctx)
+	cat, repo, err := s.Catalog(ctx, req.Catalog)
 	if err != nil {
 		return nil, err
 	}
@@ -200,6 +203,7 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 
 	return compose.Compose(compose.Input{
 		Catalog:         cat.Fetcher.String(),
+		CatalogName:     repo.Name,
 		Ref:             cat.Ref,
 		Entry:           entry,
 		Variant:         v,
@@ -223,7 +227,19 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 	// Release and namespace come from the previous plan and are not overridable.
 	// They identify the release being upgraded; changing them does not rename
 	// anything, it installs a second release beside the first.
+	// An upgrade composes from the catalog the release belongs to: that is
+	// where its model name and versions mean what the release says they mean.
+	// Moving a release to another catalog is a new deploy.
+	repo, err := s.ReleaseCatalog(ctx, prev.Source.CatalogName, prev.Source.Catalog)
+	if err != nil {
+		return req, fmt.Errorf("cannot upgrade %s: %w", prev.Release.Name, err)
+	}
+	if req.Catalog != "" && req.Catalog != repo.Name {
+		return req, fmt.Errorf("%s belongs to catalog %q and an upgrade stays on it, not %q -- deploy a new release to use another catalog",
+			prev.Release.Name, repo.Name, req.Catalog)
+	}
 	out := planRequest{
+		Catalog:   repo.Name,
 		Model:     prev.Source.Model,
 		Version:   req.Version,
 		Variant:   prev.Source.Variant,

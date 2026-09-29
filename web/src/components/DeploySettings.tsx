@@ -1289,7 +1289,7 @@ export function effective(f: Form) {
 
 export function planRequest(
   f: Form,
-  opts: { model: string; version?: string; variant?: string; fromRelease?: string },
+  opts: { model: string; version?: string; variant?: string; fromRelease?: string; catalog?: string },
 ): PlanRequest {
   const overrides: Record<string, unknown> = {};
   const on = effective(f);
@@ -1380,6 +1380,7 @@ export function planRequest(
   if (f.schedulerName.trim()) overrides.schedulerName = f.schedulerName.trim();
 
   return {
+    catalog: opts.catalog || undefined,
     model: opts.model,
     fromRelease: opts.fromRelease,
     version: opts.version || undefined,

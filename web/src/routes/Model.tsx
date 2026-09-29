@@ -17,21 +17,34 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ErrorState, Loading } from "@/components/States";
 import { WorkloadList } from "@/components/Uplift";
+import { CatalogBadge, CatalogGate, useCatalogChoice, withCatalog } from "@/components/CatalogChoice";
 import { cn } from "@/lib/utils";
 
 export function Model() {
   const { name = "" } = useParams();
   const [params, setParams] = useSearchParams();
   const version = params.get("version") ?? "";
+  // A model belongs to one catalog: the same name in another is another model.
+  const choice = useCatalogChoice();
+  const selected = choice.selected;
   const model = useQuery({
-    queryKey: ["model", name, version],
-    queryFn: () => api.model(name, version || undefined),
+    queryKey: ["model", selected, name, version],
+    queryFn: () => api.model(name, version || undefined, selected),
+    enabled: !!selected,
   });
-  const catalog = useQuery({ queryKey: ["catalog"], queryFn: api.catalog });
+  const catalog = useQuery({
+    queryKey: ["catalog", selected],
+    queryFn: () => api.catalog(selected),
+    enabled: !!selected,
+  });
   // Node facts are a separate, non-blocking query: a variant list is still
   // worth showing when the fit check cannot be computed.
   const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
 
+  if (choice.isPending) return <Loading what="catalogs" />;
+  if (!selected) {
+    return <CatalogGate catalogs={choice.catalogs} named={choice.named} choose={choice.choose} what={`look up ${name} in`} />;
+  }
   if (model.isPending) return <Loading what={name} />;
   if (model.error) return <ErrorState what={name} error={model.error} />;
 
@@ -43,12 +56,18 @@ export function Model() {
   const cmp = comparison(e.variants, e.version, tuning);
   return (
     <div className="space-y-5">
-      <Link to="/catalog" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+      <Link
+        to={withCatalog("/catalog", selected)}
+        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+      >
         <ChevronLeft className="size-4" /> Catalog
       </Link>
 
       <div>
-        <h1 className="text-xl font-semibold">{e.displayName ?? e.name}</h1>
+        <h1 className="flex flex-wrap items-center gap-2 text-xl font-semibold">
+          {e.displayName ?? e.name}
+          <CatalogBadge name={selected} show={choice.several} />
+        </h1>
         {e.description && <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{e.description}</p>}
       </div>
 
@@ -66,7 +85,14 @@ export function Model() {
         versions={
           indexed?.versions.map((v) => v.version) ?? []
         }
-        onPick={(v) => setParams(v ? { version: v } : {})}
+        onPick={(v) =>
+          setParams((prev) => {
+            const next = new URLSearchParams(prev);
+            if (v) next.set("version", v);
+            else next.delete("version");
+            return next;
+          })
+        }
       />
 
       <div>
@@ -87,6 +113,7 @@ export function Model() {
               nodes={nodes.data?.nodes}
               model={e.name}
               version={version}
+              catalog={selected}
             />
           ))}
         </div>
@@ -142,6 +169,7 @@ function VariantCard({
   nodes,
   model,
   version,
+  catalog,
 }: {
   v: Variant;
   kind: Kind;
@@ -153,6 +181,7 @@ function VariantCard({
   nodes?: Node[];
   model: string;
   version: string;
+  catalog: string;
 }) {
   const fit = fitness(v, nodes);
   const link = httpLink(v.link);
@@ -214,10 +243,11 @@ function VariantCard({
         <div className="mt-auto flex flex-wrap items-center justify-between gap-2 border-t pt-3">
           {fit && <Badge variant={fit.ok ? "success" : "warning"}>{fit.text}</Badge>}
           <Link
-            to={
+            to={withCatalog(
               `/deploy/${encodeURIComponent(model)}?variant=${encodeURIComponent(v.id)}` +
-              (version ? `&version=${encodeURIComponent(version)}` : "")
-            }
+                (version ? `&version=${encodeURIComponent(version)}` : ""),
+              catalog,
+            )}
             className="ml-auto"
           >
             <Button size="sm">Deploy</Button>

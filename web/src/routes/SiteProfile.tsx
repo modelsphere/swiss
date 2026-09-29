@@ -27,6 +27,8 @@ export function SiteProfile() {
 
   const p = data.profile;
   const auth = p.route?.auth;
+  // A profile from before the list names one catalog, which is the one row it means.
+  const catalogs = p.catalogs ?? (p.catalog ? [{ name: "default", url: p.catalog }] : []);
 
   return (
     <div className="space-y-5">
@@ -86,6 +88,19 @@ export function SiteProfile() {
               value={p.schedule?.priorityClassName}
               fallback="the chart's default"
             />
+          </Section>
+
+          <Section
+            title="Catalogs"
+            hint="Where the models come from. With several, pages open in the one marked default, or ask which one first when none is; an upgrade stays on the catalog its release came from."
+          >
+            {catalogs.length > 0 ? (
+              catalogs.map((c) => (
+                <Row key={c.name} label={c.default ? `${c.name} (default)` : c.name} value={c.url} mono />
+              ))
+            ) : (
+              <Row label="Catalog" value={undefined} fallback="the one in swissd's config file" />
+            )}
           </Section>
 
           <Section title="Charts and images">

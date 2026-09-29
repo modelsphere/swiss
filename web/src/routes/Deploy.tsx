@@ -8,16 +8,22 @@ import { Card, CardContent } from "@/components/ui/card";
 import { DeploySettings, EMPTY, imageOf, planRequest, type Form } from "@/components/DeploySettings";
 import { Pipeline } from "@/components/Pipeline";
 import { ErrorState, Loading } from "@/components/States";
+import { CatalogBadge, CatalogGate, useCatalogChoice, withCatalog } from "@/components/CatalogChoice";
 
 export function Deploy() {
   const { name = "" } = useParams();
   const [params] = useSearchParams();
   const variantId = params.get("variant") ?? "";
   const version = params.get("version") ?? "";
+  // The catalog is chosen before anything is composed: the same model name in
+  // two catalogs is two different models.
+  const choice = useCatalogChoice();
+  const catalog = choice.selected;
 
   const model = useQuery({
-    queryKey: ["model", name, version],
-    queryFn: () => api.model(name, version || undefined),
+    queryKey: ["model", catalog, name, version],
+    queryFn: () => api.model(name, version || undefined, catalog),
+    enabled: !!catalog,
   });
   const cluster = useQuery({ queryKey: ["cluster"], queryFn: api.cluster });
   const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
@@ -45,7 +51,7 @@ export function Deploy() {
 
   const planM = useMutation({
     mutationFn: () =>
-      deployApi.plan(planRequest(form, { model: name, version, variant: variantId })),
+      deployApi.plan(planRequest(form, { model: name, version, variant: variantId, catalog })),
     // The previous plan is superseded the moment a recompose starts. Dropping
     // it here rather than on the way back means a failed compose leaves
     // nothing to act on, instead of a stale plan the error message sits behind.
@@ -59,6 +65,10 @@ export function Deploy() {
     },
   });
 
+  if (choice.isPending) return <Loading what="catalogs" />;
+  if (!catalog) {
+    return <CatalogGate catalogs={choice.catalogs} named={choice.named} choose={choice.choose} what={`deploy ${name} from`} />;
+  }
   if (model.isPending || cluster.isPending) return <Loading what="the model" />;
   if (model.error) return <ErrorState what={name} error={model.error} />;
 
@@ -68,7 +78,7 @@ export function Deploy() {
   if (!cluster.data?.allowDeploy) {
     return (
       <div className="space-y-4">
-        <Back name={name} />
+        <Back name={name} catalog={catalog} />
         <ReadOnly />
       </div>
     );
@@ -76,10 +86,13 @@ export function Deploy() {
 
   return (
     <div className="space-y-5">
-      <Back name={name} />
+      <Back name={name} catalog={catalog} />
 
       <div>
-        <h1 className="text-xl font-semibold">Deploy {entry.displayName ?? entry.name}</h1>
+        <h1 className="flex flex-wrap items-center gap-2 text-xl font-semibold">
+          Deploy {entry.displayName ?? entry.name}
+          <CatalogBadge name={catalog} show={choice.several} />
+        </h1>
         <p className="mt-1 text-sm text-muted-foreground">
           <Badge variant="outline">{variant.id}</Badge>{" "}
           <Badge variant="muted">v{entry.version}</Badge>{" "}
@@ -143,10 +156,10 @@ function ReadOnly() {
   );
 }
 
-function Back({ name }: { name: string }) {
+function Back({ name, catalog }: { name: string; catalog: string }) {
   return (
     <Link
-      to={`/catalog/${encodeURIComponent(name)}`}
+      to={withCatalog(`/catalog/${encodeURIComponent(name)}`, catalog)}
       className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
     >
       <ChevronLeft className="size-4" /> {name}

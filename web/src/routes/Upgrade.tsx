@@ -16,6 +16,7 @@ import {
 } from "@/components/DeploySettings";
 import { Pipeline } from "@/components/Pipeline";
 import { ErrorState, Loading } from "@/components/States";
+import { CatalogBadge, releaseCatalog as catalogOfRelease } from "@/components/CatalogChoice";
 
 export function Upgrade() {
   const { namespace = "", release = "" } = useParams();
@@ -42,15 +43,25 @@ export function Upgrade() {
     enabled: rollbackTo > 0,
     staleTime: Infinity,
   });
-  const catalog = useQuery({ queryKey: ["catalog"], queryFn: api.catalog });
   const cluster = useQuery({ queryKey: ["cluster"], queryFn: api.cluster });
   const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
+  // An upgrade stays on the catalog the release belongs to -- swissd refuses
+  // any other -- so there is nothing to choose, only a name to find, the way
+  // swissd finds it.
+  const catalogs = cluster.data?.catalogs ?? [];
+  const recorded = current.data?.source;
+  const releaseCatalog = recorded ? catalogOfRelease(catalogs, recorded) : undefined;
+  const catalog = useQuery({
+    queryKey: ["catalog", releaseCatalog],
+    queryFn: () => api.catalog(releaseCatalog),
+    enabled: !!releaseCatalog,
+  });
   // For the model path default, which is the site's template resolved against
   // this model's hf -- the same value the deploy page shows.
   const entry = useQuery({
-    queryKey: ["model", current.data?.source.model ?? "", version],
-    queryFn: () => api.model(current.data!.source.model, version || undefined),
-    enabled: !!current.data,
+    queryKey: ["model", releaseCatalog, current.data?.source.model ?? "", version],
+    queryFn: () => api.model(current.data!.source.model, version || undefined, releaseCatalog),
+    enabled: !!current.data && !!releaseCatalog,
   });
 
   const [form, setForm] = useState<Form>(EMPTY);
@@ -144,8 +155,9 @@ export function Upgrade() {
         <h1 className="text-xl font-semibold">
           {rollbackTo ? `Roll back ${release} to revision ${rollbackTo}` : `Upgrade ${release}`}
         </h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          <Badge variant="outline">{namespace}</Badge> {cur.source.model}
+        <p className="mt-1 flex flex-wrap items-center gap-1 text-sm text-muted-foreground">
+          <Badge variant="outline">{namespace}</Badge>
+          <CatalogBadge name={releaseCatalog ?? ""} show={catalogs.length > 1} /> {cur.source.model}
           {cur.source.version && ` v${cur.source.version}`} · {cur.source.variant} · chart{" "}
           {cur.chart.name}-{cur.chart.version}
         </p>
@@ -158,6 +170,36 @@ export function Upgrade() {
       </div>
 
       {planM.error && <ErrorState what="the request" error={planM.error} />}
+
+      {!rollbackTo && cluster.data && !releaseCatalog && (
+        <Card>
+          <CardContent className="flex items-start gap-3 p-4 text-sm">
+            <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning" />
+            <div>
+              <div className="font-medium">This release's catalog is not configured</div>
+              {recorded?.catalogName ? (
+                <p className="mt-1 text-muted-foreground">
+                  It was deployed from catalog <code>{recorded.catalogName}</code>, which this site no
+                  longer lists. An upgrade stays on a release's catalog, so add it back to the site
+                  profile's catalogs to upgrade. Rollbacks still work.
+                </p>
+              ) : (
+                <p className="mt-1 text-muted-foreground">
+                  Its plan names no catalog this site lists
+                  {recorded?.catalog && (
+                    <>
+                      {" "}
+                      (it records <code className="break-all">{recorded.catalog}</code>)
+                    </>
+                  )}
+                  , and there is no default to stand in. Mark one catalog default in the site profile to
+                  upgrade it from there. Rollbacks still work.
+                </p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {!rollbackTo && (
         <Card>

@@ -18,15 +18,18 @@ import (
 )
 
 type Input struct {
-	Catalog   string // catalog repo url or path, recorded in the plan
-	Ref       string // catalog commit sha
-	Entry     catalog.Entry
-	Variant   catalog.Variant
-	Profile   site.Profile
-	Release   string
-	Namespace string
-	Overrides values.Tree
-	Edits     values.Tree
+	Catalog string // catalog repo url or path, recorded in the plan
+	// CatalogName is the site's name for that catalog, recorded beside it.
+	// Empty from the CLI, which has no names.
+	CatalogName string
+	Ref         string // catalog commit sha
+	Entry       catalog.Entry
+	Variant     catalog.Variant
+	Profile     site.Profile
+	Release     string
+	Namespace   string
+	Overrides   values.Tree
+	Edits       values.Tree
 	// CreateNamespace asks helm to create the namespace this lands in. A
 	// per-deploy decision and only that -- the site profile used to carry one
 	// as well, which put the answer in two places and let the site's half force
@@ -91,12 +94,13 @@ func Compose(in Input) (*plan.Plan, error) {
 		APIVersion: plan.APIVersion,
 		Release:    plan.Release{Name: in.Release, Namespace: ns},
 		Source: plan.SourceRef{
-			Catalog: in.Catalog,
-			Ref:     in.Ref,
-			Model:   in.Entry.Name,
-			Version: in.Entry.Version,
-			Digest:  in.Entry.Digest,
-			Variant: in.Variant.ID,
+			Catalog:     in.Catalog,
+			CatalogName: in.CatalogName,
+			Ref:         in.Ref,
+			Model:       in.Entry.Name,
+			Version:     in.Entry.Version,
+			Digest:      in.Entry.Digest,
+			Variant:     in.Variant.ID,
 		},
 		Chart: plan.ChartRef{
 			Name:    in.Variant.Chart.Name,

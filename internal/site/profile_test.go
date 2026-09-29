@@ -100,6 +100,68 @@ func TestCatalogValidation(t *testing.T) {
 	}
 }
 
+// A catalog list is what a page selects from, so each entry needs a usable,
+// unique name and a location the single-catalog field would also accept.
+func TestCatalogsValidation(t *testing.T) {
+	const head = "name: prod\nmodel:\n  pathTemplate: /models/{{name}}\n"
+
+	p, err := Parse([]byte(head+`catalogs:
+  - name: " public "
+    url: " https://models.example.com/swiss-catalog/ "
+  - name: internal
+    url: /mnt/disk0/internal-catalog
+`), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.CatalogRepos(); len(got) != 2 || got[0] != (CatalogRepo{Name: "public", URL: "https://models.example.com/swiss-catalog/"}) {
+		t.Errorf("catalogs parsed to %+v, want both, trimmed", got)
+	}
+
+	for name, raw := range map[string]string{
+		"both spellings": "catalog: /mnt/a\ncatalogs:\n  - name: b\n    url: /mnt/b\n",
+		"no url":         "catalogs:\n  - name: a\n",
+		"no name":        "catalogs:\n  - url: /mnt/a\n",
+		"bad name":       "catalogs:\n  - name: Public Models\n    url: /mnt/a\n",
+		"relative url":   "catalogs:\n  - name: a\n    url: ./catalog\n",
+		"name twice":     "catalogs:\n  - name: a\n    url: /mnt/a\n  - name: a\n    url: /mnt/b\n",
+		"url twice":      "catalogs:\n  - name: a\n    url: /mnt/a\n  - name: b\n    url: /mnt/a\n",
+		"two defaults":   "catalogs:\n  - name: a\n    url: /mnt/a\n    default: true\n  - name: b\n    url: /mnt/b\n    default: true\n",
+	} {
+		if _, err := Parse([]byte(head+raw), "test"); err == nil {
+			t.Errorf("%s: must be refused", name)
+		}
+	}
+}
+
+// One catalog may be marked default; it is the one a page opens in.
+func TestCatalogDefault(t *testing.T) {
+	p, err := Parse([]byte("name: prod\nmodel:\n  pathTemplate: /models/{{name}}\n"+
+		"catalogs:\n  - name: a\n    url: /mnt/a\n  - name: b\n    url: /mnt/b\n    default: true\n"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.CatalogRepos(); got[0].Default || !got[1].Default {
+		t.Errorf("got %+v, want only b marked default", got)
+	}
+}
+
+// A profile from before the list reads as one catalog named "default", so an
+// existing site keeps working without editing its profile.
+func TestLoneCatalogIsTheDefault(t *testing.T) {
+	p, err := Parse([]byte("name: prod\nmodel:\n  pathTemplate: /models/{{name}}\ncatalog: /mnt/c\n"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.CatalogRepos(); len(got) != 1 || got[0] != (CatalogRepo{Name: DefaultCatalogName, URL: "/mnt/c"}) {
+		t.Errorf("got %+v, want one catalog named default", got)
+	}
+	none, _ := Parse([]byte("name: prod\nmodel:\n  pathTemplate: /models/{{name}}\n"), "test")
+	if got := none.CatalogRepos(); len(got) != 0 {
+		t.Errorf("a profile naming no catalog lists none, got %+v", got)
+	}
+}
+
 func TestSitesValidation(t *testing.T) {
 	valid := `
 name: prod
