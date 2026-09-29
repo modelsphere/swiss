@@ -142,7 +142,8 @@ export interface CatalogResponse {
   name: string;
   ref: string;
   source: string;
-  index: { apiVersion: string; count: number; models: IndexModel[] };
+  // site is where the catalog's own site is published, perf reports included.
+  index: { apiVersion: string; site?: string; count: number; models: IndexModel[] };
 }
 
 export interface Variant extends IndexVariant {

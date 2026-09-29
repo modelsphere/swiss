@@ -1,7 +1,7 @@
 import { Fragment, createContext, useContext, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp, ExternalLink, LayoutGrid, Search, Table2 } from "lucide-react";
+import { ArrowDown, ArrowUp, ChartColumn, ExternalLink, LayoutGrid, Search, Table2 } from "lucide-react";
 import { api, type IndexVariant } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -25,6 +25,7 @@ import {
   headlineWorkload,
   httpLink,
   otherWorkloads,
+  reportLink,
   sorters,
   summarize,
   tagHue,
@@ -138,6 +139,8 @@ function matches(x: Facets, f: Filters): boolean {
 // The catalog being browsed, for the links below it: a model page and a deploy
 // have to open in the same catalog.
 const CatalogName = createContext("");
+// The site it publishes, where its perf reports are served.
+const CatalogSite = createContext<string | undefined>(undefined);
 
 export function Catalog() {
   const choice = useCatalogChoice();
@@ -161,6 +164,7 @@ export function Catalog() {
 
   return (
     <CatalogName.Provider value={choice.selected}>
+    <CatalogSite.Provider value={data.index.site}>
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <h1 className="text-lg font-semibold">Catalog</h1>
@@ -189,6 +193,7 @@ export function Catalog() {
         </>
       )}
     </div>
+    </CatalogSite.Provider>
     </CatalogName.Provider>
   );
 }
@@ -475,7 +480,7 @@ function CatalogTable({ rows, sort, set }: { rows: Facets[]; sort: SortKey; set:
               </TableCell>
               <TableCell className="align-top text-right">
                 {x.cmp ? (
-                  <UpliftCell cmp={x.cmp} latest={x.model.latest} />
+                  <UpliftCell cmp={x.cmp} latest={x.model.latest} model={x.model.name} />
                 ) : (
                   <span className="text-muted-foreground">—</span>
                 )}
@@ -494,6 +499,7 @@ function CatalogTable({ rows, sort, set }: { rows: Facets[]; sort: SortKey; set:
 function ModelCard({ f, set }: { f: Facets; set: Update }) {
   const catalog = useContext(CatalogName);
   const m = f.model;
+  const report = reportLink(useContext(CatalogSite), m.name, f.cmp?.report);
   return (
     <Card className="flex h-full flex-col gap-3 p-4">
       <div className="flex items-start justify-between gap-3">
@@ -558,6 +564,17 @@ function ModelCard({ f, set }: { f: Facets; set: Update }) {
             Details
           </Button>
         </Link>
+        {report && (
+          <a
+            href={report}
+            target="_blank"
+            rel="noreferrer"
+            className={cn(buttonVariants({ variant: "outline", size: "sm" }), "ml-auto gap-1.5")}
+          >
+            <ChartColumn className="size-3.5 text-muted-foreground" />
+            Perf report
+          </a>
+        )}
       </div>
     </Card>
   );
@@ -641,7 +658,8 @@ function UpliftBadge({ cmp, className }: { cmp: Comparison; className?: string }
 // in the column header.
 //   50k + 1.5k  [+64.2%]
 //      8k + 1k    +7.6%
-function UpliftCell({ cmp, latest }: { cmp: Comparison; latest: string }) {
+function UpliftCell({ cmp, latest, model }: { cmp: Comparison; latest: string; model: string }) {
+  const report = reportLink(useContext(CatalogSite), model, cmp.report);
   const head = headlineWorkload(cmp);
   const label = "text-left font-mono text-xs whitespace-nowrap text-muted-foreground";
   return (
@@ -658,6 +676,17 @@ function UpliftCell({ cmp, latest }: { cmp: Comparison; latest: string }) {
       ))}
       {cmp.version !== latest && (
         <span className="col-span-2 text-right text-xs text-muted-foreground">measured on v{cmp.version}</span>
+      )}
+      {report && (
+        <a
+          href={report}
+          target="_blank"
+          rel="noreferrer"
+          className="col-span-2 inline-flex items-center justify-end gap-1 text-xs text-muted-foreground hover:text-foreground hover:underline"
+        >
+          <ChartColumn className="size-3.5" />
+          perf report
+        </a>
       )}
     </div>
   );
@@ -705,6 +734,7 @@ function Chip({ onClick, hue, children }: { onClick: () => void; hue?: Hue; chil
 function DeployButton({ f }: { f: Facets }) {
   const catalog = useContext(CatalogName);
   const m = f.model;
+  const report = reportLink(useContext(CatalogSite), m.name, f.cmp?.report);
   // A variant is a hardware and parallelism decision, so it is the operator's
   // to make: deploying the default because it sorted first is how a model ends
   // up on the wrong accelerator. Only a model with one variant has nothing to
@@ -745,6 +775,17 @@ function DeployButton({ f }: { f: Facets }) {
                     <Badge variant="outline">{v.engine}</Badge>
                   </div>
                   <div className="flex items-center gap-2">
+                    {report && f.cmp?.optimized === v.id && (
+                      <a
+                        href={report}
+                        target="_blank"
+                        rel="noreferrer"
+                        className={buttonVariants({ variant: "outline", size: "sm" })}
+                      >
+                        <ChartColumn className="size-3.5 text-muted-foreground" />
+                        <span>Report</span>
+                      </a>
+                    )}
                     {link && (
                       <a
                         href={link}

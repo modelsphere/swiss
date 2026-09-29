@@ -10,9 +10,15 @@ import (
 // enough of each variant to render a marketplace, plus the path to the full
 // entry. A client fetches this once and an entry only when a model is opened.
 type Index struct {
-	APIVersion string       `json:"apiVersion"`
-	Count      int          `json:"count"`
-	Models     []IndexModel `json:"models"`
+	APIVersion string `json:"apiVersion"`
+	// Site is where the catalog's own site is published, from its catalog.yaml.
+	// A tuned variant's perf report is served there at
+	// <site>models/<name>/<report>, so the link is built from this and the
+	// model's tuning rather than carried by the variant: a version file is
+	// immutable, and could not name a page published after it.
+	Site   string       `json:"site,omitempty"`
+	Count  int          `json:"count"`
+	Models []IndexModel `json:"models"`
 }
 
 // IndexModel is a summary, deliberately a different type from Entry. It carries

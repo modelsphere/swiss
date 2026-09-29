@@ -136,6 +136,19 @@ export function httpLink(link?: string): string | undefined {
   return link && /^https?:\/\//i.test(link) ? link : undefined;
 }
 
+// A tuned variant's perf report, where the catalog's site serves it:
+// <site>models/<name>/<report>. The link is built here rather than carried by
+// the variant, whose version file is immutable and could not name a page
+// published after it. Undefined when the catalog publishes no site.
+export function reportLink(site: string | undefined, model: string, report?: string): string | undefined {
+  if (!site || !report) return undefined;
+  try {
+    return httpLink(new URL(`models/${encodeURIComponent(model)}/${encodeURIComponent(report)}`, site).href);
+  } catch {
+    return undefined;
+  }
+}
+
 export function latestVersion(m: IndexModel) {
   return m.versions.find((v) => v.version === m.latest) ?? m.versions[0];
 }

@@ -188,6 +188,20 @@ func TestIndexCarriesTuning(t *testing.T) {
 	}
 }
 
+// The catalog's site is declared before the catalog starts publishing it, for
+// the same reason tuning is: unknown fields are refused.
+func TestIndexCarriesTheSite(t *testing.T) {
+	withSite := strings.Replace(index(map[string]string{"1.1.0": testEntryV2}),
+		`"count": 1,`, `"site": "https://models.example.com/catalog/", "count": 1,`, 1)
+	idx, err := parseIndex([]byte(withSite))
+	if err != nil {
+		t.Fatalf("an index with a site must parse: %v", err)
+	}
+	if idx.Site != "https://models.example.com/catalog/" {
+		t.Errorf("site = %q", idx.Site)
+	}
+}
+
 // Tuning is display only: a pair naming variants the index does not have is
 // the catalog CI's to catch, not a reason to refuse the catalog for deploys.
 func TestIndexToleratesADanglingTuning(t *testing.T) {

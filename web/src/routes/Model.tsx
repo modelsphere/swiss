@@ -1,6 +1,6 @@
 import { Link, useParams, useSearchParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronLeft, ExternalLink } from "lucide-react";
+import { ChartColumn, ChevronLeft, ExternalLink } from "lucide-react";
 import { api, type Node, type Variant } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -8,6 +8,7 @@ import {
   comparison,
   formatUplift,
   httpLink,
+  reportLink,
   UPLIFT_HELP,
   variantKind,
   workloadSummary,
@@ -54,6 +55,7 @@ export function Model() {
   // The entry itself carries none: it is metadata, not part of the version.
   const tuning = indexed?.tuning;
   const cmp = comparison(e.variants, e.version, tuning);
+  const report = cmp ? reportLink(catalog.data?.index.site, e.name, cmp.report) : undefined;
   return (
     <div className="space-y-5">
       <Link
@@ -109,6 +111,7 @@ export function Model() {
                   : undefined
               }
               upliftTitle={cmp?.optimized === v.id && cmp.workloads.length ? workloadSummary(cmp) : undefined}
+              report={cmp?.optimized === v.id ? report : undefined}
               workloads={cmp?.optimized === v.id && cmp.workloads.length ? cmp.workloads : undefined}
               nodes={nodes.data?.nodes}
               model={e.name}
@@ -165,6 +168,7 @@ function VariantCard({
   kind,
   uplift,
   upliftTitle,
+  report,
   workloads,
   nodes,
   model,
@@ -177,6 +181,8 @@ function VariantCard({
   // Which workload it is for is on the line below, with the others.
   uplift?: string;
   upliftTitle?: string;
+  // The tuned variant's perf report, on the catalog's site.
+  report?: string;
   workloads?: { name: string; uplift: number }[];
   nodes?: Node[];
   model: string;
@@ -207,17 +213,30 @@ function VariantCard({
           )}
           {v.description && <p className="text-sm text-muted-foreground">{v.description}</p>}
         </div>
-        {link && (
-          <a
-            href={link}
-            target="_blank"
-            rel="noreferrer"
-            className={cn(buttonVariants({ variant: "outline", size: "sm" }), "shrink-0 gap-1.5")}
-          >
-            <ExternalLink className="size-3.5 text-muted-foreground" />
-            <span>Docs</span>
-          </a>
-        )}
+        <div className="flex shrink-0 items-center gap-2">
+          {report && (
+            <a
+              href={report}
+              target="_blank"
+              rel="noreferrer"
+              className={cn(buttonVariants({ variant: "outline", size: "sm" }), "gap-1.5")}
+            >
+              <ChartColumn className="size-3.5 text-muted-foreground" />
+              <span>Report</span>
+            </a>
+          )}
+          {link && (
+            <a
+              href={link}
+              target="_blank"
+              rel="noreferrer"
+              className={cn(buttonVariants({ variant: "outline", size: "sm" }), "gap-1.5")}
+            >
+              <ExternalLink className="size-3.5 text-muted-foreground" />
+              <span>Docs</span>
+            </a>
+          )}
+        </div>
       </CardHeader>
       <CardContent className="flex flex-1 flex-col gap-2 text-sm">
         <div className="text-muted-foreground">
