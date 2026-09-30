@@ -82,8 +82,8 @@ echo "$current -> $next"
 if $tag; then
   git add "$chart" "$gofile"
   git commit -m "swiss: $next"
-  git tag -a "swiss-v$next" -m "swiss $next"
-  echo "tagged swiss-v$next"
+  git tag -a "$next" -m "swiss $next"
+  echo "tagged $next"
 fi
 
 cat <<NEXT
