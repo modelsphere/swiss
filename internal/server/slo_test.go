@@ -93,7 +93,7 @@ func TestSLOProxiesTheDefineAndTheDecision(t *testing.T) {
 	var sent map[string]any
 	srv := sloSwissd(t, sloStub(t, true, true, &sent))
 
-	code, body := get(t, srv, "/api/releases/modelforge/glm/slo")
+	code, body := get(t, srv, "/api/releases/models/glm/slo")
 	if code != 200 || body["found"] != true {
 		t.Fatalf("get %d %v", code, body)
 	}
@@ -107,7 +107,7 @@ func TestSLOProxiesTheDefineAndTheDecision(t *testing.T) {
 		t.Fatalf("minimumDeployment: %v", body["minimumDeployment"])
 	}
 
-	code, body = put(t, srv, "/api/releases/modelforge/glm/slo", map[string]any{
+	code, body = put(t, srv, "/api/releases/models/glm/slo", map[string]any{
 		"priority":          10,
 		"minimumDeployment": map[string]any{"type": "replica", "value": 1},
 	})
@@ -132,7 +132,7 @@ func TestSLORefusesAPriorityTheServerCannotStore(t *testing.T) {
 	var sent map[string]any
 	srv := sloSwissd(t, sloStub(t, true, true, &sent))
 
-	code, body := put(t, srv, "/api/releases/modelforge/glm/slo", map[string]any{"priority": 4})
+	code, body := put(t, srv, "/api/releases/models/glm/slo", map[string]any{"priority": 4})
 	if code != http.StatusBadRequest {
 		t.Fatalf("status %d: %v", code, body)
 	}
@@ -150,11 +150,11 @@ func TestSLOStripsTheMarkerItAddedOnRead(t *testing.T) {
 	var sent map[string]any
 	srv := sloSwissd(t, sloStub(t, true, true, &sent))
 
-	code, body := get(t, srv, "/api/releases/modelforge/glm/slo")
+	code, body := get(t, srv, "/api/releases/models/glm/slo")
 	if code != 200 {
 		t.Fatalf("get %d %v", code, body)
 	}
-	code, body = put(t, srv, "/api/releases/modelforge/glm/slo", body)
+	code, body = put(t, srv, "/api/releases/models/glm/slo", body)
 	if code != 200 {
 		t.Fatalf("round trip %d: %v", code, body)
 	}
@@ -169,7 +169,7 @@ func TestSLOStripsTheMarkerItAddedOnRead(t *testing.T) {
 func TestSLOReportsAnUnsyncedServerRatherThanNoRequirement(t *testing.T) {
 	srv := sloSwissd(t, sloStub(t, false, false, nil))
 
-	code, body := get(t, srv, "/api/releases/modelforge/glm/slo")
+	code, body := get(t, srv, "/api/releases/models/glm/slo")
 	if code != http.StatusServiceUnavailable {
 		t.Fatalf("get %d: %v", code, body)
 	}
@@ -181,7 +181,7 @@ func TestSLOReportsAnUnsyncedServerRatherThanNoRequirement(t *testing.T) {
 		t.Errorf("an unsynced server cannot report found: %v", body)
 	}
 
-	code, body = put(t, srv, "/api/releases/modelforge/glm/slo", map[string]any{"priority": 0})
+	code, body = put(t, srv, "/api/releases/models/glm/slo", map[string]any{"priority": 0})
 	if code != http.StatusServiceUnavailable {
 		t.Fatalf("put %d: %v", code, body)
 	}
@@ -191,7 +191,7 @@ func TestSLOReportsAnUnsyncedServerRatherThanNoRequirement(t *testing.T) {
 func TestSLOFoundIsFalseWhenAReadyServerHasNoRequirement(t *testing.T) {
 	srv := sloSwissd(t, sloStub(t, true, false, nil))
 
-	code, body := get(t, srv, "/api/releases/modelforge/glm/slo")
+	code, body := get(t, srv, "/api/releases/models/glm/slo")
 	if code != 200 || body["found"] != false {
 		t.Fatalf("get %d: %v", code, body)
 	}
@@ -202,7 +202,7 @@ func TestSLOPutIsRefusedWhenReadOnly(t *testing.T) {
 	s := New(cfg, fakeProbe(), discardLogger(), "test")
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
-	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/releases/modelforge/glm/slo", strings.NewReader(`{"ttft":{}}`))
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/releases/models/glm/slo", strings.NewReader(`{"ttft":{}}`))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -215,7 +215,7 @@ func TestSLOPutIsRefusedWhenReadOnly(t *testing.T) {
 
 func TestSLORequiresAToken(t *testing.T) {
 	srv := testServer(t, fakeProbe())
-	code, body := get(t, srv, "/api/releases/modelforge/glm/slo")
+	code, body := get(t, srv, "/api/releases/models/glm/slo")
 	if code != http.StatusConflict {
 		t.Fatalf("status %d: %v", code, body)
 	}

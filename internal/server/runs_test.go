@@ -20,9 +20,9 @@ func seedRuns(t *testing.T, s *Server, runs ...store.Run) {
 func TestRunsAreFilteredAndNewestFirst(t *testing.T) {
 	srv, s := deployServer(t, true)
 	seedRuns(t, s,
-		store.Run{Namespace: "modelforge", Release: "a", Action: "diff", StartedAt: "1", EndedAt: "2"},
-		store.Run{Namespace: "modelforge", Release: "b", Action: "apply", StartedAt: "3", EndedAt: "4"},
-		store.Run{Namespace: "modelforge", Release: "a", Action: "apply", StartedAt: "5", EndedAt: "6"},
+		store.Run{Namespace: "models", Release: "a", Action: "diff", StartedAt: "1", EndedAt: "2"},
+		store.Run{Namespace: "models", Release: "b", Action: "apply", StartedAt: "3", EndedAt: "4"},
+		store.Run{Namespace: "models", Release: "a", Action: "apply", StartedAt: "5", EndedAt: "6"},
 	)
 
 	code, body := get(t, srv, "/api/runs")
@@ -56,7 +56,7 @@ func TestRunsAreFilteredAndNewestFirst(t *testing.T) {
 func TestOutputIsOmittedFromTheListAndServedPerRun(t *testing.T) {
 	srv, s := deployServer(t, true)
 	id, err := s.store.RecordRun(context.Background(), store.Run{
-		Namespace: "modelforge", Release: "a", Action: "apply",
+		Namespace: "models", Release: "a", Action: "apply",
 		Output: "helm upgrade output", StartedAt: "1", EndedAt: "2",
 	})
 	if err != nil {

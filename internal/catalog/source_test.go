@@ -260,7 +260,7 @@ func TestLocalDirectoryAndFileBothWork(t *testing.T) {
 		if err != nil {
 			t.Skipf("example catalog not present: %v", err)
 		}
-		if _, err := c.Entry(context.Background(), "modelforge", ""); err != nil {
+		if _, err := c.Entry(context.Background(), "qwen3.6-35b-a3b", ""); err != nil {
 			t.Errorf("%s: %v", loc, err)
 		}
 	}

@@ -18,7 +18,8 @@ deploy-time settings, then hands it to helm. It feeds the existing charts,
 | **`swissd`** | binary | HTTP server |
 | **web UI** | React + TypeScript | embedded into `swissd` |
 
-Three things are deployed: the catalog, `swissd`, and the charts in harbor.
+Three things are deployed: the catalog, `swissd`, and the engine charts in the
+helm repo (`https://modelsphere.github.io/helm-charts` by default).
 
 - `swiss` and `swissd` are one Go module. All compose, validate, render and apply
   logic lives in `internal/`; both binaries are thin over it, so the server can
@@ -55,7 +56,7 @@ Both frontends produce and consume the same `Plan`. That, rather than shared cod
 is what makes two of them worth more than one.
 
 ```
-swiss plan    --model modelforge --release glm-53 -o plan.json
+swiss plan    --model qwen3.6-35b-a3b --release glm-53 -o plan.json
 swiss diff    --plan plan.json     # exit 2 when something would change
 swiss apply   --plan plan.json     # release MUST exist
 swiss install --plan plan.json     # release must NOT exist
@@ -147,7 +148,7 @@ pins one. The plan records the version *and* a sha256 of the entry file:
 
 ```yaml
 source:
-  model: modelforge
+  model: qwen3.6-35b-a3b
   version: "1.0.0"
   digest: sha256:2ddfe906daeb...
   variant: sglang-tp2
@@ -163,17 +164,17 @@ the fields that distinguish them move together:
 
 ```yaml
 apiVersion: catalog.swiss/v1
-name: modelforge
-servedName: kimi
+name: qwen3.6-35b-a3b
+servedName: qwen
 source:
-  hf: modelforge/Qwen3.6-35B-A3B-793303    # identity, not a path
+  hf: Qwen/Qwen3.6-35B-A3B    # identity, not a path
   requiredGlobs: [config.json, "*.safetensors"]
 variants:
   - id: sglang-tp2
     default: true
     engine: sglang
     chart: { name: sglang, version: "0.8.0" }
-    image: { repository: harbor.4pd.io/hardcore-tech/sglang, tag: v0.5.15-cu129 }
+    image: { repository: ghcr.io/modelsphere/sglang, tag: v0.5.15-cu129 }
     requires: { gpus: 2, topology: single-node }
     values:
       extraArgs: [--tp-size=2, --mamba-radix-cache-strategy=extra_buffer, ...]

@@ -59,10 +59,10 @@ func (c *counting) GPUAllocations(ctx context.Context) (map[string][]cluster.GPU
 // Every cluster read the detail page makes must name the one release it is
 // about. This pins the shape, not just the outcome.
 func TestDetailPageReadsAreAllNameScoped(t *testing.T) {
-	_, doc := livePlan(t, planRequest{Model: "modelforge", Release: "r", ServiceID: "r"})
+	_, doc := livePlan(t, planRequest{Model: "qwen3.6-35b-a3b", Release: "r", ServiceID: "r"})
 	base := liveProbe()
 	base.Rel = append(base.Rel, cluster.Release{
-		Name: "r", Namespace: "modelforge", Chart: "sglang-0.7.1",
+		Name: "r", Namespace: "models", Chart: "sglang-0.7.1",
 		Status: "deployed", Revision: 3, SwissFiles: doc,
 	})
 	probe := newCounting(base)
@@ -70,8 +70,8 @@ func TestDetailPageReadsAreAllNameScoped(t *testing.T) {
 
 	// What the page fires on mount, minus /api/cluster, which reads no release.
 	for _, path := range []string{
-		"/api/releases/modelforge/r/status",
-		"/api/releases/modelforge/r/plan",
+		"/api/releases/models/r/status",
+		"/api/releases/models/r/plan",
 	} {
 		if code, body := get(t, srv, path); code != 200 {
 			t.Fatalf("%s: status %d: %v", path, code, body)
@@ -86,7 +86,7 @@ func TestDetailPageReadsAreAllNameScoped(t *testing.T) {
 	// Both reads name the release. Pods is a label selector on one namespace,
 	// which is the chart's own app=<release>-<engine>.
 	for _, arg := range probe.args {
-		if !strings.Contains(arg, "modelforge") || !strings.Contains(arg, "r") {
+		if !strings.Contains(arg, "models") || !strings.Contains(arg, "r") {
 			t.Errorf("a read that does not name the release: %q (all: %v)", arg, probe.args)
 		}
 	}

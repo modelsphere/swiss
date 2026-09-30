@@ -10,7 +10,7 @@ import (
 func testPlan() *Plan {
 	return &Plan{
 		APIVersion: APIVersion,
-		Release:    Release{Name: "glm-53", Namespace: "modelforge"},
+		Release:    Release{Name: "glm-53", Namespace: "models"},
 		Chart:      ChartRef{Name: "sglang", Version: "0.8.0"},
 		Layers:     map[string]values.Tree{"form": {"replicaCount": 2}},
 	}
@@ -18,8 +18,8 @@ func testPlan() *Plan {
 
 func TestHelmfileIsNotInTheHash(t *testing.T) {
 	a, b := testPlan(), testPlan()
-	a.Chart.Repo = "oci://harbor.4pd.io/hardcore-tech"
-	b.Chart.Repo = "oci://harbor.4pd.io/hardcore-tech"
+	a.Chart.Repo = "oci://ghcr.io/modelsphere/charts"
+	b.Chart.Repo = "oci://ghcr.io/modelsphere/charts"
 
 	if err := a.ComputeHash(); err != nil {
 		t.Fatal(err)
@@ -64,7 +64,7 @@ func TestCatalogNameIsNotInTheHash(t *testing.T) {
 
 func TestHelmfileCarriesTheDeployDeclaration(t *testing.T) {
 	p := testPlan()
-	p.Chart.Repo = "https://harbor.4pd.io/chartrepo/hardcore-tech"
+	p.Chart.Repo = "https://modelsphere.github.io/helm-charts"
 	doc, err := p.RenderHelmfile("")
 	if err != nil {
 		t.Fatal(err)
@@ -73,7 +73,7 @@ func TestHelmfileCarriesTheDeployDeclaration(t *testing.T) {
 		"wait: false", "atomic: false", "historyMax: 20",
 		"--three-way-merge", "--server-side=true",
 		"chart: charts/sglang", "version: 0.8.0",
-		"namespace: modelforge", "values:", "- form.yaml",
+		"namespace: models", "values:", "- form.yaml",
 	} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("declaration is missing %q:\n%s", want, doc)
@@ -95,7 +95,7 @@ func TestNoChartSourceLeavesTheDeclarationUnrenderable(t *testing.T) {
 // namespaces an admin already granted it, so this stays off unless asked for.
 func TestCreateNamespaceIsOptIn(t *testing.T) {
 	p := testPlan()
-	p.Chart.Repo = "oci://harbor.4pd.io/hardcore-tech"
+	p.Chart.Repo = "oci://ghcr.io/modelsphere/charts"
 
 	doc, err := p.HelmfileDocument("")
 	if err != nil {

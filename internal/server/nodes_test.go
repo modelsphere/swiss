@@ -18,8 +18,8 @@ func gpuProbe() cluster.Fake {
 	}
 	p.Alloc = map[string][]cluster.GPUPod{
 		"gpu-1": {
-			{Namespace: "modelforge", Name: "glm-53-0", GPUs: 2},
-			{Namespace: "modelforge", Name: "kimi-0", GPUs: 4},
+			{Namespace: "models", Name: "glm-53-0", GPUs: 2},
+			{Namespace: "models", Name: "kimi-0", GPUs: 4},
 		},
 	}
 	return p
@@ -120,7 +120,7 @@ func TestNodesReportAscendGPUs(t *testing.T) {
 	}
 	p.Alloc = map[string][]cluster.GPUPod{
 		"ascend-1": {
-			{Namespace: "modelforge", Name: "ascend-pod-0", GPUs: 8},
+			{Namespace: "models", Name: "ascend-pod-0", GPUs: 8},
 		},
 	}
 	srv := testServer(t, p)

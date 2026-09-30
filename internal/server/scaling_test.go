@@ -11,7 +11,7 @@ import (
 func TestScalerDropsTheFixedReplicaCount(t *testing.T) {
 	srv, _ := deployServer(t, true)
 	code, p := post(t, srv, "/api/plans", map[string]any{
-		"model": "modelforge", "release": "r", "serviceId": "r",
+		"model": "qwen3.6-35b-a3b", "release": "r", "serviceId": "r",
 		"overrides": map[string]any{
 			"replicaCount": 4,
 			"scaler":       map[string]any{"enabled": true, "minReplicas": 1, "maxReplicas": 6},
@@ -33,7 +33,7 @@ func TestScalerDropsTheFixedReplicaCount(t *testing.T) {
 func TestScalerOffKeepsTheFixedReplicaCount(t *testing.T) {
 	srv, _ := deployServer(t, true)
 	_, p := post(t, srv, "/api/plans", map[string]any{
-		"model": "modelforge", "release": "r", "serviceId": "r",
+		"model": "qwen3.6-35b-a3b", "release": "r", "serviceId": "r",
 		"overrides": map[string]any{
 			"replicaCount": 4,
 			"scaler":       map[string]any{"enabled": false},
@@ -49,12 +49,12 @@ func TestScalerOffKeepsTheFixedReplicaCount(t *testing.T) {
 // mutually exclusive.
 func TestUpgradeDoesNotResurrectAReplicaCount(t *testing.T) {
 	_, doc := livePlan(t, planRequest{
-		Model: "modelforge", Release: "r", ServiceID: "r",
+		Model: "qwen3.6-35b-a3b", Release: "r", ServiceID: "r",
 		Overrides: values.Tree{"replicaCount": 3},
 	})
 	probe := liveProbe()
 	probe.Rel = append(probe.Rel, cluster.Release{
-		Name: "r", Namespace: "modelforge", Status: "deployed", Revision: 1, SwissFiles: doc,
+		Name: "r", Namespace: "models", Status: "deployed", Revision: 1, SwissFiles: doc,
 	})
 	srv, _ := deployServerWith(t, probe, true)
 

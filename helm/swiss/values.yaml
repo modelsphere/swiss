@@ -4,7 +4,7 @@
 replicaCount: 1
 
 image:
-  repository: harbor.4pd.io/hardcore-tech/swissd
+  repository: ghcr.io/modelsphere/swissd
   # Empty follows the chart's appVersion, so a chart bump and an image bump
   # cannot silently disagree.
   tag: ""
@@ -28,7 +28,7 @@ config:
   # wins, which is how it gets repointed from the web without a helm upgrade.
   # This value is what a fresh install reads until then, and what `swiss` on a
   # laptop reads always -- the CLI cannot read the profile ConfigMap.
-  catalog: "https://models.example.com/swiss-catalog/"
+  catalog: "https://modelsphere.github.io/model-catalog/"
 
   cluster:
     # The site profile ConfigMap, "namespace/name". Empty means <release>-profile
@@ -165,7 +165,7 @@ rbac:
 
   # Namespaces holding model releases. Used when scope is namespaced.
   namespaces: []
-    # - modelforge
+    # - models
     # - kimi
 
 serviceAccount:

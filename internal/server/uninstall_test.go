@@ -49,11 +49,11 @@ func TestUninstallRemovesTheReleaseThenThePlan(t *testing.T) {
 	s.cfg.Server.HelmBin = stubHelm(t, 0)
 	w := s.writer.(*fakeWriter)
 
-	code, out := del(t, srv, "/api/releases/modelforge/glm-53")
+	code, out := del(t, srv, "/api/releases/models/glm-53")
 	if code != http.StatusOK {
 		t.Fatalf("status %d: %v", code, out)
 	}
-	if len(w.deleted) != 1 || w.deleted[0] != "modelforge/"+cluster.PlanConfigMapPrefix+"glm-53" {
+	if len(w.deleted) != 1 || w.deleted[0] != "models/"+cluster.PlanConfigMapPrefix+"glm-53" {
 		t.Fatalf("the plan beside the release must be removed, deleted=%v", w.deleted)
 	}
 
@@ -67,7 +67,7 @@ func TestUninstallRemovesTheReleaseThenThePlan(t *testing.T) {
 	if runs[0].Error != "" {
 		t.Errorf("a successful uninstall should record no error: %q", runs[0].Error)
 	}
-	if runs[0].Release != "glm-53" || runs[0].Namespace != "modelforge" {
+	if runs[0].Release != "glm-53" || runs[0].Namespace != "models" {
 		t.Errorf("the audit row must name the release: %+v", runs[0])
 	}
 }
@@ -82,7 +82,7 @@ func TestFailedUninstallLeavesThePlanInPlace(t *testing.T) {
 	s.cfg.Server.HelmBin = stubHelm(t, 1)
 	w := s.writer.(*fakeWriter)
 
-	code, _ := del(t, srv, "/api/releases/modelforge/glm-53")
+	code, _ := del(t, srv, "/api/releases/models/glm-53")
 	if code != http.StatusInternalServerError {
 		t.Fatalf("a failing helm must fail the request, got %d", code)
 	}
@@ -100,7 +100,7 @@ func TestUninstallRefusesAReleaseThatIsNotThere(t *testing.T) {
 	srv, s := deployServerWith(t, liveProbe(), true)
 	s.cfg.Server.HelmBin = stubHelm(t, 0)
 
-	code, out := del(t, srv, "/api/releases/modelforge/never-deployed")
+	code, out := del(t, srv, "/api/releases/models/never-deployed")
 	if code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d %v", code, out)
 	}
@@ -113,7 +113,7 @@ func TestUninstallWorksOnAnUntrackedRelease(t *testing.T) {
 	srv, s := deployServerWith(t, liveProbe(), true)
 	s.cfg.Server.HelmBin = stubHelm(t, 0)
 
-	code, out := del(t, srv, "/api/releases/modelforge/by-hand")
+	code, out := del(t, srv, "/api/releases/models/by-hand")
 	if code != http.StatusOK {
 		t.Fatalf("status %d: %v", code, out)
 	}
@@ -125,7 +125,7 @@ func TestUninstallWorksOnAnUntrackedRelease(t *testing.T) {
 
 func TestReadOnlyServerRefusesUninstall(t *testing.T) {
 	srv, _ := deployServer(t, false)
-	code, body := del(t, srv, "/api/releases/modelforge/glm-53")
+	code, body := del(t, srv, "/api/releases/models/glm-53")
 	if code != http.StatusForbidden {
 		t.Fatalf("want 403, got %d", code)
 	}

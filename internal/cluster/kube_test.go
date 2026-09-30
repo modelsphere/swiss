@@ -39,13 +39,13 @@ func helmSecret(ns, name string, rev int, status, chart, version string) *corev1
 // release's revisions rather than every release in scope.
 func TestReleaseDecodesHelmStorage(t *testing.T) {
 	cs := fake.NewSimpleClientset(
-		helmSecret("modelforge", "glm-53", 1, "superseded", "sglang", "0.7.0"),
-		helmSecret("modelforge", "glm-53", 4, "deployed", "sglang", "0.8.0"),
+		helmSecret("models", "glm-53", 1, "superseded", "sglang", "0.7.0"),
+		helmSecret("models", "glm-53", 4, "deployed", "sglang", "0.8.0"),
 		helmSecret("kimi", "kimi-k25", 2, "pending-upgrade", "sglang", "0.8.0"),
 	)
 	k := NewKubeWithClient(cs)
 
-	glm, err := k.Release(context.Background(), "modelforge", "glm-53")
+	glm, err := k.Release(context.Background(), "models", "glm-53")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestReleaseDecodesHelmStorage(t *testing.T) {
 
 	// A release in another namespace is not reachable by name alone, which is
 	// the point: two namespaces may hold the same release name.
-	other, err := k.Release(context.Background(), "modelforge", "kimi-k25")
+	other, err := k.Release(context.Background(), "models", "kimi-k25")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,16 +71,16 @@ func TestReleaseDecodesHelmStorage(t *testing.T) {
 // an error: it is what makes a name collision a conflict rather than an adoption.
 func TestReleaseWithoutAPlanIsStillLive(t *testing.T) {
 	cs := fake.NewSimpleClientset(
-		helmSecret("modelforge", "glm-53", 1, "deployed", "sglang", "0.8.0"),
-		helmSecret("modelforge", "by-hand", 1, "deployed", "sglang", "0.8.0"),
+		helmSecret("models", "glm-53", 1, "deployed", "sglang", "0.8.0"),
+		helmSecret("models", "by-hand", 1, "deployed", "sglang", "0.8.0"),
 		&corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{Namespace: "modelforge", Name: "swiss-plan-glm-53"},
+			ObjectMeta: metav1.ObjectMeta{Namespace: "models", Name: "swiss-plan-glm-53"},
 			Data:       map[string]string{"plan.yaml": "release:\n  name: glm-53\n"},
 		},
 	)
 	k := NewKubeWithClient(cs)
 
-	glm, err := k.Release(context.Background(), "modelforge", "glm-53")
+	glm, err := k.Release(context.Background(), "models", "glm-53")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestReleaseWithoutAPlanIsStillLive(t *testing.T) {
 		t.Error("glm-53 has a plan ConfigMap and should carry it")
 	}
 
-	hand, err := k.Release(context.Background(), "modelforge", "by-hand")
+	hand, err := k.Release(context.Background(), "models", "by-hand")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestReleaseWithoutAPlanIsStillLive(t *testing.T) {
 
 func TestNoReleaseAndNoPlanIsNil(t *testing.T) {
 	rel, err := NewKubeWithClient(fake.NewSimpleClientset()).
-		Release(context.Background(), "modelforge", "nothing-here")
+		Release(context.Background(), "models", "nothing-here")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +241,7 @@ func TestNodesReadAscendAndOtherAccelerators(t *testing.T) {
 func TestConfigMapKeysForRouteCollision(t *testing.T) {
 	cs := fake.NewSimpleClientset(&corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "llm-route", Name: "openresty-conf"},
-		Data:       map[string]string{"modelforge-0.1": "...", "kimi-k2.5": "..."},
+		Data:       map[string]string{"qwen-0.1": "...", "kimi-k2.5": "..."},
 	})
 	keys, err := ConfigMapKeys(context.Background(), NewKubeWithClient(cs), "llm-route/openresty-conf")
 	if err != nil {
@@ -260,12 +260,12 @@ func TestConfigMapKeysForRouteCollision(t *testing.T) {
 // getting this wrong is a 403, not a narrower view.
 func TestScopedProbeListsPerNamespace(t *testing.T) {
 	md := metaClient(
-		planMeta("modelforge", PlanConfigMapPrefix+"glm-53"),
+		planMeta("models", PlanConfigMapPrefix+"glm-53"),
 		planMeta("kimi", PlanConfigMapPrefix+"kimi-k25"),
 		planMeta("other", PlanConfigMapPrefix+"not-ours"),
 	)
 	k := NewKubeWithClients(fake.NewSimpleClientset(), md)
-	k.Namespaces = []string{"modelforge", "kimi"}
+	k.Namespaces = []string{"models", "kimi"}
 
 	got, err := k.ManagedRefs(context.Background())
 	if err != nil {

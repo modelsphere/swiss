@@ -39,7 +39,7 @@ variants:
 
 // The keys that are genuinely wrong in a public repo are still wrong -- they are
 // just not swiss-side validation any more. Nothing here rejects them, so the
-// catalog repo review is what catches a namespace or a harbor URL in an entry.
+// catalog repo review is what catches a namespace or a registry URL in an entry.
 func TestEntryWithSiteKeyIsNoLongerRefused(t *testing.T) {
 	raw := []byte(`apiVersion: catalog.swiss/v1
 name: m

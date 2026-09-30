@@ -57,9 +57,9 @@ func TestEmbeddedUIIsServed(t *testing.T) {
 func liveProbe() cluster.Fake {
 	p := fakeProbe()
 	p.Rel = []cluster.Release{
-		{Name: "by-hand", Namespace: "modelforge", Chart: "sglang-0.8.0", Status: "deployed", Revision: 1},
-		{Name: "glm-53", Namespace: "modelforge", Chart: "sglang-0.8.0", Status: "deployed", Revision: 4,
-			SwissFiles: map[string]string{"plan.yaml": "source:\n  model: modelforge\n  variant: sglang-tp2\n"}},
+		{Name: "by-hand", Namespace: "models", Chart: "sglang-0.8.0", Status: "deployed", Revision: 1},
+		{Name: "glm-53", Namespace: "models", Chart: "sglang-0.8.0", Status: "deployed", Revision: 4,
+			SwissFiles: map[string]string{"plan.yaml": "source:\n  model: qwen3.6-35b-a3b\n  variant: sglang-tp2\n"}},
 	}
 	p.Nod = []cluster.Node{
 		{Name: "gpu-1", GPUProduct: "NVIDIA-B300-SXM6-AC", GPUs: 8, Schedulable: true},
@@ -81,7 +81,7 @@ func TestDeployRouteAndAllowDeployFlag(t *testing.T) {
 		s.SetWeb(f)
 		srv := httptest.NewServer(s.Handler())
 
-		resp, err := http.Get(srv.URL + "/deploy/modelforge?variant=sglang-tp2")
+		resp, err := http.Get(srv.URL + "/deploy/qwen3.6-35b-a3b?variant=sglang-tp2")
 		if err != nil {
 			t.Fatal(err)
 		}

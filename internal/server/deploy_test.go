@@ -156,7 +156,7 @@ func post(t *testing.T, srv *httptest.Server, path string, body any) (int, map[s
 func TestReadOnlyServerRefusesDeployEndpoints(t *testing.T) {
 	srv, _ := deployServer(t, false)
 	for _, p := range []string{"/api/plans", "/api/diff", "/api/apply", "/api/install"} {
-		code, body := post(t, srv, p, map[string]any{"model": "modelforge"})
+		code, body := post(t, srv, p, map[string]any{"model": "qwen3.6-35b-a3b"})
 		if code != http.StatusForbidden {
 			t.Errorf("%s: status %d, want 403", p, code)
 		}
@@ -173,7 +173,7 @@ func TestReadOnlyServerRefusesDeployEndpoints(t *testing.T) {
 func TestPlanEndpointComposesAndStores(t *testing.T) {
 	srv, s := deployServer(t, true)
 	code, body := post(t, srv, "/api/plans", map[string]any{
-		"model": "modelforge", "release": "glm-53",
+		"model": "qwen3.6-35b-a3b", "release": "glm-53",
 		"overrides": map[string]any{"replicaCount": 2},
 	})
 	if code != 200 {
@@ -193,7 +193,7 @@ func TestPlanEndpointComposesAndStores(t *testing.T) {
 func TestPlanEndpointAcceptsCatalogOverrides(t *testing.T) {
 	srv, _ := deployServer(t, true)
 	code, body := post(t, srv, "/api/plans", map[string]any{
-		"model":     "modelforge",
+		"model":     "qwen3.6-35b-a3b",
 		"serviceId": "r",
 		"overrides": map[string]any{"extraArgs": []string{"--tp-size=2"}},
 	})
@@ -217,7 +217,7 @@ func TestApplyNeedsAStoredPlan(t *testing.T) {
 // stale expectRevision must be refused too.
 func TestApplyPreconditionsAreEnforcedByTheServer(t *testing.T) {
 	srv, _ := deployServer(t, true)
-	code, body := post(t, srv, "/api/plans", map[string]any{"model": "modelforge", "release": "glm-53"})
+	code, body := post(t, srv, "/api/plans", map[string]any{"model": "qwen3.6-35b-a3b", "release": "glm-53"})
 	hash, _ := body["hash"].(string)
 	if code != 200 || hash == "" {
 		t.Fatalf("plan failed: %d %v", code, body)
@@ -255,7 +255,7 @@ func TestCreateNamespaceIsComposedIntoThePlan(t *testing.T) {
 	// rendered document is what the plan view shows.
 	probe := liveProbe()
 	probe.Maps["swiss/site-profile"] = map[string]string{
-		"profile.yaml": profileYAML + "chartRepo: oci://harbor.example.com/charts\n",
+		"profile.yaml": profileYAML + "chartRepo: oci://ghcr.io/modelsphere/charts\n",
 	}
 	srv, s := deployServerWith(t, probe, true)
 
@@ -293,11 +293,11 @@ func TestCreateNamespaceIsComposedIntoThePlan(t *testing.T) {
 // carrying one forward from a form.
 func TestCreateNamespaceIsOffUnlessComposed(t *testing.T) {
 	srv, s := deployServer(t, true)
-	_, body := post(t, srv, "/api/plans", map[string]any{"model": "modelforge", "release": "glm-53"})
+	_, body := post(t, srv, "/api/plans", map[string]any{"model": "qwen3.6-35b-a3b", "release": "glm-53"})
 	hash, _ := body["hash"].(string)
 	post(t, srv, "/api/apply", map[string]any{"planHash": hash, "createNamespace": true})
 
-	if writtenPlan(t, s, "modelforge", "glm-53").CreateNamespace {
+	if writtenPlan(t, s, "models", "glm-53").CreateNamespace {
 		t.Error("an apply must not be able to turn it on behind the plan's back")
 	}
 }
@@ -308,13 +308,13 @@ func TestCreateNamespaceIsOffUnlessComposed(t *testing.T) {
 // replays it -- and the plan is also the record of what was done.
 func TestForceConflictsIsRecordedBesideTheReleaseNotInThePlan(t *testing.T) {
 	srv, s := deployServer(t, true)
-	_, body := post(t, srv, "/api/plans", map[string]any{"model": "modelforge", "release": "glm-53"})
+	_, body := post(t, srv, "/api/plans", map[string]any{"model": "qwen3.6-35b-a3b", "release": "glm-53"})
 	hash, _ := body["hash"].(string)
 	// The apply itself fails -- the test profile names no chart source -- but
 	// the write-ahead that precedes it is what carries the record.
 	post(t, srv, "/api/apply", map[string]any{"planHash": hash, "forceConflicts": true})
 
-	files := writtenFiles(t, s, "modelforge", "glm-53")
+	files := writtenFiles(t, s, "models", "glm-53")
 	if !strings.Contains(files["status.yaml"], "forced: true") {
 		t.Errorf("a forced apply must say so beside the release: %q", files["status.yaml"])
 	}
@@ -326,11 +326,11 @@ func TestForceConflictsIsRecordedBesideTheReleaseNotInThePlan(t *testing.T) {
 // And nothing turns it on by itself.
 func TestForceConflictsIsOffUnlessAskedFor(t *testing.T) {
 	srv, s := deployServer(t, true)
-	_, body := post(t, srv, "/api/plans", map[string]any{"model": "modelforge", "release": "glm-53"})
+	_, body := post(t, srv, "/api/plans", map[string]any{"model": "qwen3.6-35b-a3b", "release": "glm-53"})
 	hash, _ := body["hash"].(string)
 	post(t, srv, "/api/apply", map[string]any{"planHash": hash})
 
-	if status := writtenFiles(t, s, "modelforge", "glm-53")["status.yaml"]; strings.Contains(status, "forced") {
+	if status := writtenFiles(t, s, "models", "glm-53")["status.yaml"]; strings.Contains(status, "forced") {
 		t.Errorf("an ordinary apply must record no forcing: %q", status)
 	}
 }
@@ -374,14 +374,14 @@ func TestPlanConfigMapRefIsBesideTheRelease(t *testing.T) {
 	w := &fakeWriter{}
 	s.SetWriter(w)
 
-	p, err := s.compose(context.Background(), planRequest{Model: "modelforge", Release: "glm-53"})
+	p, err := s.compose(context.Background(), planRequest{Model: "qwen3.6-35b-a3b", Release: "glm-53"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := s.writePlan(context.Background(), p, planStatus{Phase: phaseApplied, Revision: 4}); err != nil {
 		t.Fatal(err)
 	}
-	ref := "modelforge/" + cluster.PlanConfigMapPrefix + "glm-53"
+	ref := "models/" + cluster.PlanConfigMapPrefix + "glm-53"
 	data, ok := w.written[ref]
 	if !ok {
 		t.Fatalf("want a plan at %s, got %v", ref, w.written)
@@ -391,7 +391,7 @@ func TestPlanConfigMapRefIsBesideTheRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sum.Model != "modelforge" || sum.Hash != p.Hash {
+	if sum.Model != "qwen3.6-35b-a3b" || sum.Hash != p.Hash {
 		t.Fatalf("plan did not round trip: %+v", sum)
 	}
 	if !strings.Contains(data["status.yaml"], phaseApplied) {
@@ -415,7 +415,7 @@ func TestApplyRefusesWhenThePlanCannotBeRecorded(t *testing.T) {
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
 
-	_, body := post(t, srv, "/api/plans", map[string]any{"model": "modelforge", "release": "glm-53"})
+	_, body := post(t, srv, "/api/plans", map[string]any{"model": "qwen3.6-35b-a3b", "release": "glm-53"})
 	hash, _ := body["hash"].(string)
 	code, out := post(t, srv, "/api/apply", map[string]any{"planHash": hash})
 	if code != http.StatusInternalServerError {
@@ -479,8 +479,8 @@ func TestApplyOutlivesTheRequest(t *testing.T) {
 // that entry is the only record that anything was attempted.
 func TestRunsAreRecorded(t *testing.T) {
 	srv, s := deployServer(t, true)
-	_, p := post(t, srv, "/api/plans", map[string]any{"model": "modelforge", "release": "glm-53"})
-	post(t, srv, "/api/diff", map[string]any{"model": "modelforge", "release": "glm-53"})
+	_, p := post(t, srv, "/api/plans", map[string]any{"model": "qwen3.6-35b-a3b", "release": "glm-53"})
+	post(t, srv, "/api/diff", map[string]any{"model": "qwen3.6-35b-a3b", "release": "glm-53"})
 
 	runs, err := s.store.Runs(context.Background(), 10)
 	if err != nil {
@@ -509,16 +509,16 @@ func TestRunsAreRecorded(t *testing.T) {
 func TestServiceIDAndLocalPathAreFirstClassFormFields(t *testing.T) {
 	srv, _ := deployServer(t, true)
 	code, body := post(t, srv, "/api/plans", map[string]any{
-		"model":     "modelforge",
-		"release":   "fallback-modelforge-01",
-		"serviceId": "fallback-modelforge-01",
+		"model":     "qwen3.6-35b-a3b",
+		"release":   "fallback-qwen-01",
+		"serviceId": "fallback-qwen-01",
 		"localPath": "/mnt/disk1/models/moved",
 	})
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, body)
 	}
 	vals := planValues(body)
-	if vals["serviceId"] != "fallback-modelforge-01" {
+	if vals["serviceId"] != "fallback-qwen-01" {
 		t.Errorf("serviceId = %v", vals["serviceId"])
 	}
 	model := vals["model"].(map[string]any)
@@ -536,7 +536,7 @@ func TestServiceIDAndLocalPathAreFirstClassFormFields(t *testing.T) {
 func TestFormMayOverrideTheImageRepository(t *testing.T) {
 	srv, _ := deployServer(t, true)
 	code, body := post(t, srv, "/api/plans", map[string]any{
-		"model": "modelforge", "release": "r", "serviceId": "r",
+		"model": "qwen3.6-35b-a3b", "release": "r", "serviceId": "r",
 		"overrides": map[string]any{"image": map[string]any{"repository": "docker.io/lmsysorg/sglang"}},
 	})
 	if code != 200 {
@@ -566,9 +566,9 @@ func TestLocalPathFallsBackToTheSiteTemplate(t *testing.T) {
 func TestDeploymentsSurfaceTheApplyPhase(t *testing.T) {
 	probe := fakeProbe()
 	probe.Rel = []cluster.Release{{
-		Name: "glm-53", Namespace: "modelforge", Chart: "sglang-0.8.0",
+		Name: "glm-53", Namespace: "models", Chart: "sglang-0.8.0",
 		Status: "deployed", Revision: 4,
-		SwissFiles:  map[string]string{"plan.yaml": "source:\n  model: modelforge\n"},
+		SwissFiles:  map[string]string{"plan.yaml": "source:\n  model: qwen3.6-35b-a3b\n"},
 		SwissStatus: []byte("phase: failed\nrevision: 4\nerror: chart not found\n"),
 	}}
 	srv := testServer(t, probe)
@@ -588,27 +588,27 @@ func TestDeploymentsSurfaceTheApplyPhase(t *testing.T) {
 // An upgrade keeps the deploy inputs and moves only the catalog layer.
 func TestUpgradeCarriesTheFormLayerForward(t *testing.T) {
 	_, doc := livePlan(t, planRequest{
-		Model: "modelforge", Release: "fallback-modelforge-01",
-		ServiceID: "fallback-modelforge-01",
+		Model: "qwen3.6-35b-a3b", Release: "fallback-qwen-01",
+		ServiceID: "fallback-qwen-01",
 		Overrides: values.Tree{"replicaCount": 3},
 	})
 	probe := liveProbe()
 	probe.Rel = append(probe.Rel, cluster.Release{
-		Name: "fallback-modelforge-01", Namespace: "modelforge",
+		Name: "fallback-qwen-01", Namespace: "models",
 		Status: "deployed", Revision: 1, SwissFiles: doc,
 	})
 	srv, _ := deployServerWith(t, probe, true)
 
-	code, up := post(t, srv, "/api/plans", map[string]any{"fromRelease": "fallback-modelforge-01"})
+	code, up := post(t, srv, "/api/plans", map[string]any{"fromRelease": "fallback-qwen-01"})
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, up)
 	}
 	vals := planValues(up)
-	if vals["serviceId"] != "fallback-modelforge-01" || vals["replicaCount"] != float64(3) {
+	if vals["serviceId"] != "fallback-qwen-01" || vals["replicaCount"] != float64(3) {
 		t.Fatalf("form layer not carried: %v", vals)
 	}
 	src := up["source"].(map[string]any)
-	if src["model"] != "modelforge" || src["variant"] != "sglang-tp2" {
+	if src["model"] != "qwen3.6-35b-a3b" || src["variant"] != "sglang-tp2" {
 		t.Fatalf("model and variant should be carried too: %v", src)
 	}
 	if src["digest"] == "" {
@@ -620,17 +620,17 @@ func TestReleasePlanEndpoint(t *testing.T) {
 	p, doc := livePlan(t, planRequest{Model: "kimi-k2.5", Release: "kimi-k25"})
 	probe := liveProbe()
 	probe.Rel = append(probe.Rel, cluster.Release{
-		Name: "kimi-k25", Namespace: "modelforge",
+		Name: "kimi-k25", Namespace: "models",
 		Status: "deployed", Revision: 2, SwissFiles: doc,
 	})
 	srv, _ := deployServerWith(t, probe, true)
 
-	code, cur := get(t, srv, "/api/releases/modelforge/kimi-k25/plan")
+	code, cur := get(t, srv, "/api/releases/models/kimi-k25/plan")
 	if code != 200 || cur["hash"] != p.Hash {
 		t.Fatalf("status %d: %v", code, cur)
 	}
 	// A release swiss did not deploy has no plan to upgrade from.
-	if code, _ := get(t, srv, "/api/releases/modelforge/by-hand/plan"); code != 404 {
+	if code, _ := get(t, srv, "/api/releases/models/by-hand/plan"); code != 404 {
 		t.Errorf("want 404 for an unmanaged release, got %d", code)
 	}
 }
@@ -740,7 +740,7 @@ func TestStatusReportsPodReadiness(t *testing.T) {
 		{Name: "glm-53-def", Phase: "Running", Ready: true},
 	}
 	srv := testServer(t, probe)
-	code, body := get(t, srv, "/api/releases/modelforge/glm-53/status")
+	code, body := get(t, srv, "/api/releases/models/glm-53/status")
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, body)
 	}
@@ -758,11 +758,11 @@ func TestProbeNeedsAnEntrypointAndARoute(t *testing.T) {
 	_, doc := livePlan(t, planRequest{Model: "glm5.1", Release: "r", ServiceID: "r"})
 	probe := liveProbe()
 	probe.Rel = append(probe.Rel, cluster.Release{
-		Name: "r", Namespace: "modelforge", Status: "deployed", Revision: 1, SwissFiles: doc,
+		Name: "r", Namespace: "models", Status: "deployed", Revision: 1, SwissFiles: doc,
 	})
 	srv, _ := deployServerWith(t, probe, true)
 	// profileYAML names no route.nginxService.
-	code, out := post(t, srv, "/api/releases/modelforge/r/probe", map[string]any{})
+	code, out := post(t, srv, "/api/releases/models/r/probe", map[string]any{})
 	if code != http.StatusPreconditionFailed {
 		t.Fatalf("want 412, got %d %v", code, out)
 	}
@@ -782,7 +782,7 @@ func TestUpgradeNeedsNoDatabase(t *testing.T) {
 
 	probe := fakeProbe()
 	probe.Rel = []cluster.Release{{
-		Name: "glm-53", Namespace: "modelforge", Chart: "sglang-0.7.0",
+		Name: "glm-53", Namespace: "models", Chart: "sglang-0.7.0",
 		Status: "deployed", Revision: 4, SwissFiles: planYAML,
 	}}
 	cfg := testConfig("prod-b300")
@@ -791,7 +791,7 @@ func TestUpgradeNeedsNoDatabase(t *testing.T) {
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
 
-	code, cur := get(t, srv, "/api/releases/modelforge/glm-53/plan")
+	code, cur := get(t, srv, "/api/releases/models/glm-53/plan")
 	if code != 200 {
 		t.Fatalf("the plan beside the release must be readable: %d %v", code, cur)
 	}
@@ -820,7 +820,7 @@ func TestTheClusterWinsOverTheDatabase(t *testing.T) {
 	})
 	probe := fakeProbe()
 	probe.Rel = []cluster.Release{{
-		Name: "glm-53", Namespace: "modelforge", Chart: "sglang-0.8.0",
+		Name: "glm-53", Namespace: "models", Chart: "sglang-0.8.0",
 		Status: "deployed", Revision: 4, SwissFiles: running,
 	}}
 	srv, s := deployServerWith(t, probe, true)
@@ -834,7 +834,7 @@ func TestTheClusterWinsOverTheDatabase(t *testing.T) {
 		t.Fatalf("the staged plan should be in the database: %v", err)
 	}
 
-	code, cur := get(t, srv, "/api/releases/modelforge/glm-53/plan")
+	code, cur := get(t, srv, "/api/releases/models/glm-53/plan")
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, cur)
 	}

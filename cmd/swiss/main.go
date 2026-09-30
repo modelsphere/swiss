@@ -102,7 +102,7 @@ func resolveConfig() (resolved, error) {
 		out.profileFile = flagProfile
 	}
 	if out.catalog == "" {
-		return out, fmt.Errorf("no catalog: set it in a config file, or pass --catalog")
+		out.catalog = config.DefaultCatalog
 	}
 	return out, nil
 }

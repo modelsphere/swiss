@@ -12,9 +12,9 @@ func managed(n int) []cluster.Release {
 	out := make([]cluster.Release, 0, n)
 	for i := range n {
 		out = append(out, cluster.Release{
-			Name: fmt.Sprintf("rel-%02d", i), Namespace: "modelforge",
+			Name: fmt.Sprintf("rel-%02d", i), Namespace: "models",
 			Chart: "sglang-0.7.1", Status: "deployed", Revision: 1,
-			SwissFiles: map[string]string{"plan.yaml": "source:\n  model: modelforge\n"},
+			SwissFiles: map[string]string{"plan.yaml": "source:\n  model: qwen3.6-35b-a3b\n"},
 		})
 	}
 	return out

@@ -11,11 +11,11 @@ import (
 func statusOf(t *testing.T, gateway string, overrides values.Tree) map[string]any {
 	t.Helper()
 	_, doc := livePlan(t, planRequest{
-		Model: "modelforge", Release: "r", ServiceID: "r", Overrides: overrides,
+		Model: "qwen3.6-35b-a3b", Release: "r", ServiceID: "r", Overrides: overrides,
 	})
 	probe := liveProbe()
 	probe.Rel = append(probe.Rel, cluster.Release{
-		Name: "r", Namespace: "modelforge", Status: "deployed", Revision: 1, SwissFiles: doc,
+		Name: "r", Namespace: "models", Status: "deployed", Revision: 1, SwissFiles: doc,
 	})
 	if gateway != "" {
 		probe.Maps["swiss/site-profile"] = map[string]string{
@@ -23,7 +23,7 @@ func statusOf(t *testing.T, gateway string, overrides values.Tree) map[string]an
 		}
 	}
 	srv := testServer(t, probe)
-	code, body := get(t, srv, "/api/releases/modelforge/r/status")
+	code, body := get(t, srv, "/api/releases/models/r/status")
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, body)
 	}
@@ -76,7 +76,7 @@ func TestStatusCarriesWhatACurlNeeds(t *testing.T) {
 	body := statusOf(t, "https://llm.example.com", values.Tree{
 		"modelRoute": values.Tree{"enabled": true, "nginx": values.Tree{"route": "glm-53"}},
 	})
-	// modelforge is served as "kimi" so callers do not change when they land on
+	// qwen3.6-35b-a3b is served as "kimi" so callers do not change when they land on
 	// the fallback tier. A curl naming the catalog id would 404 at the engine.
 	if body["model"] != "kimi" {
 		t.Errorf("model = %v, want the served name", body["model"])
@@ -93,19 +93,19 @@ func TestStatusCarriesWhatACurlNeeds(t *testing.T) {
 // wire: omitting it would have the page print "Bearer" where none belongs.
 func TestEmptyAuthPrefixIsStillReported(t *testing.T) {
 	_, doc := livePlan(t, planRequest{
-		Model: "modelforge", Release: "r", ServiceID: "r",
+		Model: "qwen3.6-35b-a3b", Release: "r", ServiceID: "r",
 		Overrides: values.Tree{"modelRoute": values.Tree{"enabled": true}},
 	})
 	probe := liveProbe()
 	probe.Rel = append(probe.Rel, cluster.Release{
-		Name: "r", Namespace: "modelforge", Status: "deployed", Revision: 1, SwissFiles: doc,
+		Name: "r", Namespace: "models", Status: "deployed", Revision: 1, SwissFiles: doc,
 	})
 	probe.Maps["swiss/site-profile"] = map[string]string{
 		"profile.yaml": profileYAML +
 			"route:\n  gateway: https://llm.example.com\n  auth:\n    header: X-Api-Key\n",
 	}
 	srv := testServer(t, probe)
-	_, body := get(t, srv, "/api/releases/modelforge/r/status")
+	_, body := get(t, srv, "/api/releases/models/r/status")
 
 	if body["authHeader"] != "X-Api-Key" {
 		t.Errorf("authHeader = %v", body["authHeader"])
@@ -120,7 +120,7 @@ func TestEmptyAuthPrefixIsStillReported(t *testing.T) {
 // means resolving the site's template here rather than describing it there.
 func TestModelEndpointResolvesTheSitePath(t *testing.T) {
 	srv := testServer(t, liveProbe())
-	code, body := get(t, srv, "/api/catalog/modelforge")
+	code, body := get(t, srv, "/api/catalog/qwen3.6-35b-a3b")
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, body)
 	}
@@ -149,14 +149,14 @@ func TestModelEndpointResolvesTheSitePath(t *testing.T) {
 // view derives it, off the composed values.
 func TestDeploymentsCarryTheRoute(t *testing.T) {
 	_, doc := livePlan(t, planRequest{
-		Model: "modelforge", Release: "r", ServiceID: "r",
+		Model: "qwen3.6-35b-a3b", Release: "r", ServiceID: "r",
 		Overrides: values.Tree{
 			"modelRoute": values.Tree{"enabled": true, "nginx": values.Tree{"route": "glm-53"}},
 		},
 	})
 	probe := liveProbe()
 	probe.Rel = append(probe.Rel, cluster.Release{
-		Name: "r", Namespace: "modelforge", Status: "deployed", Revision: 1, SwissFiles: doc,
+		Name: "r", Namespace: "models", Status: "deployed", Revision: 1, SwissFiles: doc,
 	})
 	srv := testServer(t, probe)
 

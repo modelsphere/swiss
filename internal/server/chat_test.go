@@ -113,12 +113,12 @@ func TestChatNeedsAnEntrypoint(t *testing.T) {
 	_, doc := livePlan(t, planRequest{Model: "glm5.1", Release: "r", ServiceID: "r"})
 	probe := liveProbe()
 	probe.Rel = append(probe.Rel, cluster.Release{
-		Name: "r", Namespace: "modelforge", Status: "deployed", Revision: 1, SwissFiles: doc,
+		Name: "r", Namespace: "models", Status: "deployed", Revision: 1, SwissFiles: doc,
 	})
 	srv, _ := deployServerWith(t, probe, true)
 
 	// profileYAML names no route.nginxService.
-	code, out := post(t, srv, "/api/releases/modelforge/r/chat", map[string]any{})
+	code, out := post(t, srv, "/api/releases/models/r/chat", map[string]any{})
 	if code != http.StatusPreconditionFailed {
 		t.Fatalf("want 412, got %d %v", code, out)
 	}
@@ -132,7 +132,7 @@ func TestChatNeedsAnEntrypoint(t *testing.T) {
 // key is a shell variable in it: a result never carries the value of a header.
 func TestCheckReportsTheCurlItSent(t *testing.T) {
 	p, _ := livePlan(t, planRequest{
-		Model: "modelforge", Release: "r", ServiceID: "r",
+		Model: "qwen3.6-35b-a3b", Release: "r", ServiceID: "r",
 		Overrides: values.Tree{
 			"modelRoute": values.Tree{"enabled": true, "nginx": values.Tree{"route": "glm-53"}},
 		},
@@ -187,7 +187,7 @@ func TestCheckReportsTheCurlItSent(t *testing.T) {
 
 func TestChatNeedsAPlanBesideTheRelease(t *testing.T) {
 	srv, _ := deployServerWith(t, liveProbe(), true)
-	code, out := post(t, srv, "/api/releases/modelforge/by-hand/chat", map[string]any{})
+	code, out := post(t, srv, "/api/releases/models/by-hand/chat", map[string]any{})
 	if code != http.StatusNotFound {
 		t.Fatalf("want 404 for a release swiss did not deploy, got %d %v", code, out)
 	}
@@ -197,7 +197,7 @@ func TestChatNeedsAPlanBesideTheRelease(t *testing.T) {
 // nothing, so a read-only swissd must still serve it.
 func TestChatIsNotGatedByAllowDeploy(t *testing.T) {
 	srv, _ := deployServer(t, false)
-	code, _ := post(t, srv, "/api/releases/modelforge/glm-53/chat", map[string]any{})
+	code, _ := post(t, srv, "/api/releases/models/glm-53/chat", map[string]any{})
 	if code == http.StatusForbidden {
 		t.Error("the health check changes nothing and must not need allowDeploy")
 	}
@@ -209,13 +209,13 @@ func TestChatIsNotGatedByAllowDeploy(t *testing.T) {
 func TestStatusCarriesThePlanPhase(t *testing.T) {
 	probe := liveProbe()
 	probe.Rel = append(probe.Rel, cluster.Release{
-		Name: "stuck", Namespace: "modelforge", Status: "pending-upgrade", Revision: 2,
-		SwissFiles:  map[string]string{"plan.yaml": "source:\n  model: modelforge\n"},
+		Name: "stuck", Namespace: "models", Status: "pending-upgrade", Revision: 2,
+		SwissFiles:  map[string]string{"plan.yaml": "source:\n  model: qwen3.6-35b-a3b\n"},
 		SwissStatus: []byte("phase: applying\naction: apply\nstartedAt: 2026-09-21T10:00:00Z\n"),
 	})
 	srv := testServer(t, probe)
 
-	code, body := get(t, srv, "/api/releases/modelforge/stuck/status")
+	code, body := get(t, srv, "/api/releases/models/stuck/status")
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, body)
 	}
@@ -234,7 +234,7 @@ func TestStatusCarriesThePlanPhase(t *testing.T) {
 // A release with nothing recorded beside it must not grow an invented phase.
 func TestStatusOmitsThePhaseWhenNoneWasRecorded(t *testing.T) {
 	srv := testServer(t, liveProbe())
-	code, body := get(t, srv, "/api/releases/modelforge/by-hand/status")
+	code, body := get(t, srv, "/api/releases/models/by-hand/status")
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, body)
 	}
@@ -256,11 +256,11 @@ func TestStatusCarriesTheGatewayURL(t *testing.T) {
 		Overrides: values.Tree{"modelRoute": values.Tree{"enabled": true}},
 	})
 	probe.Rel = append(probe.Rel, cluster.Release{
-		Name: "r", Namespace: "modelforge", Status: "deployed", Revision: 1, SwissFiles: doc,
+		Name: "r", Namespace: "models", Status: "deployed", Revision: 1, SwissFiles: doc,
 	})
 	srv := testServer(t, probe)
 
-	code, body := get(t, srv, "/api/releases/modelforge/r/status")
+	code, body := get(t, srv, "/api/releases/models/r/status")
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, body)
 	}

@@ -25,7 +25,7 @@ const defaultTemplate = `# The site profile: what makes a model work in THIS clu
 name: {{cluster}}
 
 # Where releases land unless a deploy overrides it.
-namespace: modelforge
+namespace: models
 
 # The model catalogs this site deploys from, each an https base or an absolute
 # path under a name the pages select by. Viewing the catalog or deploying picks
@@ -36,17 +36,18 @@ namespace: modelforge
 # With several, the one marked default is used unless a page names another.
 # catalogs:
 #   - name: public
-#     url: https://models.example.com/swiss-catalog/
+#     url: https://modelsphere.github.io/model-catalog/
 #     default: true
 
 # Where charts are pulled from -- the registry the catalog deliberately does
-# not name.
-# chartRepo: oci://harbor.example.com/charts
+# not name. An https helm repo or an oci:// registry, e.g. a mirror at
+# oci://ghcr.io/<org>/charts.
+chartRepo: https://modelsphere.github.io/helm-charts
 
 registry:
   # Replaces the registry host/org of an engine image. The catalog pins which
-  # build; this says where it is pulled from. Empty uses the catalog's
-  # repository as-is.
+  # build; this says where it is pulled from, e.g. docker.io/<org> or
+  # ghcr.io/<org>. Empty uses the catalog's repository as-is.
   mirror: ""
 
 model:

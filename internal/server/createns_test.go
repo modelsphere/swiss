@@ -15,7 +15,7 @@ func strictNSServer(t *testing.T, exists ...string) (*httptest.Server, *fakeWrit
 	// apply gets as far as running one.
 	probe := liveProbe()
 	probe.Maps["swiss/site-profile"] = map[string]string{
-		"profile.yaml": profileYAML + "chartRepo: oci://harbor.example.com/charts\n",
+		"profile.yaml": profileYAML + "chartRepo: oci://ghcr.io/modelsphere/charts\n",
 	}
 	srv, s := deployServerWith(t, probe, true)
 	s.cfg.Server.HelmBin, s.cfg.Server.HelmfileBin = stubHelm(t, 0), stubHelm(t, 0)
@@ -39,7 +39,7 @@ func strictNSServer(t *testing.T, exists ...string) (*httptest.Server, *fakeWrit
 //
 // every time. createNamespace could never actually create a namespace.
 func TestInstallCreatesTheNamespaceBeforeRecordingThePlan(t *testing.T) {
-	srv, w := strictNSServer(t, "modelforge")
+	srv, w := strictNSServer(t, "models")
 
 	code, body := post(t, srv, "/api/plans", map[string]any{
 		"model": "kimi-k2.5", "release": "fresh", "serviceId": "fresh",
@@ -66,7 +66,7 @@ func TestInstallCreatesTheNamespaceBeforeRecordingThePlan(t *testing.T) {
 // invent namespaces nobody asked for -- but the message has to say what to do,
 // because the flag lives on the plan and setting it on the apply is ignored.
 func TestInstallIntoAMissingNamespaceExplainsItself(t *testing.T) {
-	srv, w := strictNSServer(t, "modelforge")
+	srv, w := strictNSServer(t, "models")
 
 	code, body := post(t, srv, "/api/plans", map[string]any{
 		"model": "kimi-k2.5", "release": "fresh", "serviceId": "fresh",
