@@ -32,6 +32,7 @@ const (
 	FileUsername = "username"
 	FilePassword = "password"
 	FileTokenKey = "tokenKey"
+	FileProxyKey = "proxyKey"
 )
 
 // Credentials is the login, as mounted.
@@ -41,6 +42,10 @@ type Credentials struct {
 	// TokenKey signs tokens. Kept beside the password rather than generated per
 	// process, so a swissd restart does not log everybody out.
 	TokenKey []byte
+	// ProxyKey, when set, is held by a front proxy that logs users in itself
+	// (console): a request bearing it is authenticated, and the proxy names the
+	// user. Empty means no proxy is trusted.
+	ProxyKey string
 }
 
 // Load reads the credentials from a mounted Secret directory.
@@ -73,7 +78,22 @@ func Load(dir string) (Credentials, error) {
 		sum := sha256.Sum256([]byte("swiss-token-key\x00" + pass))
 		c.TokenKey = sum[:]
 	}
+
+	proxy, err := readFile(dir, FileProxyKey)
+	if err != nil && !os.IsNotExist(err) {
+		return Credentials{}, err
+	}
+	c.ProxyKey = proxy
 	return c, nil
+}
+
+// IsProxy reports whether a bearer token is the front proxy's key, in constant
+// time. Never true without a key: an empty one must not match an empty bearer.
+func (c Credentials) IsProxy(bearer string) bool {
+	if c.ProxyKey == "" || bearer == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(bearer), []byte(c.ProxyKey)) == 1
 }
 
 // Matches reports whether a login attempt is the account, in constant time.

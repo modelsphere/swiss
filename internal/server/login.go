@@ -136,12 +136,15 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"authenticated": false})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	reply := map[string]any{
 		"authenticated": true,
 		"user":          claims.Sub,
-		"expiresAt":     time.Unix(claims.Exp, 0).UTC().Format(time.RFC3339),
 		"initialized":   s.initialized(ctx),
-	})
+	}
+	if claims.Exp > 0 {
+		reply["expiresAt"] = time.Unix(claims.Exp, 0).UTC().Format(time.RFC3339)
+	}
+	writeJSON(w, http.StatusOK, reply)
 }
 
 // requireAuth guards the API. Everything else -- the health endpoints, the
@@ -160,7 +163,7 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 		}
 		// Sliding: a session in active use is extended rather than cut off
 		// mid-deploy, and one left alone still ends on schedule.
-		if time.Until(time.Unix(claims.Exp, 0)) < s.cfg.Server.Auth.TokenTTL/2 {
+		if claims.Exp > 0 && time.Until(time.Unix(claims.Exp, 0)) < s.cfg.Server.Auth.TokenTTL/2 {
 			if creds, err := s.credentials(); err == nil {
 				if token, exp, err := s.issue(creds); err == nil {
 					s.setSession(w, r, token, exp)
@@ -186,12 +189,13 @@ func guarded(path string) bool {
 // verify reads the token from the cookie, or from an Authorization header for
 // callers that are not a browser.
 func (s *Server) verify(r *http.Request) (auth.Claims, bool) {
-	token := ""
+	token, bearer := "", ""
 	if c, err := r.Cookie(cookieName); err == nil {
 		token = c.Value
 	}
 	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
-		token = strings.TrimPrefix(h, "Bearer ")
+		bearer = strings.TrimPrefix(h, "Bearer ")
+		token = bearer
 	}
 	if token == "" {
 		return auth.Claims{}, false
@@ -199,6 +203,15 @@ func (s *Server) verify(r *http.Request) (auth.Claims, bool) {
 	creds, err := s.credentials()
 	if err != nil {
 		return auth.Claims{}, false
+	}
+	// The front proxy logged the user in and names them; X-Remote-User is trusted
+	// only alongside its key. No expiry here: the session is the proxy's.
+	if creds.IsProxy(bearer) {
+		user := r.Header.Get("X-Remote-User")
+		if user == "" {
+			user = "proxy"
+		}
+		return auth.Claims{Sub: user}, true
 	}
 	claims, err := auth.Verify(creds.TokenKey, token, time.Now())
 	if err != nil {

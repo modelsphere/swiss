@@ -153,3 +153,23 @@ func itoa(n int64) string {
 	}
 	return string(b)
 }
+
+// The proxy key is optional: without the file nothing is trusted, with it only
+// the exact key is.
+func TestProxyKeyIsOptionalAndExact(t *testing.T) {
+	without, err := Load(mount(t, map[string]string{FileUsername: "admin", FilePassword: "hunter2"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if without.IsProxy("") || without.IsProxy("anything") {
+		t.Fatal("no proxy key mounted, yet a bearer was taken for the proxy")
+	}
+
+	with, err := Load(mount(t, map[string]string{FileUsername: "admin", FilePassword: "hunter2", FileProxyKey: "pk\n"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !with.IsProxy("pk") || with.IsProxy("pk2") || with.IsProxy("") {
+		t.Fatalf("proxy key %q not matched exactly", with.ProxyKey)
+	}
+}

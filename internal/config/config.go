@@ -157,7 +157,8 @@ func (s *StringList) UnmarshalYAML(value *yaml.Node) error {
 // takes effect without a restart and swissd needs no Secret grant of its own to
 // log anybody in.
 type Auth struct {
-	// Dir holds one file per key: username, password, and optionally tokenKey.
+	// Dir holds one file per key: username, password, and optionally tokenKey
+	// and proxyKey (see auth.Credentials.ProxyKey).
 	Dir string `yaml:"dir,omitempty"`
 	// TokenTTL is how long a login lasts. One day by default: long enough not
 	// to interrupt a 40-minute model load being watched, short enough that a

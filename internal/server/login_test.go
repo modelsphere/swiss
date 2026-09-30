@@ -250,3 +250,76 @@ func TestSessionReportsWhetherTheSiteIsConfigured(t *testing.T) {
 		t.Errorf("session: %v", session)
 	}
 }
+
+func proxied(t *testing.T, url, key, user string) (int, map[string]any) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+	if user != "" {
+		req.Header.Set("X-Remote-User", user)
+	}
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	return resp.StatusCode, out
+}
+
+// Behind console: its key is the login, and it says who the user is.
+func TestTheFrontProxyKeyOpensTheAPI(t *testing.T) {
+	srv, s, _ := loginServer(t, liveProbe())
+	s.SetCredentials(func() (auth.Credentials, error) {
+		return auth.Credentials{Username: testUser, Password: testPass, TokenKey: []byte("test-key"), ProxyKey: "proxy-key"}, nil
+	})
+
+	if code, body := proxied(t, srv.URL+"/api/cluster", "proxy-key", "alice"); code != 200 {
+		t.Fatalf("proxy key refused: %d %v", code, body)
+	}
+	_, session := proxied(t, srv.URL+"/api/session", "proxy-key", "alice")
+	if session["authenticated"] != true || session["user"] != "alice" {
+		t.Fatalf("session = %v, want alice, authenticated", session)
+	}
+	if _, has := session["expiresAt"]; has {
+		t.Fatalf("a proxied session has no expiry of swissd's: %v", session)
+	}
+}
+
+// The header alone is a claim anyone in the cluster can make.
+func TestTheProxyIsTrustedOnlyWithItsKey(t *testing.T) {
+	srv, s, _ := loginServer(t, liveProbe())
+	s.SetCredentials(func() (auth.Credentials, error) {
+		return auth.Credentials{Username: testUser, Password: testPass, TokenKey: []byte("test-key"), ProxyKey: "proxy-key"}, nil
+	})
+	for name, key := range map[string]string{"no key": "", "wrong key": "not-the-key"} {
+		if code, _ := proxied(t, srv.URL+"/api/cluster", key, "admin"); code != http.StatusUnauthorized {
+			t.Errorf("%s: %d, want 401", name, code)
+		}
+	}
+}
+
+// With no key mounted, no bearer -- the empty one included -- is the proxy.
+func TestNoProxyKeyTrustsNoProxy(t *testing.T) {
+	srv, _, _ := loginServer(t, liveProbe())
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/cluster", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer ")
+	req.Header.Set("X-Remote-User", "admin")
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("empty bearer with no proxy key: %d, want 401", resp.StatusCode)
+	}
+}
