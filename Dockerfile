@@ -14,13 +14,12 @@
 FROM node:24-bookworm-slim AS web
 
 WORKDIR /src/web
-# Manifests first: this layer is cached until a dependency actually changes,
-# which is most of the build time.
-COPY web/package.json web/package-lock.json ./
+COPY web/console/web/package.json web/console/web/package-lock.json ./
+COPY web/console/web/vendor ./vendor
 RUN npm ci --no-audit --no-fund
 
-COPY web/ ./
-RUN npm run build
+COPY web/console/web/ ./
+RUN npm run build:swiss
 
 # --- 2. the binary ---------------------------------------------------------
 FROM golang:1.26 AS build
@@ -34,7 +33,7 @@ COPY go.mod go.sum ./
 COPY . .
 # web/dist is committed empty so `go build` works without node; the real build
 # lands here and is what gets embedded.
-COPY --from=web /src/web/dist ./web/dist
+COPY --from=web /src/web/dist-swiss/ ./web/dist/
 
 RUN set -eu ; \
     mod="${GO_MOD_MODE}"; \

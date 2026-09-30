@@ -3,6 +3,14 @@
 # image depend on whatever happened to be on the builder's disk.
 web/node_modules
 web/dist
+# Of the console submodule only its web/ is built here. go.mod stays so that the
+# Go build still sees it as a module of its own.
+web/console/*
+!web/console/web
+!web/console/go.mod
+web/console/web/node_modules
+web/console/web/dist
+web/console/web/dist-swiss
 .git
 .gitignore
 *.md

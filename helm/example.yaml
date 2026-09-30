@@ -7,3 +7,6 @@ config:
 
 rbac:
   scope: cluster
+
+auth:
+  proxyKey: true

@@ -19,7 +19,7 @@ import (
 func TestEmbeddedUIIsServed(t *testing.T) {
 	f := web.FS()
 	if f == nil {
-		t.Skip("no web build embedded; run `npm run build` in web/")
+		t.Skip("no web build embedded; run hack/web.sh")
 	}
 	cfg := testConfig("prod-b300")
 	s := New(cfg, liveProbe(), discardLogger(), "test")

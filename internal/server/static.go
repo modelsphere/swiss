@@ -37,7 +37,7 @@ func WebFromDir(dir string) (fs.FS, error) {
 // there is a stale reference rather than a client route.
 func (s *Server) spa(w http.ResponseWriter, r *http.Request) {
 	if s.web == nil {
-		writeError(w, http.StatusNotFound, "no web UI in this build -- run `npm run build` in web/, or start swissd with -web-dir")
+		writeError(w, http.StatusNotFound, "no web UI in this build -- run hack/web.sh, or start swissd with -web-dir web/console/web/dist-swiss")
 		return
 	}
 	upath := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
