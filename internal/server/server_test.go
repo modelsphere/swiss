@@ -22,7 +22,7 @@ func discardLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
 
 const profileYAML = `
 name: prod
-namespace: modelforge
+namespace: models
 model:
   pathTemplate: /mnt/disk0/models/{{name}}
 sites:
@@ -71,7 +71,7 @@ func TestClusterEndpointCarriesProfileAndSites(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, body)
 	}
-	if body["name"] != "prod" || body["namespace"] != "modelforge" {
+	if body["name"] != "prod" || body["namespace"] != "models" {
 		t.Errorf("unexpected cluster info: %v", body)
 	}
 	if body["catalogRef"] == "" || body["version"] != "test" {
@@ -112,7 +112,7 @@ func TestCatalogEndpointServesIndexOnly(t *testing.T) {
 
 func TestCatalogModelEndpointFetchesTheEntry(t *testing.T) {
 	srv := testServer(t, fakeProbe())
-	code, body := get(t, srv, "/api/catalog/modelforge")
+	code, body := get(t, srv, "/api/catalog/qwen3.6-35b-a3b")
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, body)
 	}
@@ -137,7 +137,7 @@ func TestCatalogModelEndpointResolvesTheMirroredImage(t *testing.T) {
 	}
 	srv := testServer(t, probe)
 
-	code, body := get(t, srv, "/api/catalog/modelforge")
+	code, body := get(t, srv, "/api/catalog/qwen3.6-35b-a3b")
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, body)
 	}
@@ -155,9 +155,9 @@ func TestCatalogModelEndpointResolvesTheMirroredImage(t *testing.T) {
 func TestDeploymentsOmitUntrackedReleases(t *testing.T) {
 	probe := fakeProbe()
 	probe.Rel = []cluster.Release{
-		{Name: "by-hand", Namespace: "modelforge", Chart: "sglang-0.8.0", Status: "deployed", Revision: 1},
-		{Name: "glm-53", Namespace: "modelforge", Chart: "sglang-0.8.0", Status: "deployed", Revision: 4,
-			SwissFiles: map[string]string{"plan.yaml": "source:\n  model: modelforge\n  variant: sglang-tp2\n  ref: sha256:stale\nprofile: prod\n"}},
+		{Name: "by-hand", Namespace: "models", Chart: "sglang-0.8.0", Status: "deployed", Revision: 1},
+		{Name: "glm-53", Namespace: "models", Chart: "sglang-0.8.0", Status: "deployed", Revision: 4,
+			SwissFiles: map[string]string{"plan.yaml": "source:\n  model: qwen3.6-35b-a3b\n  variant: sglang-tp2\n  ref: sha256:stale\nprofile: prod\n"}},
 	}
 	srv := testServer(t, probe)
 	code, body := get(t, srv, "/api/deployments")
@@ -181,7 +181,7 @@ func TestDeploymentsOmitUntrackedReleases(t *testing.T) {
 		t.Fatalf("want one row, got %v", rows)
 	}
 	row := rows[0].(map[string]any)
-	if row["release"] != "glm-53" || row["model"] != "modelforge" {
+	if row["release"] != "glm-53" || row["model"] != "qwen3.6-35b-a3b" {
 		t.Errorf("plan not read off the release: %v", row)
 	}
 }

@@ -14,8 +14,8 @@ import (
 func testPlan() *plan.Plan {
 	return &plan.Plan{
 		APIVersion: plan.APIVersion,
-		Release:    plan.Release{Name: "glm-53", Namespace: "modelforge"},
-		Chart:      plan.ChartRef{Name: "sglang", Version: "0.8.0", Repo: "oci://harbor.4pd.io/hardcore-tech"},
+		Release:    plan.Release{Name: "glm-53", Namespace: "models"},
+		Chart:      plan.ChartRef{Name: "sglang", Version: "0.8.0", Repo: "oci://ghcr.io/modelsphere/charts"},
 		Engine:     "sglang",
 		Layers: map[string]values.Tree{
 			"form":    {"replicaCount": 2},
@@ -110,10 +110,10 @@ func TestMaterializeWritesAValuesFileAndAOneReleaseHelmfile(t *testing.T) {
 		t.Fatalf("want one release, got %d", len(hf.Releases))
 	}
 	r := hf.Releases[0]
-	if r.Name != "glm-53" || r.Namespace != "modelforge" || r.Version != "0.8.0" {
+	if r.Name != "glm-53" || r.Namespace != "models" || r.Version != "0.8.0" {
 		t.Errorf("release wrong: %+v", r)
 	}
-	if r.Chart != "oci://harbor.4pd.io/hardcore-tech/sglang" {
+	if r.Chart != "oci://ghcr.io/modelsphere/charts/sglang" {
 		t.Errorf("chart ref wrong: %q", r.Chart)
 	}
 }
@@ -175,7 +175,7 @@ func TestWorkspaceIsRemovedUnlessKept(t *testing.T) {
 // the chart 404s, because the archive is <url>/<name>-<version>.tgz.
 func TestClassicChartRepoBecomesARepositoriesEntry(t *testing.T) {
 	p := testPlan()
-	p.Chart.Repo = "https://harbor.4pd.io/chartrepo/hardcore-tech/"
+	p.Chart.Repo = "https://modelsphere.github.io/helm-charts/"
 	ws, err := Runner{}.Materialize(p)
 	if err != nil {
 		t.Fatal(err)
@@ -190,7 +190,7 @@ func TestClassicChartRepoBecomesARepositoriesEntry(t *testing.T) {
 	if len(hf.Repositories) != 1 {
 		t.Fatalf("want a repositories entry, got %+v", hf.Repositories)
 	}
-	if hf.Repositories[0].URL != "https://harbor.4pd.io/chartrepo/hardcore-tech" {
+	if hf.Repositories[0].URL != "https://modelsphere.github.io/helm-charts" {
 		t.Errorf("trailing slash should be trimmed: %q", hf.Repositories[0].URL)
 	}
 	if hf.Releases[0].Chart != "charts/sglang" || hf.Releases[0].Version != "0.8.0" {
@@ -214,7 +214,7 @@ func TestOCIRegistryIsAddressedDirectly(t *testing.T) {
 	if len(hf.Repositories) != 0 {
 		t.Errorf("oci needs no repositories entry: %+v", hf.Repositories)
 	}
-	if hf.Releases[0].Chart != "oci://harbor.4pd.io/hardcore-tech/sglang" {
+	if hf.Releases[0].Chart != "oci://ghcr.io/modelsphere/charts/sglang" {
 		t.Errorf("chart = %q", hf.Releases[0].Chart)
 	}
 }

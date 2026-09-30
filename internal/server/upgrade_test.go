@@ -15,7 +15,7 @@ func deployed(t *testing.T, req planRequest) cluster.Fake {
 	_, doc := livePlan(t, req)
 	probe := liveProbe()
 	probe.Rel = append(probe.Rel, cluster.Release{
-		Name: req.Release, Namespace: "modelforge", Status: "deployed", Revision: 3, SwissFiles: doc,
+		Name: req.Release, Namespace: "models", Status: "deployed", Revision: 3, SwissFiles: doc,
 	})
 	return probe
 }
@@ -24,7 +24,7 @@ func deployed(t *testing.T, req planRequest) cluster.Fake {
 // makes the upgrade page editable rather than a carried-forward summary.
 func TestUpgradeFormOverridesWin(t *testing.T) {
 	probe := deployed(t, planRequest{
-		Model: "modelforge", Release: "r", ServiceID: "r",
+		Model: "qwen3.6-35b-a3b", Release: "r", ServiceID: "r",
 		Overrides: values.Tree{"replicaCount": 3},
 	})
 	srv, _ := deployServerWith(t, probe, true)
@@ -46,7 +46,7 @@ func TestUpgradeFormOverridesWin(t *testing.T) {
 // about it. This is why the overrides merge instead of replacing.
 func TestUpgradeKeepsValuesTheFormDoesNotCover(t *testing.T) {
 	probe := deployed(t, planRequest{
-		Model: "modelforge", Release: "r", ServiceID: "r",
+		Model: "qwen3.6-35b-a3b", Release: "r", ServiceID: "r",
 		Overrides: values.Tree{
 			"replicaCount":      2,
 			"priorityClassName": "high",
@@ -78,7 +78,7 @@ func TestUpgradeKeepsValuesTheFormDoesNotCover(t *testing.T) {
 // it would install a second one beside the first -- two engines on one set of
 // GPUs, the hazard `helmfile.yaml` spends thirty lines on.
 func TestUpgradeIgnoresARenamedRelease(t *testing.T) {
-	probe := deployed(t, planRequest{Model: "modelforge", Release: "r", ServiceID: "r"})
+	probe := deployed(t, planRequest{Model: "qwen3.6-35b-a3b", Release: "r", ServiceID: "r"})
 	srv, _ := deployServerWith(t, probe, true)
 
 	code, up := post(t, srv, "/api/plans", map[string]any{
@@ -90,7 +90,7 @@ func TestUpgradeIgnoresARenamedRelease(t *testing.T) {
 		t.Fatalf("status %d: %v", code, up)
 	}
 	rel := up["release"].(map[string]any)
-	if rel["name"] != "r" || rel["namespace"] != "modelforge" {
+	if rel["name"] != "r" || rel["namespace"] != "models" {
 		t.Fatalf("an upgrade must stay on its own release, got %v", rel)
 	}
 }
@@ -98,7 +98,7 @@ func TestUpgradeIgnoresARenamedRelease(t *testing.T) {
 // The namespace is what scopes the lookup, so a mismatched one cannot silently
 // retarget: it finds no release and the upgrade is refused outright.
 func TestUpgradeRefusesAMismatchedNamespace(t *testing.T) {
-	probe := deployed(t, planRequest{Model: "modelforge", Release: "r", ServiceID: "r"})
+	probe := deployed(t, planRequest{Model: "qwen3.6-35b-a3b", Release: "r", ServiceID: "r"})
 	srv, _ := deployServerWith(t, probe, true)
 
 	code, out := post(t, srv, "/api/plans", map[string]any{
@@ -114,7 +114,7 @@ func TestUpgradeRefusesAMismatchedNamespace(t *testing.T) {
 // has to mean "move the catalog, keep every setting", edits included.
 func TestBareUpgradeStillCarriesEverything(t *testing.T) {
 	probe := deployed(t, planRequest{
-		Model: "modelforge", Release: "r", ServiceID: "r",
+		Model: "qwen3.6-35b-a3b", Release: "r", ServiceID: "r",
 		Overrides: values.Tree{"replicaCount": 3},
 		EditsYAML: "nodeSelector:\n  gpu: b300\n",
 	})
@@ -137,7 +137,7 @@ func TestBareUpgradeStillCarriesEverything(t *testing.T) {
 // carried-forward edit that cannot be removed is an escape hatch with no exit.
 func TestUpgradeFormCanClearTheEdits(t *testing.T) {
 	probe := deployed(t, planRequest{
-		Model: "modelforge", Release: "r", ServiceID: "r",
+		Model: "qwen3.6-35b-a3b", Release: "r", ServiceID: "r",
 		EditsYAML: "nodeSelector:\n  gpu: b300\n",
 	})
 	srv, _ := deployServerWith(t, probe, true)
@@ -158,7 +158,7 @@ func TestUpgradeFormCanClearTheEdits(t *testing.T) {
 // The upgrade form may set a key the model entry set, the same as the deploy
 // form. Nothing is fenced off; the merge order decides, and the plan says so.
 func TestUpgradeFormMaySetACatalogKey(t *testing.T) {
-	probe := deployed(t, planRequest{Model: "modelforge", Release: "r", ServiceID: "r"})
+	probe := deployed(t, planRequest{Model: "qwen3.6-35b-a3b", Release: "r", ServiceID: "r"})
 	srv, _ := deployServerWith(t, probe, true)
 
 	code, body := post(t, srv, "/api/plans", map[string]any{
@@ -233,7 +233,7 @@ func hasPath(doc map[string]any, path string) bool {
 // would leave the old objects orphaned under a release that kept its name, so
 // the request is refused rather than quietly carried out.
 func TestUpgradeRefusesAServiceIDChange(t *testing.T) {
-	probe := deployed(t, planRequest{Model: "modelforge", Release: "r", ServiceID: "r"})
+	probe := deployed(t, planRequest{Model: "qwen3.6-35b-a3b", Release: "r", ServiceID: "r"})
 	srv, _ := deployServerWith(t, probe, true)
 
 	code, out := post(t, srv, "/api/plans", map[string]any{
@@ -253,7 +253,7 @@ func TestUpgradeRefusesAServiceIDChange(t *testing.T) {
 // deployed value back is what "unchanged" looks like on the wire, so it must
 // not be read as an attempt to rename anything.
 func TestUpgradeAcceptsTheDeployedServiceID(t *testing.T) {
-	probe := deployed(t, planRequest{Model: "modelforge", Release: "r", ServiceID: "r"})
+	probe := deployed(t, planRequest{Model: "qwen3.6-35b-a3b", Release: "r", ServiceID: "r"})
 	srv, _ := deployServerWith(t, probe, true)
 
 	code, up := post(t, srv, "/api/plans", map[string]any{

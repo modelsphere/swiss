@@ -13,16 +13,16 @@ func profile() Profile {
 }
 
 func TestLocalPathUsesTheTemplate(t *testing.T) {
-	got, err := profile().LocalPath("modelforge/Qwen3.6-35B-A3B-793303", "modelforge")
+	got, err := profile().LocalPath("Qwen/Qwen3.6-35B-A3B", "qwen3.6-35b-a3b")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "/mnt/disk0/models/modelforge/Qwen3.6-35B-A3B-793303" {
+	if got != "/mnt/disk0/models/Qwen/Qwen3.6-35B-A3B" {
 		t.Fatalf("got %q", got)
 	}
 }
 
-// Real layouts are not uniform: two of these live under modelforge/ and one
+// Real layouts are not uniform: two of these live under an org directory and one
 // does not, so a template with no escape hatch cannot express the cluster.
 func TestOverrideWinsOverTheTemplate(t *testing.T) {
 	got, err := profile().LocalPath("moonshotai/Kimi-K2.5", "kimi-k2.5")
@@ -93,7 +93,7 @@ func TestCatalogValidation(t *testing.T) {
 	// This document is read from a ConfigMap, so a relative path has nothing to
 	// be relative to -- refused rather than resolved against whatever directory
 	// swissd happens to be started in.
-	for _, bad := range []string{"swiss-catalog", "./swiss-catalog", "../catalog", "oci://harbor/catalog"} {
+	for _, bad := range []string{"swiss-catalog", "./swiss-catalog", "../catalog", "oci://ghcr.io/modelsphere/catalog"} {
 		if _, err := Parse([]byte(head+"catalog: \""+bad+"\"\n"), "test"); err == nil {
 			t.Errorf("catalog %q must be refused", bad)
 		}

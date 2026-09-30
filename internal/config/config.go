@@ -21,6 +21,9 @@ import (
 
 const DefaultProfileKey = "profile.yaml"
 
+// DefaultCatalog is the public catalog, used when neither a config nor a flag names one.
+const DefaultCatalog = "https://modelsphere.github.io/model-catalog/"
+
 type Config struct {
 	// Catalog is an https base or a path. index.json is appended when the
 	// location does not already name a .json file.
@@ -217,6 +220,9 @@ func Find(explicit string) string {
 }
 
 func (c *Config) applyDefaults() {
+	if c.Catalog == "" {
+		c.Catalog = DefaultCatalog
+	}
 	if c.Cluster.Profile.Key == "" {
 		c.Cluster.Profile.Key = DefaultProfileKey
 	}

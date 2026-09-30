@@ -22,7 +22,7 @@ func seedRelease(t *testing.T, revision int, overrides values.Tree) (cluster.Fak
 	})
 	// The shared test profile names no chart source, so a workspace rendered
 	// from it has no helmfile.yaml and nothing can be applied from it.
-	p.Chart.Repo = "https://harbor.4pd.io/chartrepo/hardcore-tech"
+	p.Chart.Repo = "https://modelsphere.github.io/helm-charts"
 	if err := p.ComputeHash(); err != nil {
 		t.Fatal(err)
 	}
@@ -36,12 +36,12 @@ func seedRelease(t *testing.T, revision int, overrides values.Tree) (cluster.Fak
 	for i := range probe.Rel {
 		if probe.Rel[i].Name == "glm-53" {
 			probe.Rel[i] = cluster.Release{
-				Name: "glm-53", Namespace: "modelforge", Chart: "sglang-0.7.0",
+				Name: "glm-53", Namespace: "models", Chart: "sglang-0.7.0",
 				Status: "deployed", Revision: revision, SwissFiles: files,
 			}
 		}
 	}
-	probe.Maps["modelforge/"+cluster.PlanConfigMapPrefix+"glm-53"] = files
+	probe.Maps["models/"+cluster.PlanConfigMapPrefix+"glm-53"] = files
 	return probe, files
 }
 
@@ -59,7 +59,7 @@ func TestApplyArchivesTheOutgoingPlan(t *testing.T) {
 	post(t, srv, "/api/apply", map[string]any{"planHash": p["hash"]})
 
 	w := s.writer.(*fakeWriter)
-	ref := archiveRef("modelforge", "glm-53", 4)
+	ref := archiveRef("models", "glm-53", 4)
 	kept, ok := w.secrets[ref]
 	if !ok {
 		t.Fatalf("revision 4's plan was not archived; secrets: %v", keys(w.secrets))
@@ -80,15 +80,15 @@ func TestApplyArchivesTheOutgoingPlan(t *testing.T) {
 func TestRollbackAppliesAnArchivedPlan(t *testing.T) {
 	probe, files := seedRelease(t, 6, values.Tree{"replicaCount": 3})
 	probe.Secrets = map[string]map[string]string{
-		archiveRef("modelforge", "glm-53", 4): files,
+		archiveRef("models", "glm-53", 4): files,
 	}
 	probe.SecretLabels = map[string]map[string]string{
-		archiveRef("modelforge", "glm-53", 4): archiveLabels("glm-53", 4),
+		archiveRef("models", "glm-53", 4): archiveLabels("glm-53", 4),
 	}
 	srv, s := deployServerWith(t, probe, true)
 	s.cfg.Server.HelmBin, s.cfg.Server.HelmfileBin = stubHelm(t, 0), stubHelm(t, 0)
 
-	code, out := post(t, srv, "/api/releases/modelforge/glm-53/rollback",
+	code, out := post(t, srv, "/api/releases/models/glm-53/rollback",
 		map[string]any{"toRevision": 4, "expectRevision": 6})
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, out)
@@ -114,16 +114,16 @@ func TestRollbackAppliesAnArchivedPlan(t *testing.T) {
 func TestRollbackRefusesWhenTheReleaseMoved(t *testing.T) {
 	probe, files := seedRelease(t, 7, values.Tree{"replicaCount": 3})
 	probe.Secrets = map[string]map[string]string{
-		archiveRef("modelforge", "glm-53", 4): files,
+		archiveRef("models", "glm-53", 4): files,
 	}
 	probe.SecretLabels = map[string]map[string]string{
-		archiveRef("modelforge", "glm-53", 4): archiveLabels("glm-53", 4),
+		archiveRef("models", "glm-53", 4): archiveLabels("glm-53", 4),
 	}
 	srv, s := deployServerWith(t, probe, true)
 	s.cfg.Server.HelmBin = stubHelm(t, 0)
 
 	// The operator was looking at revision 6; someone else applied since.
-	code, out := post(t, srv, "/api/releases/modelforge/glm-53/rollback",
+	code, out := post(t, srv, "/api/releases/models/glm-53/rollback",
 		map[string]any{"toRevision": 4, "expectRevision": 6})
 	if code != http.StatusConflict {
 		t.Fatalf("want 409, got %d %v", code, out)
@@ -133,11 +133,11 @@ func TestRollbackRefusesWhenTheReleaseMoved(t *testing.T) {
 func TestRollbackNeedsTheRevisionYouSaw(t *testing.T) {
 	probe, files := seedRelease(t, 6, nil)
 	probe.Secrets = map[string]map[string]string{
-		archiveRef("modelforge", "glm-53", 4): files,
+		archiveRef("models", "glm-53", 4): files,
 	}
 	srv, _ := deployServerWith(t, probe, true)
 
-	code, out := post(t, srv, "/api/releases/modelforge/glm-53/rollback",
+	code, out := post(t, srv, "/api/releases/models/glm-53/rollback",
 		map[string]any{"toRevision": 4})
 	if code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d %v", code, out)
@@ -147,7 +147,7 @@ func TestRollbackNeedsTheRevisionYouSaw(t *testing.T) {
 func TestRollbackToAnUnknownRevisionIsNotFound(t *testing.T) {
 	probe, _ := seedRelease(t, 6, nil)
 	srv, _ := deployServerWith(t, probe, true)
-	code, _ := post(t, srv, "/api/releases/modelforge/glm-53/rollback",
+	code, _ := post(t, srv, "/api/releases/models/glm-53/rollback",
 		map[string]any{"toRevision": 99, "expectRevision": 6})
 	if code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d", code)
@@ -164,11 +164,11 @@ func TestRollbackRefusesAnEditedArchive(t *testing.T) {
 	}
 	tampered["form.yaml"] = "replicaCount: 99\n"
 	probe.Secrets = map[string]map[string]string{
-		archiveRef("modelforge", "glm-53", 4): tampered,
+		archiveRef("models", "glm-53", 4): tampered,
 	}
 	srv, _ := deployServerWith(t, probe, true)
 
-	code, out := post(t, srv, "/api/releases/modelforge/glm-53/rollback",
+	code, out := post(t, srv, "/api/releases/models/glm-53/rollback",
 		map[string]any{"toRevision": 4, "expectRevision": 6})
 	if code != http.StatusNotFound {
 		t.Fatalf("an edited archive must be refused, got %d %v", code, out)
@@ -188,12 +188,12 @@ func keys(m map[string]map[string]string) []string {
 func TestRevisionDiffCarriesTheLiveRevision(t *testing.T) {
 	probe, files := seedRelease(t, 6, nil)
 	probe.Secrets = map[string]map[string]string{
-		archiveRef("modelforge", "glm-53", 4): files,
+		archiveRef("models", "glm-53", 4): files,
 	}
 	srv, s := deployServerWith(t, probe, true)
 	s.cfg.Server.HelmBin, s.cfg.Server.HelmfileBin = stubHelm(t, 0), stubHelm(t, 0)
 
-	code, out := post(t, srv, "/api/releases/modelforge/glm-53/revisions/4/diff", map[string]any{})
+	code, out := post(t, srv, "/api/releases/models/glm-53/revisions/4/diff", map[string]any{})
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, out)
 	}
@@ -214,7 +214,7 @@ func TestRevisionDiffCarriesTheLiveRevision(t *testing.T) {
 func TestRevisionDiffOnAnUnknownRevisionIsNotFound(t *testing.T) {
 	probe, _ := seedRelease(t, 6, nil)
 	srv, _ := deployServerWith(t, probe, true)
-	code, _ := post(t, srv, "/api/releases/modelforge/glm-53/revisions/99/diff", map[string]any{})
+	code, _ := post(t, srv, "/api/releases/models/glm-53/revisions/99/diff", map[string]any{})
 	if code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d", code)
 	}
@@ -226,14 +226,14 @@ func TestRevisionDiffOnAnUnknownRevisionIsNotFound(t *testing.T) {
 func TestRevisionsCarryTheChart(t *testing.T) {
 	probe, files := seedRelease(t, 6, nil)
 	probe.Secrets = map[string]map[string]string{
-		archiveRef("modelforge", "glm-53", 4): files,
+		archiveRef("models", "glm-53", 4): files,
 	}
 	probe.SecretLabels = map[string]map[string]string{
-		archiveRef("modelforge", "glm-53", 4): archiveLabels("glm-53", 4),
+		archiveRef("models", "glm-53", 4): archiveLabels("glm-53", 4),
 	}
 	srv, _ := deployServerWith(t, probe, true)
 
-	code, out := get(t, srv, "/api/releases/modelforge/glm-53/revisions")
+	code, out := get(t, srv, "/api/releases/models/glm-53/revisions")
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, out)
 	}
@@ -280,7 +280,7 @@ func TestRevisionValuesAsksHelmTwice(t *testing.T) {
 	bin, log := stubHelmValues(t)
 	s.cfg.Server.HelmBin = bin
 
-	code, out := get(t, srv, "/api/releases/modelforge/glm-53/revisions/4/values")
+	code, out := get(t, srv, "/api/releases/models/glm-53/revisions/4/values")
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, out)
 	}
@@ -295,7 +295,7 @@ func TestRevisionValuesAsksHelmTwice(t *testing.T) {
 	}
 	var withAll, without int
 	for _, c := range calls {
-		for _, want := range []string{"get values", "glm-53", "--namespace modelforge", "--revision 4"} {
+		for _, want := range []string{"get values", "glm-53", "--namespace models", "--revision 4"} {
 			if !strings.Contains(c, want) {
 				t.Errorf("helm was not asked for %q: %s", want, c)
 			}
@@ -343,7 +343,7 @@ func TestRevisionValuesSurvivesAFailedSuppliedRead(t *testing.T) {
 	}
 	s.cfg.Server.HelmBin = bin
 
-	code, out := get(t, srv, "/api/releases/modelforge/glm-53/revisions/4/values")
+	code, out := get(t, srv, "/api/releases/models/glm-53/revisions/4/values")
 	if code != 200 {
 		t.Fatalf("the merged read worked, so this must answer: %d %v", code, out)
 	}
@@ -362,7 +362,7 @@ func TestRevisionValuesIsNotBehindAllowDeploy(t *testing.T) {
 	srv, s := deployServerWith(t, probe, false)
 	s.cfg.Server.HelmBin = stubHelm(t, 0)
 
-	code, out := get(t, srv, "/api/releases/modelforge/glm-53/revisions/6/values")
+	code, out := get(t, srv, "/api/releases/models/glm-53/revisions/6/values")
 	if code != 200 {
 		t.Fatalf("a read-only swissd must still read values: %d %v", code, out)
 	}

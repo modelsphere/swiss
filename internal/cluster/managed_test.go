@@ -43,9 +43,9 @@ func metaClient(objs ...*metav1.PartialObjectMetadata) *metadatafake.FakeMetadat
 // what separates a plan from it, and the release name is what is left.
 func TestManagedRefsListsPlansAndNotTheProfile(t *testing.T) {
 	md := metaClient(
-		planMeta("modelforge", PlanConfigMapPrefix+"kimi-k3"),
-		planMeta("modelforge", PlanConfigMapPrefix+"glm-53"),
-		planMeta("modelforge", "swiss-profile"), // same label, not a plan
+		planMeta("models", PlanConfigMapPrefix+"kimi-k3"),
+		planMeta("models", PlanConfigMapPrefix+"glm-53"),
+		planMeta("models", "swiss-profile"), // same label, not a plan
 	)
 	k := NewKubeWithClients(fake.NewSimpleClientset(), md)
 
@@ -57,7 +57,7 @@ func TestManagedRefsListsPlansAndNotTheProfile(t *testing.T) {
 		t.Fatalf("want the two plans and not the profile, got %+v", refs)
 	}
 	// Sorted, and the release name is the ConfigMap name without the prefix.
-	if refs[0].Name != "glm-53" || refs[0].Namespace != "modelforge" {
+	if refs[0].Name != "glm-53" || refs[0].Namespace != "models" {
 		t.Errorf("got %+v, want glm-53 first", refs[0])
 	}
 	if refs[1].Name != "kimi-k3" {
@@ -83,15 +83,15 @@ func planCM(ns, release string) *corev1.ConfigMap {
 // is worth gunzipping -- the older ones are whole rendered manifests.
 func TestReleaseTakesTheHighestRevision(t *testing.T) {
 	cs := fake.NewSimpleClientset(
-		planCM("modelforge", "glm-53"),
-		helmSecret("modelforge", "glm-53", 1, "superseded", "sglang", "0.7.0"),
-		helmSecret("modelforge", "glm-53", 4, "deployed", "sglang", "0.7.1"),
+		planCM("models", "glm-53"),
+		helmSecret("models", "glm-53", 1, "superseded", "sglang", "0.7.0"),
+		helmSecret("models", "glm-53", 4, "deployed", "sglang", "0.7.1"),
 		// A different release in the same namespace must not be picked up: the
 		// lookup is by helm's own name label, not a scan.
-		helmSecret("modelforge", "kimi-k3", 9, "deployed", "sglang", "0.7.1"),
+		helmSecret("models", "kimi-k3", 9, "deployed", "sglang", "0.7.1"),
 	)
 
-	rel, err := NewKubeWithClient(cs).Release(context.Background(), "modelforge", "glm-53")
+	rel, err := NewKubeWithClient(cs).Release(context.Background(), "models", "glm-53")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,9 +110,9 @@ func TestReleaseTakesTheHighestRevision(t *testing.T) {
 // The row still belongs in the view -- that is how it gets noticed -- so this is
 // not an error.
 func TestReleaseWithNoLiveRelease(t *testing.T) {
-	cs := fake.NewSimpleClientset(planCM("modelforge", "glm-53"))
+	cs := fake.NewSimpleClientset(planCM("models", "glm-53"))
 
-	rel, err := NewKubeWithClient(cs).Release(context.Background(), "modelforge", "glm-53")
+	rel, err := NewKubeWithClient(cs).Release(context.Background(), "models", "glm-53")
 	if err != nil {
 		t.Fatal(err)
 	}

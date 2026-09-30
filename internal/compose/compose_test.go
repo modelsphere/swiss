@@ -31,9 +31,9 @@ func testInput() Input {
 		},
 		Profile: site.Profile{
 			Name:      "prod",
-			Namespace: "modelforge",
+			Namespace: "models",
 			Model:     site.ModelPaths{PathTemplate: "/mnt/disk0/models/{{name}}"},
-			Registry:  site.Registry{Mirror: "harbor.4pd.io/hardcore-tech"},
+			Registry:  site.Registry{Mirror: "ghcr.io/modelsphere"},
 			Cache:     site.Cache{Enabled: true, HostPath: "/mnt/disk0/sglang-cache"},
 			Nodes:     site.Nodes{GPUsPerNode: 8},
 		},
@@ -50,8 +50,8 @@ func TestComposeProjectsIdentityFieldsFromTheirSingleSpelling(t *testing.T) {
 		"model.name":       "glm-5.3", // from servedName/name
 		"model.gpus":       "8",       // from requires.gpus, as a string
 		"model.localPath":  "/mnt/disk0/models/GLM-5.3",
-		"image.tag":        "v0.5.19",                            // catalog pins the build
-		"image.repository": "harbor.4pd.io/hardcore-tech/sglang", // site picks the mirror
+		"image.tag":        "v0.5.19",                    // catalog pins the build
+		"image.repository": "ghcr.io/modelsphere/sglang", // site picks the mirror
 	} {
 		got, ok := values.Get(p.Values(), path)
 		if !ok || got != want {
@@ -250,14 +250,14 @@ func TestHashCoversValuesButNotProvenance(t *testing.T) {
 func TestFormCanSetServiceIDAndOverrideLocalPath(t *testing.T) {
 	in := testInput()
 	in.Overrides = values.Tree{
-		"serviceId": "modelforge-01-glm",
+		"serviceId": "qwen-01-glm",
 		"model":     map[string]any{"localPath": "/mnt/disk1/models/moved"},
 	}
 	p, err := Compose(in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v, _ := values.Get(p.Values(), "serviceId"); v != "modelforge-01-glm" {
+	if v, _ := values.Get(p.Values(), "serviceId"); v != "qwen-01-glm" {
 		t.Errorf("serviceId = %v", v)
 	}
 	if v, _ := values.Get(p.Values(), "model.localPath"); v != "/mnt/disk1/models/moved" {
@@ -401,7 +401,7 @@ func TestLayerValuesSplitByProvenance(t *testing.T) {
 	if got, _ := values.Get(layers[values.LayerCatalog], "image.repository"); got != "lmsysorg/sglang" {
 		t.Errorf("the catalog document must carry its own repository, got %#v", got)
 	}
-	if got, _ := values.Get(layers[values.LayerSite], "image.repository"); got != "harbor.4pd.io/hardcore-tech/sglang" {
+	if got, _ := values.Get(layers[values.LayerSite], "image.repository"); got != "ghcr.io/modelsphere/sglang" {
 		t.Errorf("the site document must carry the mirror, got %#v", got)
 	}
 	files := p.ValuesFiles()

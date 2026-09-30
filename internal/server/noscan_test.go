@@ -36,17 +36,17 @@ func (p noScan) GPUAllocations(context.Context) (map[string][]cluster.GPUPod, er
 // The detail page polls both of these every fifteen seconds, and the deploy
 // pipeline polls status again while it is open.
 func TestReleaseDetailReadsOnlyItsOwnRelease(t *testing.T) {
-	_, doc := livePlan(t, planRequest{Model: "modelforge", Release: "r", ServiceID: "r"})
+	_, doc := livePlan(t, planRequest{Model: "qwen3.6-35b-a3b", Release: "r", ServiceID: "r"})
 	probe := liveProbe()
 	probe.Rel = append(probe.Rel, cluster.Release{
-		Name: "r", Namespace: "modelforge", Chart: "sglang-0.7.1",
+		Name: "r", Namespace: "models", Chart: "sglang-0.7.1",
 		Status: "deployed", Revision: 3, SwissFiles: doc,
 	})
 	srv := testServer(t, noScan{Probe: probe, t: t})
 
 	for _, path := range []string{
-		"/api/releases/modelforge/r/status",
-		"/api/releases/modelforge/r/plan",
+		"/api/releases/models/r/status",
+		"/api/releases/models/r/plan",
 	} {
 		code, body := get(t, srv, path)
 		if code != 200 {

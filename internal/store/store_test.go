@@ -22,7 +22,7 @@ func open(t *testing.T) *Store {
 func testPlan(hash string) *plan.Plan {
 	return &plan.Plan{
 		APIVersion: plan.APIVersion,
-		Release:    plan.Release{Name: "glm-53", Namespace: "modelforge"},
+		Release:    plan.Release{Name: "glm-53", Namespace: "models"},
 		Source:     plan.SourceRef{Model: "glm-5.3", Variant: "sglang-tp8-b300"},
 		Layers:     map[string]values.Tree{"form": {"replicaCount": 2}},
 		Hash:       hash,
@@ -79,7 +79,7 @@ func TestRunsAreAppendOnlyAndNewestFirst(t *testing.T) {
 	s, ctx := open(t), context.Background()
 	for _, a := range []string{"diff", "apply"} {
 		if _, err := s.RecordRun(ctx, Run{
-			Namespace: "modelforge", Release: "glm-53",
+			Namespace: "models", Release: "glm-53",
 			Action: a, PlanHash: "sha256:a", Changed: a == "apply",
 			StartedAt: "2026-09-20T10:00:00Z", EndedAt: "2026-09-20T10:00:01Z",
 		}); err != nil {
@@ -99,7 +99,7 @@ func TestRunsAreAppendOnlyAndNewestFirst(t *testing.T) {
 // and name, with no cluster key anywhere.
 func TestReleasesAreKeyedByNamespaceAndName(t *testing.T) {
 	s, ctx := open(t), context.Background()
-	for _, ns := range []string{"modelforge", "kimi"} {
+	for _, ns := range []string{"models", "kimi"} {
 		if _, err := s.RecordRun(ctx, Run{
 			Namespace: ns, Release: "r", Action: "apply", PlanHash: "h",
 			StartedAt: "2026-09-20T10:00:00Z", EndedAt: "2026-09-20T10:00:01Z",

@@ -88,8 +88,7 @@ fi
 
 cat <<NEXT
 
-build and deploy:
-  docker build -t harbor.4pd.io/hardcore-tech/swissd:$next .
-  docker push harbor.4pd.io/hardcore-tech/swissd:$next
-  helm upgrade swiss ./helm/swiss -n swiss-system
+publish: push the tag; CI builds ghcr.io/modelsphere/swissd:$next and
+oci://ghcr.io/modelsphere/charts/swiss:$next. Then:
+  helm upgrade swiss oci://ghcr.io/modelsphere/charts/swiss --version $next -n swiss-system
 NEXT

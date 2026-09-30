@@ -17,10 +17,10 @@ import (
 func TestRollbackRecordsTheNoteInBothPlaces(t *testing.T) {
 	probe, files := seedRelease(t, 6, values.Tree{"replicaCount": 3})
 	probe.Secrets = map[string]map[string]string{
-		archiveRef("modelforge", "glm-53", 4): files,
+		archiveRef("models", "glm-53", 4): files,
 	}
 	probe.SecretLabels = map[string]map[string]string{
-		archiveRef("modelforge", "glm-53", 4): archiveLabels("glm-53", 4),
+		archiveRef("models", "glm-53", 4): archiveLabels("glm-53", 4),
 	}
 	srv, s := deployServerWith(t, probe, true)
 	s.cfg.Server.HelmBin, s.cfg.Server.HelmfileBin = stubHelm(t, 0), stubHelm(t, 0)
@@ -28,7 +28,7 @@ func TestRollbackRecordsTheNoteInBothPlaces(t *testing.T) {
 	s.SetWriter(w)
 
 	const why = "tp-size 4 OOMs on the B300s"
-	code, out := post(t, srv, "/api/releases/modelforge/glm-53/rollback",
+	code, out := post(t, srv, "/api/releases/models/glm-53/rollback",
 		map[string]any{"toRevision": 4, "expectRevision": 6, "note": why})
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, out)
@@ -44,7 +44,7 @@ func TestRollbackRecordsTheNoteInBothPlaces(t *testing.T) {
 		t.Error("the row must name the revision it left the release at")
 	}
 
-	status := w.written[planRef("modelforge", "glm-53")]["status.yaml"]
+	status := w.written[planRef("models", "glm-53")]["status.yaml"]
 	if !strings.Contains(status, why) {
 		t.Errorf("the status beside the release must carry the note, got %q", status)
 	}
@@ -58,7 +58,7 @@ func TestAFailedApplyRecordsNoRevision(t *testing.T) {
 	s.cfg.Server.HelmBin, s.cfg.Server.HelmfileBin = stubHelm(t, 0), stubHelm(t, 1)
 
 	p, err := s.compose(context.Background(), planRequest{
-		Model: "modelforge", Release: "glm-53", Namespace: "modelforge", ServiceID: "glm-53",
+		Model: "qwen3.6-35b-a3b", Release: "glm-53", Namespace: "models", ServiceID: "glm-53",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -89,10 +89,10 @@ func TestAFailedApplyRecordsNoRevision(t *testing.T) {
 func TestRevisionPlanServesTheArchive(t *testing.T) {
 	probe, files := seedRelease(t, 6, values.Tree{"replicaCount": 3})
 	probe.Secrets = map[string]map[string]string{
-		archiveRef("modelforge", "glm-53", 4): files,
+		archiveRef("models", "glm-53", 4): files,
 	}
 	probe.SecretLabels = map[string]map[string]string{
-		archiveRef("modelforge", "glm-53", 4): archiveLabels("glm-53", 4),
+		archiveRef("models", "glm-53", 4): archiveLabels("glm-53", 4),
 	}
 	srv, _ := deployServerWith(t, probe, true)
 
@@ -100,14 +100,14 @@ func TestRevisionPlanServesTheArchive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	code, body := get(t, srv, "/api/releases/modelforge/glm-53/revisions/4/plan")
+	code, body := get(t, srv, "/api/releases/models/glm-53/revisions/4/plan")
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, body)
 	}
 	if body["hash"] != want.Hash {
 		t.Errorf("hash = %v, want the archived plan's %v", body["hash"], want.Hash)
 	}
-	if code, _ := get(t, srv, "/api/releases/modelforge/glm-53/revisions/99/plan"); code != http.StatusNotFound {
+	if code, _ := get(t, srv, "/api/releases/models/glm-53/revisions/99/plan"); code != http.StatusNotFound {
 		t.Errorf("a revision with no archive must 404, got %d", code)
 	}
 }

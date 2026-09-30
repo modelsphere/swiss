@@ -158,7 +158,7 @@ func TestSavingTheProfileAsAnObjectRendersIt(t *testing.T) {
 	code, out := put(t, srv, "/api/profile", map[string]any{
 		"profile": map[string]any{
 			"name":      "prod-b300",
-			"namespace": "modelforge",
+			"namespace": "models",
 			"model":     map[string]any{"pathTemplate": "/weights/{{name}}"},
 			"route":     map[string]any{"nginxConfigMap": "llm-route/openresty-conf"},
 			"sites": []map[string]string{
@@ -185,7 +185,7 @@ func TestSavingTheProfileAsAnObjectRendersIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Namespace != "modelforge" || p.Route.NginxConfigMap == "" {
+	if p.Namespace != "models" || p.Route.NginxConfigMap == "" {
 		t.Errorf("swissd is not composing against what was saved: %+v", p)
 	}
 	if len(p.Sites) != 1 || p.Sites[0].Name != "dev" || p.Sites[0].URL != "https://swiss.dev.internal" {
@@ -199,7 +199,7 @@ func TestAnObjectProfileIsValidatedToo(t *testing.T) {
 	srv, _, w := profileServer(t, liveProbe())
 
 	code, _ := put(t, srv, "/api/profile", map[string]any{
-		"profile": map[string]any{"namespace": "modelforge"},
+		"profile": map[string]any{"namespace": "models"},
 	})
 	if code != http.StatusBadRequest {
 		t.Errorf("a profile with no name must be refused, got %d", code)

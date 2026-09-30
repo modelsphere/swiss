@@ -15,7 +15,8 @@
 # For swissd this is the default: a site profile naming a catalog of its own
 # wins, so the catalog can be repointed from the web without a helm upgrade.
 # For the CLI it is the only source -- it cannot read the profile's ConfigMap.
-catalog: https://models.example.com/swiss-catalog/
+# Left out, the public catalog below is used.
+catalog: https://modelsphere.github.io/model-catalog/
 
 cluster:
   # Where the site profile is read from. Exactly one source, named explicitly

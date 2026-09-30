@@ -12,10 +12,10 @@ func TestFormImageTagWinsOverTheCatalogs(t *testing.T) {
 	srv, _ := deployServer(t, true)
 
 	code, body := post(t, srv, "/api/plans", map[string]any{
-		"model": "modelforge", "release": "r", "serviceId": "r",
+		"model": "qwen3.6-35b-a3b", "release": "r", "serviceId": "r",
 		"overrides": map[string]any{
 			"image": map[string]any{
-				"repository": "harbor.example.com:5000/sglang",
+				"repository": "registry.example.com:5000/sglang",
 				"tag":        "v0.5.19-rc3",
 			},
 		},
@@ -30,7 +30,7 @@ func TestFormImageTagWinsOverTheCatalogs(t *testing.T) {
 		t.Errorf("the form's tag must win: %v", img)
 	}
 	// A registry port is not a tag; the repository has to survive intact.
-	if img["repository"] != "harbor.example.com:5000/sglang" {
+	if img["repository"] != "registry.example.com:5000/sglang" {
 		t.Errorf("repository mangled: %v", img)
 	}
 	if got := layerOf(body, "image.tag"); got != "form" {
@@ -47,7 +47,7 @@ func TestWithoutAFormImageTheCatalogTagStands(t *testing.T) {
 	srv, _ := deployServer(t, true)
 
 	code, body := post(t, srv, "/api/plans", map[string]any{
-		"model": "modelforge", "release": "r", "serviceId": "r",
+		"model": "qwen3.6-35b-a3b", "release": "r", "serviceId": "r",
 	})
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, body)

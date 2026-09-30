@@ -14,7 +14,7 @@ func layered() *Plan {
 		Chart:      ChartRef{Name: "sglang", Version: "0.8.0"},
 		Layers: map[string]values.Tree{
 			"catalog": {"extraArgs": []any{"--tp-size=8"}, "model": values.Tree{"mountPath": "/model"}},
-			"site":    {"image": values.Tree{"repository": "harbor/x"}},
+			"site":    {"image": values.Tree{"repository": "ghcr.io/x"}},
 			"form":    {"replicaCount": 2},
 		},
 	}
@@ -31,7 +31,7 @@ func TestValuesIsTheUnionOfTheLayers(t *testing.T) {
 	if got, _ := values.Get(v, "model.mountPath"); got != "/model" {
 		t.Errorf("catalog layer missing: %v", v)
 	}
-	if got, _ := values.Get(v, "image.repository"); got != "harbor/x" {
+	if got, _ := values.Get(v, "image.repository"); got != "ghcr.io/x" {
 		t.Errorf("site layer missing: %v", v)
 	}
 }

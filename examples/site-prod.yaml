@@ -4,7 +4,8 @@ namespace: swiss-deploy
 
 # Charts come from the registry. A local path works for the CLI; swissd has no
 # checkout to point at, so the registry is the real answer.
-chartRepo: https://harbor.4pd.io/chartrepo/hardcore-tech/
+chartRepo: https://modelsphere.github.io/helm-charts
+# chartRepo: oci://ghcr.io/<org>/charts
 # chartPath: ../charts
 
 # --create-namespace applies the Namespace object server-side under helm v4, so
@@ -14,13 +15,14 @@ chartRepo: https://harbor.4pd.io/chartrepo/hardcore-tech/
 createNamespace: false
 
 registry:
-  # Engine images are pulled from the mirror, keeping the catalog's tag.
-  mirror: harbor.4pd.io/hardcore-tech
+  # Engine images are pulled from the mirror, keeping the catalog's tag, e.g.
+  # docker.io/<org> or ghcr.io/<org>. Empty uses the catalog's repository.
+  mirror: ""
 
 model:
   # model.localPath, built from the catalog's source.hf.
-  #   {{hf}} modelforge/Qwen3.6-35B-A3B-793303
-  #   {{org}} modelforge   {{name}} Qwen3.6-35B-A3B-793303   {{model}} <entry name>
+  #   {{hf}} Qwen/Qwen3.6-35B-A3B
+  #   {{org}} Qwen   {{name}} Qwen3.6-35B-A3B   {{model}} <entry name>
   pathTemplate: /mnt/disk0/models/{{org}}/{{name}}
   # Weights that do not sit where the template says. Kimi is at the models root
   # rather than under an org directory, and a template with no escape hatch
