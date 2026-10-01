@@ -30,6 +30,10 @@ type Release struct {
 	// "live but untracked" row that matters most in a reconciliation view.
 	SwissFiles  map[string]string
 	SwissStatus []byte
+	// Objects are the custom resources the release's manifest names, read off
+	// the release record rather than found by label: the charts do not label
+	// all of them, and an override can rename any of them.
+	Objects []ObjectRef
 }
 
 // ManagedRef names one release swiss deployed. The plan ConfigMap is the link:
@@ -134,6 +138,8 @@ type Probe interface {
 	// cluster may withhold: a node view without it shows capacity and says the
 	// usage is unknown, rather than showing an undercount as if it were true.
 	GPUAllocations(ctx context.Context) (map[string][]GPUPod, error)
+	// Object reads one custom resource a release rendered. Nil when it is gone.
+	Object(ctx context.Context, ref ObjectRef) (*Object, error)
 }
 
 // ConfigMapKeys is the key set of a ConfigMap, sorted.
@@ -171,6 +177,9 @@ type Fake struct {
 	SecretLabels map[string]map[string]string
 	Alloc        map[string][]GPUPod
 	AllocErr     error
+	// Objs is keyed "Kind/namespace/name".
+	Objs   map[string]Object
+	ObjErr map[string]error
 }
 
 func (f Fake) Ping(context.Context) error                          { return f.PingErr }
@@ -240,6 +249,18 @@ func (f Fake) GPUAllocations(context.Context) (map[string][]GPUPod, error) {
 		return nil, f.AllocErr
 	}
 	return f.Alloc, nil
+}
+
+func (f Fake) Object(_ context.Context, ref ObjectRef) (*Object, error) {
+	key := ref.Kind + "/" + ref.Namespace + "/" + ref.Name
+	if err := f.ObjErr[key]; err != nil {
+		return nil, err
+	}
+	o, ok := f.Objs[key]
+	if !ok {
+		return nil, nil
+	}
+	return &o, nil
 }
 
 func (f Fake) Secret(_ context.Context, ref string) (map[string]string, error) {

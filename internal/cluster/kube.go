@@ -18,6 +18,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/rest"
@@ -36,6 +37,9 @@ type Kube struct {
 	// twenty-five. Nil outside production; ManagedRefs says so rather than
 	// silently falling back to the expensive path.
 	meta metadata.Interface
+	// dyn reads the custom resources a release rendered. Nil in tests that do
+	// not exercise it; Object says so.
+	dyn dynamic.Interface
 	// SwissPlanPrefix names the ConfigMap holding a release's plan. It is read
 	// alongside the release so a reconciliation view can tell a Swiss-managed
 	// release from one installed by hand.
@@ -78,12 +82,21 @@ func NewKube(kubeconfig, context_ string, namespaces ...string) (*Kube, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Kube{client: cs, meta: md, SwissPlanPrefix: PlanConfigMapPrefix, Namespaces: namespaces}, nil
+	dyn, err := dynamic.NewForConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &Kube{client: cs, meta: md, dyn: dyn, SwissPlanPrefix: PlanConfigMapPrefix, Namespaces: namespaces}, nil
 }
 
 // NewKubeWithClient is for tests, which supply a fake clientset.
 func NewKubeWithClient(c kubernetes.Interface) *Kube {
 	return &Kube{client: c, SwissPlanPrefix: PlanConfigMapPrefix}
+}
+
+// NewKubeWithDynamic is for tests that read custom resources.
+func NewKubeWithDynamic(c kubernetes.Interface, dyn dynamic.Interface) *Kube {
+	return &Kube{client: c, dyn: dyn, SwissPlanPrefix: PlanConfigMapPrefix}
 }
 
 // NewKubeWithClients is for tests that exercise the metadata-only listing.
@@ -129,6 +142,7 @@ type helmRelease struct {
 	Name      string `json:"name"`
 	Namespace string `json:"namespace"`
 	Version   int    `json:"version"`
+	Manifest  string `json:"manifest"`
 	Info      struct {
 		Status       string `json:"status"`
 		LastDeployed string `json:"last_deployed"`
@@ -176,6 +190,7 @@ func decodeRelease(s *corev1.Secret) (*Release, error) {
 	if r.Namespace == "" {
 		r.Namespace = s.Namespace
 	}
+	r.Objects = manifestObjects(hr.Manifest, r.Namespace)
 	if hr.Chart.Metadata.Name != "" {
 		r.Chart = hr.Chart.Metadata.Name + "-" + hr.Chart.Metadata.Version
 	}

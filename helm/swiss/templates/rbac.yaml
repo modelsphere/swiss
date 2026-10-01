@@ -192,6 +192,8 @@ rules:
     verbs: ["get", "list"]
   {{- if .Values.config.allowDeploy }}
   {{- include "swiss.deployRules" . | nindent 2 }}
+  {{- else }}
+  {{- include "swiss.objectReadRules" . | nindent 2 }}
   {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -234,6 +236,8 @@ rules:
     verbs: ["get", "list"]
   {{- if $.Values.config.allowDeploy }}
   {{- include "swiss.deployRules" $ | nindent 2 }}
+  {{- else }}
+  {{- include "swiss.objectReadRules" $ | nindent 2 }}
   {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1

@@ -66,6 +66,23 @@ the RBAC that reads it cannot disagree.
 {{- end -}}
 {{- end -}}
 
+{{/*
+The custom resources a release page reports on, read-only. Granted whether or
+not deploy is on: reading what a ModelRoute or LLMScaler last observed changes
+nothing, and the page is how an operator finds out a model is not routed.
+*/}}
+{{- define "swiss.objectReadRules" -}}
+- apiGroups: ["autoscaling.4pd.io", "autoscaling.modelsphere.dev"]
+  resources: ["llmscalers"]
+  verbs: ["get"]
+- apiGroups: ["inference.x-k8s.io", "inference.modelsphere.dev"]
+  resources: ["llmslorequirements"]
+  verbs: ["get"]
+- apiGroups: ["routing.gpucluster.io", "routing.modelsphere.dev"]
+  resources: ["modelroutes"]
+  verbs: ["get"]
+{{- end -}}
+
 {{/* Exactly what the sglang and vllm charts render, plus helm's release storage. */}}
 {{- define "swiss.deployRules" -}}
 {{- $all := list "get" "list" "watch" "create" "update" "patch" "delete" }}
