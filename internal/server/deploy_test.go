@@ -608,7 +608,7 @@ func TestUpgradeCarriesTheFormLayerForward(t *testing.T) {
 		t.Fatalf("form layer not carried: %v", vals)
 	}
 	src := up["source"].(map[string]any)
-	if src["model"] != "qwen3.6-35b-a3b" || src["variant"] != "sglang-tp2" {
+	if src["model"] != "qwen3.6-35b-a3b" || src["variant"] != "sglang-tp2-h100" {
 		t.Fatalf("model and variant should be carried too: %v", src)
 	}
 	if src["digest"] == "" {

@@ -15,7 +15,7 @@ FROM node:24-bookworm-slim AS web
 
 WORKDIR /src/web
 COPY web/console/web/package.json web/console/web/package-lock.json ./
-COPY web/console/web/vendor ./vendor
+COPY web/console/web/packages ./packages
 RUN npm ci --no-audit --no-fund
 
 COPY web/console/web/ ./

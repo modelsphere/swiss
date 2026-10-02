@@ -1,0 +1,71 @@
+name: ci
+
+# Tests and repository checks on every pull request and push to master.
+# Building the image and the chart (and publishing them) is publish.yml.
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # The server tests read the model catalog from ../swiss-catalog, relative to
+  # the repository root. Pinned so a catalog change cannot break an unrelated
+  # pull request; move it forward when the tests are updated for new entries.
+  CATALOG_REF: 23caf6c1db8ad165e7500813d614a287d0891b79
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: swiss
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: swiss
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: modelsphere/model-catalog
+          ref: ${{ env.CATALOG_REF }}
+          path: swiss-catalog
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: swiss/go.mod
+          cache-dependency-path: swiss/go.sum
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l cmd internal web/embed.go)
+          if [ -n "$unformatted" ]; then
+            echo "::error::not gofmt-formatted:"; echo "$unformatted"; exit 1
+          fi
+      - run: go vet ./...
+      - run: go test ./...
+
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: LICENSE is the Apache-2.0 text, unmodified
+        run: |
+          if ! grep -q "Apache License" LICENSE || ! grep -q "Version 2.0, January 2004" LICENSE; then
+            echo "::error file=LICENSE::LICENSE is not the Apache-2.0 text."
+            exit 1
+          fi
+      - name: No credentials committed
+        run: |
+          if git ls-files | grep -InE '(^|/)\.env$|\.kubeconfig$|\.pem$|(^|/)(id_rsa|id_ed25519)$'; then
+            echo "::error::a credential file is tracked"
+            exit 1
+          fi

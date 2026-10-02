@@ -76,9 +76,9 @@ func TestStatusCarriesWhatACurlNeeds(t *testing.T) {
 	body := statusOf(t, "https://llm.example.com", values.Tree{
 		"modelRoute": values.Tree{"enabled": true, "nginx": values.Tree{"route": "glm-53"}},
 	})
-	// qwen3.6-35b-a3b is served as "kimi" so callers do not change when they land on
-	// the fallback tier. A curl naming the catalog id would 404 at the engine.
-	if body["model"] != "kimi" {
+	// qwen3.6-35b-a3b is served as "qwen" (the entry's servedName), not by its
+	// catalog id. A curl naming the catalog id would 404 at the engine.
+	if body["model"] != "qwen" {
 		t.Errorf("model = %v, want the served name", body["model"])
 	}
 	if body["authHeader"] != "Authorization" {
