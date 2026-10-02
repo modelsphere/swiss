@@ -1,0 +1,55 @@
+# swissd and console as two releases in one namespace, console logging users
+# in and reaching swissd with its front-proxy key.
+#
+#   helmfile -f examples/helmfile.yaml apply
+#
+# swissd is installed on its own rather than as console's subchart
+# (swiss.enabled), so each can be upgraded and rolled back without the other.
+# Sharing the namespace means console reads swissd's auth Secret directly: no
+# copy of the proxy key to keep in step.
+
+repositories:
+  - name: modelsphere
+    url: ghcr.io/modelsphere/charts
+    oci: true
+
+releases:
+  - name: swissd
+    namespace: swiss-system
+    createNamespace: true
+    chart: modelsphere/swiss
+    version: 0.6.1
+    values:
+      - config:
+          allowDeploy: true
+        service:
+          # enable it if going to access swiss directly
+          # type: NodePort
+        rbac:
+          scope: cluster
+        auth:
+          # Adds proxyKey to the swiss-auth Secret; console sends it to get in
+          # without the password. The password login stays on beside it.
+          proxyKey: true
+
+  - name: console
+    namespace: swiss-system
+    chart: modelsphere/console
+    version: 0.1.1
+    needs:
+      - swiss-system/swissd
+    values:
+      - externalSwiss:
+          url: http://swissd.swiss-system.svc:80/api
+          proxyKey:
+            secretName: swiss-auth
+            key: proxyKey
+          # swissd creates it the first time the site profile is saved.
+          profile: swiss-system/swiss-profile
+        # The Playground resolves the gateway from the profile above. For it to
+        # read the gateway's Service and key Secret, name them here -- the
+        # profile's route.nginxService and route.auth.secretRef:
+        # playground:
+        #   gateway:
+        #     service: llm-route/openresty
+        #     secretRef: llm-route/openresty-api-keys

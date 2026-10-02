@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/modelsphere/swiss/internal/catalog"
+	"github.com/modelsphere/swiss/internal/chart"
 	"github.com/modelsphere/swiss/internal/plan"
 	"github.com/modelsphere/swiss/internal/site"
 	"github.com/modelsphere/swiss/internal/values"
@@ -39,6 +40,9 @@ type Input struct {
 	// the plan carries is the one that runs: helm does the creating, and the
 	// plan is where that is declared.
 	CreateNamespace bool
+	// ChartVersion is chart.version resolved by chart.Resolve. Empty works only
+	// for a pinned chart.version: Compose reads no registry.
+	ChartVersion string
 }
 
 // Compose resolves an entry, a variant, a profile and a set of overrides into a
@@ -54,6 +58,17 @@ func Compose(in Input) (*plan.Plan, error) {
 	}
 	if ns == "" {
 		return nil, fmt.Errorf("no namespace: pass one, or set namespace in the site profile")
+	}
+
+	chartVersion := in.ChartVersion
+	if chartVersion == "" {
+		spec, err := chart.ParseSpec(in.Variant.Chart.Version)
+		if err != nil {
+			return nil, err
+		}
+		if chartVersion = spec.Exact(); chartVersion == "" {
+			return nil, fmt.Errorf("chart version %q is a range: resolve it before composing", spec)
+		}
 	}
 
 	catalogVals, err := catalogLayer(in.Entry, in.Variant)
@@ -98,13 +113,14 @@ func Compose(in Input) (*plan.Plan, error) {
 			CatalogName: in.CatalogName,
 			Ref:         in.Ref,
 			Model:       in.Entry.Name,
+			HF:          in.Entry.Source.HF,
 			Version:     in.Entry.Version,
 			Digest:      in.Entry.Digest,
 			Variant:     in.Variant.ID,
 		},
 		Chart: plan.ChartRef{
 			Name:    in.Variant.Chart.Name,
-			Version: in.Variant.Chart.Version,
+			Version: chartVersion,
 			Repo:    in.Profile.ChartRepo,
 			Path:    in.Profile.ChartPath,
 		},

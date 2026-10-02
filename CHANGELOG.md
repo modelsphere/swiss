@@ -17,6 +17,9 @@ under it.
 
 ### Changed
 - GitHub Actions pinned to commit SHAs.
+- deploy upgrading, relax upgrade restriction:
+  - allow catalog repo switch, only to the same model: same HF repo (`source.hf`, now recorded in the plan) and same engine.
+  - allow chart version upgrade in same catalog model version, model-catalog schema is upgraded with a more powerful semVer string
 
 ### Fixed
 - The web UI is built from a console commit without the proprietary

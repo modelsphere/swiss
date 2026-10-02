@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/modelsphere/swiss/internal/catalog"
+	"github.com/modelsphere/swiss/internal/chart"
 	"github.com/modelsphere/swiss/internal/compose"
 	"github.com/modelsphere/swiss/internal/plan"
 	"github.com/modelsphere/swiss/internal/render"
@@ -21,6 +22,7 @@ func planCmd() *cobra.Command {
 	var (
 		model, variant, release, namespace, out string
 		modelVersion, serviceID, localPath      string
+		chartVersion                            string
 		sets                                    []string
 		explain, createNamespace                bool
 	)
@@ -31,7 +33,7 @@ func planCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			p, err := buildPlan(cmd.Context(), planInput{
 				model: model, modelVersion: modelVersion, variant: variant,
-				release: release, namespace: namespace,
+				release: release, namespace: namespace, chartVersion: chartVersion,
 				sets:            append(sets, kv("serviceId", serviceID), kv("model.localPath", localPath)),
 				createNamespace: createNamespace,
 			})
@@ -57,6 +59,7 @@ func planCmd() *cobra.Command {
 	c.Flags().StringVar(&model, "model", "", "catalog model name (required)")
 	c.Flags().StringVar(&modelVersion, "model-version", "", "catalog model version; defaults to the latest published")
 	c.Flags().StringVar(&variant, "variant", "", "variant id; defaults to the entry's default variant")
+	c.Flags().StringVar(&chartVersion, "chart-version", "", chartVersionUsage)
 	c.Flags().StringVar(&release, "release", "", "helm release name; defaults to the model name")
 	c.Flags().StringVar(&namespace, "namespace", "", "namespace; defaults to the site profile's")
 	c.Flags().StringVar(&serviceID, "service-id", "", "serviceId: the identity modelRoute, sloRequirement and the scaler key off")
@@ -72,7 +75,7 @@ func planCmd() *cobra.Command {
 func renderCmd() *cobra.Command {
 	var (
 		model, variant, release, namespace, chartRoot, planFile string
-		modelVersion                                            string
+		modelVersion, chartVersion                              string
 		sets                                                    []string
 	)
 	c := &cobra.Command{
@@ -87,7 +90,7 @@ func renderCmd() *cobra.Command {
 			} else {
 				p, err = buildPlan(cmd.Context(), planInput{
 					model: model, modelVersion: modelVersion, variant: variant,
-					release: release, namespace: namespace, sets: sets,
+					release: release, namespace: namespace, chartVersion: chartVersion, sets: sets,
 				})
 			}
 			if err != nil {
@@ -104,6 +107,7 @@ func renderCmd() *cobra.Command {
 	c.Flags().StringVar(&model, "model", "", "catalog model name")
 	c.Flags().StringVar(&modelVersion, "model-version", "", "catalog model version")
 	c.Flags().StringVar(&variant, "variant", "", "variant id")
+	c.Flags().StringVar(&chartVersion, "chart-version", "", chartVersionUsage)
 	c.Flags().StringVar(&release, "release", "", "helm release name")
 	c.Flags().StringVar(&namespace, "namespace", "", "namespace")
 	c.Flags().StringArrayVar(&sets, "set", nil, "deploy-time override, key=value")
@@ -112,10 +116,13 @@ func renderCmd() *cobra.Command {
 	return c
 }
 
+const chartVersionUsage = "chart version, when the variant's chart.version is a range; defaults to the newest in range"
+
 // planInput is what composing a plan takes from a command line, named rather
 // than positional: half of it is optional strings that read the same way.
 type planInput struct {
 	model, modelVersion, variant, release, namespace string
+	chartVersion                                     string
 	sets                                             []string
 	createNamespace                                  bool
 }
@@ -151,6 +158,17 @@ func buildPlan(ctx context.Context, in planInput) (*plan.Plan, error) {
 		return nil, err
 	}
 
+	spec, err := chart.ParseSpec(v.Chart.Version)
+	if err != nil {
+		return nil, err
+	}
+	chartVersion, err := chart.Resolve(ctx, spec, in.chartVersion, "", func(ctx context.Context) ([]string, error) {
+		return chart.Versions(ctx, prof.ChartRepo, prof.ChartPath, v.Chart.Name)
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	overrides := values.Tree{}
 	for _, s := range in.sets {
 		if s == "" {
@@ -172,6 +190,7 @@ func buildPlan(ctx context.Context, in planInput) (*plan.Plan, error) {
 		Ref:             cat.Ref,
 		Entry:           entry,
 		Variant:         v,
+		ChartVersion:    chartVersion,
 		Profile:         *prof,
 		Release:         release,
 		Namespace:       in.namespace,

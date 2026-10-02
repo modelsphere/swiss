@@ -63,12 +63,15 @@ type Release struct {
 type SourceRef struct {
 	Catalog string `json:"catalog,omitempty"`
 	// CatalogName is the site's name for that catalog, which is what an upgrade
-	// stays on. Absent from plans written before sites listed several catalogs,
+	// naming no other stays on. Absent from plans written before sites listed several catalogs,
 	// and from the CLI's, which has no names: such a release belongs to the
 	// catalog at its location, or else to the site's default.
 	CatalogName string `json:"catalogName,omitempty"`
 	Ref         string `json:"ref,omitempty"`
 	Model       string `json:"model"`
+	// HF is the model's identity across catalogs, which share model names but
+	// not necessarily weights. Absent from plans written before it was recorded.
+	HF string `json:"hf,omitempty"`
 	// Version is the model version this was composed from, and Digest the
 	// sha256 of that entry: together they are the lock. A recompose that cannot
 	// reproduce the digest is refused.
@@ -91,9 +94,10 @@ func (p *Plan) ComputeHash() error {
 	// The catalog's name is a label for the location beside it, which is
 	// hashed; nothing rendered depends on it. And a swissd older than the field
 	// drops it when reading the plan back, so hashing it would have that swissd
-	// refuse, as edited, every plan a newer one wrote.
+	// refuse, as edited, every plan a newer one wrote. HF likewise: model.localPath
+	// is what renders from it, and that is in the values.
 	src := p.Source
-	src.CatalogName = ""
+	src.CatalogName, src.HF = "", ""
 	payload := struct {
 		Release Release     `json:"release"`
 		Source  SourceRef   `json:"source"`
