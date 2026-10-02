@@ -15,9 +15,6 @@ under it.
   submodule.
 - `NOTICE` listing third-party components.
 
-### Changed
-- GitHub Actions pinned to commit SHAs.
-
 ### Fixed
 - The web UI is built from a console commit without the proprietary
   `@riseaicloud/ui` kit; images up to and including 0.6.1 embedded it.
