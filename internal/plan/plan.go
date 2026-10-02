@@ -69,6 +69,9 @@ type SourceRef struct {
 	CatalogName string `json:"catalogName,omitempty"`
 	Ref         string `json:"ref,omitempty"`
 	Model       string `json:"model"`
+	// HF is the model's identity across catalogs, which share model names but
+	// not necessarily weights. Absent from plans written before it was recorded.
+	HF string `json:"hf,omitempty"`
 	// Version is the model version this was composed from, and Digest the
 	// sha256 of that entry: together they are the lock. A recompose that cannot
 	// reproduce the digest is refused.
@@ -91,9 +94,10 @@ func (p *Plan) ComputeHash() error {
 	// The catalog's name is a label for the location beside it, which is
 	// hashed; nothing rendered depends on it. And a swissd older than the field
 	// drops it when reading the plan back, so hashing it would have that swissd
-	// refuse, as edited, every plan a newer one wrote.
+	// refuse, as edited, every plan a newer one wrote. HF likewise: model.localPath
+	// is what renders from it, and that is in the values.
 	src := p.Source
-	src.CatalogName = ""
+	src.CatalogName, src.HF = "", ""
 	payload := struct {
 		Release Release     `json:"release"`
 		Source  SourceRef   `json:"source"`

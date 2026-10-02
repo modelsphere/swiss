@@ -190,21 +190,30 @@ func TestUpgradeMovesOffACatalogThatIsGone(t *testing.T) {
 	}
 }
 
-// movedServer lists one catalog, "internal", at the full catalog checkout --
-// not the one doc's plan was composed from, which the site does not list.
+// movedServer lists "public" and "internal", both the full catalog checkout
+// (spelled two ways: a url may be listed once), and "dead", which refuses
+// connections. doc's plan names "default", which the
+// site does not list, unless a test rewrites it.
 func movedServer(t *testing.T, doc map[string]string) *Server {
 	t.Helper()
 	dir, err := filepath.Abs("../../../swiss-catalog")
 	if err != nil {
 		t.Fatal(err)
 	}
+	catalogs := "catalogs:\n  - name: public\n    url: " + dir + "\n  - name: internal\n    url: " + dir + "/index.json\n  - name: dead\n    url: http://127.0.0.1:1/\n"
 	probe := cluster.Fake{
 		Maps: map[string]map[string]string{
-			"swiss/site-profile": {"profile.yaml": profileYAML + "catalogs:\n  - name: internal\n    url: " + dir + "\n"},
+			"swiss/site-profile": {"profile.yaml": profileYAML + catalogs},
 		},
 		Rel: []cluster.Release{{Name: "r", Namespace: "ns", Status: "deployed", Revision: 1, SwissFiles: doc}},
 	}
 	return New(testConfig("c"), probe, discardLogger(), "test")
+}
+
+// rewrite edits the plan beside the release, as an older or a different deploy
+// would have written it.
+func rewrite(doc map[string]string, pairs ...string) {
+	doc[plan.MetaFile] = strings.NewReplacer(pairs...).Replace(doc[plan.MetaFile])
 }
 
 // The composed plan records the catalog it moved to, under the same model.
@@ -303,6 +312,75 @@ func TestDeploymentsCompareWithTheirOwnCatalog(t *testing.T) {
 		// Two catalogs: no single ref describes the page.
 		if body["catalogRef"] != "" {
 			t.Errorf("%s: catalogRef = %v, want empty with several catalogs", name, body["catalogRef"])
+		}
+	}
+}
+
+// Model ids are only unique within a catalog: the same name with other weights
+// behind it is another model, and is not moved onto the release's route.
+func TestUpgradeAcrossCatalogsRefusesAnotherModel(t *testing.T) {
+	_, doc := livePlan(t, planRequest{Model: "qwen3.6-35b-a3b", Release: "r", ServiceID: "r"})
+	rewrite(doc, "hf: Qwen/Qwen3.6-35B-A3B", "hf: org/other")
+	s := movedServer(t, doc)
+	if _, err := s.compose(t.Context(), planRequest{FromRelease: "r", Namespace: "ns", Catalog: "internal"}); err == nil ||
+		!strings.Contains(err.Error(), "different model") {
+		t.Errorf("got %v, want a refusal naming the different model", err)
+	}
+}
+
+func TestUpgradeAcrossCatalogsRefusesAnotherEngine(t *testing.T) {
+	_, doc := livePlan(t, planRequest{Model: "qwen3.6-35b-a3b", Release: "r", ServiceID: "r"})
+	rewrite(doc, "\nengine: sglang\n", "\nengine: vllm\n")
+	s := movedServer(t, doc)
+	if _, err := s.compose(t.Context(), planRequest{FromRelease: "r", Namespace: "ns", Catalog: "internal"}); err == nil ||
+		!strings.Contains(err.Error(), "runs on sglang there, not vllm") {
+		t.Errorf("got %v, want a refusal naming the engines", err)
+	}
+}
+
+// A plan from before plans recorded hf takes it from its own catalog, found by
+// name or by location.
+func TestUpgradeAcrossCatalogsOfAnOldPlanAsksItsOwnCatalog(t *testing.T) {
+	for name, pairs := range map[string][]string{
+		"by name":     {"catalogName: default", "catalogName: public"},
+		"by location": {"    catalogName: default\n", ""},
+	} {
+		_, doc := livePlan(t, planRequest{Model: "qwen3.6-35b-a3b", Release: "r", ServiceID: "r"})
+		rewrite(doc, append(pairs, "    hf: Qwen/Qwen3.6-35B-A3B\n", "")...)
+		if strings.Contains(doc[plan.MetaFile], "hf:") {
+			t.Fatal("fixture still records hf")
+		}
+		s := movedServer(t, doc)
+		p, err := s.compose(t.Context(), planRequest{FromRelease: "r", Namespace: "ns", Catalog: "internal"})
+		if err != nil || p.Source.HF != "Qwen/Qwen3.6-35B-A3B" {
+			t.Errorf("%s: got %v; want the move, recording hf", name, err)
+		}
+	}
+}
+
+// When its own catalog cannot say -- unlisted, or down -- an old plan is not
+// moved: there is nothing to tell the two models apart by.
+func TestUpgradeAcrossCatalogsOfAnOldPlanWithoutItsCatalogIsRefused(t *testing.T) {
+	for _, own := range []string{"gone", "dead"} {
+		_, doc := livePlan(t, planRequest{Model: "qwen3.6-35b-a3b", Release: "r", ServiceID: "r"})
+		rewrite(doc, "catalogName: default", "catalogName: "+own, "    hf: Qwen/Qwen3.6-35B-A3B\n", "")
+		s := movedServer(t, doc)
+		if _, err := s.compose(t.Context(), planRequest{FromRelease: "r", Namespace: "ns", Catalog: "internal"}); err == nil ||
+			!strings.Contains(err.Error(), "predates recording the model's HF repo") {
+			t.Errorf("%s: got %v, want a refusal", own, err)
+		}
+	}
+}
+
+// Staying on its catalog, an old plan upgrades as it always did: no hf needed.
+func TestUpgradeOfAnOldPlanOnItsOwnCatalogNeedsNoHF(t *testing.T) {
+	for _, target := range []string{"", "public"} {
+		_, doc := livePlan(t, planRequest{Model: "qwen3.6-35b-a3b", Release: "r", ServiceID: "r"})
+		rewrite(doc, "catalogName: default", "catalogName: public", "    hf: Qwen/Qwen3.6-35B-A3B\n", "")
+		s := movedServer(t, doc)
+		out, err := s.carryForward(t.Context(), planRequest{FromRelease: "r", Namespace: "ns", Catalog: target})
+		if err != nil || out.movedFrom != nil {
+			t.Errorf("catalog %q: got %v, moved %v; want an upgrade in place", target, err, out.movedFrom != nil)
 		}
 	}
 }

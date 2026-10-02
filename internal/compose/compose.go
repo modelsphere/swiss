@@ -113,6 +113,7 @@ func Compose(in Input) (*plan.Plan, error) {
 			CatalogName: in.CatalogName,
 			Ref:         in.Ref,
 			Model:       in.Entry.Name,
+			HF:          in.Entry.Source.HF,
 			Version:     in.Entry.Version,
 			Digest:      in.Entry.Digest,
 			Variant:     in.Variant.ID,

@@ -64,8 +64,9 @@ type planRequest struct {
 	// chart.Resolve does.
 	ChartVersion string `json:"chartVersion,omitempty"`
 
-	// runningChart is set by carryForward, never by the caller.
+	// Set by carryForward, never by the caller.
 	runningChart plan.ChartRef
+	movedFrom    *plan.Plan
 }
 
 type applyRequest struct {
@@ -143,6 +144,11 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 	}
 	if err != nil {
 		return nil, err
+	}
+	if req.movedFrom != nil {
+		if err := s.checkMove(ctx, req.movedFrom, repo.Name, entry, v); err != nil {
+			return nil, err
+		}
 	}
 	prof, err := s.Profile(ctx)
 	if err != nil {
@@ -245,19 +251,19 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 	// Release and namespace come from the previous plan and are not overridable.
 	// They identify the release being upgraded; changing them does not rename
 	// anything, it installs a second release beside the first.
-	// An upgrade composes from the catalog the request names, which may be
-	// another one than the release came from: the model id is what carries
-	// across, and the target catalog has to have it, and the variant, itself.
-	// Naming none stays on the release's own catalog. Only that case looks the
-	// old catalog up -- the plan already records everything about it, so a
-	// release can move off a catalog the site no longer lists.
+	// Naming no catalog stays on the release's own; naming another moves it
+	// there, gated in compose by checkMove once the target entry is known.
+	own, ownErr := s.ReleaseCatalog(ctx, prev.Source.CatalogName, prev.Source.Catalog)
 	catalogName := req.Catalog
-	if catalogName == "" {
-		repo, err := s.ReleaseCatalog(ctx, prev.Source.CatalogName, prev.Source.Catalog)
-		if err != nil {
-			return req, fmt.Errorf("cannot upgrade %s: %w", prev.Release.Name, err)
+	var movedFrom *plan.Plan
+	switch {
+	case catalogName == "":
+		if ownErr != nil {
+			return req, fmt.Errorf("cannot upgrade %s: %w", prev.Release.Name, ownErr)
 		}
-		catalogName = repo.Name
+		catalogName = own.Name
+	case ownErr != nil || own.Name != catalogName:
+		movedFrom = prev
 	}
 	out := planRequest{
 		Catalog:      catalogName,
@@ -269,6 +275,7 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 		Overrides:    prev.Layers[values.LayerForm],
 		ChartVersion: req.ChartVersion,
 		runningChart: prev.Chart,
+		movedFrom:    movedFrom,
 	}
 	if req.Variant != "" {
 		out.Variant = req.Variant
@@ -307,6 +314,55 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 		out.GPUProducts = req.GPUProducts
 	}
 	return out, nil
+}
+
+// checkMove refuses a cross-catalog upgrade that would put another model, or the
+// same one on another engine, behind the release's existing serviceId and route.
+// Model ids are only unique within a catalog; HF is the identity across them.
+func (s *Server) checkMove(ctx context.Context, prev *plan.Plan, to string, entry catalog.Entry, v catalog.Variant) error {
+	refuse := func(format string, args ...any) error {
+		return fmt.Errorf("cannot move %s to catalog %q: %s -- deploy a new release instead", prev.Release.Name, to, fmt.Sprintf(format, args...))
+	}
+	hf := prev.Source.HF
+	if hf == "" {
+		var err error
+		if hf, err = s.recordedHF(ctx, prev); err != nil {
+			return refuse("its plan predates recording the model's HF repo, and its own catalog could not supply it (%v)", err)
+		}
+	}
+	if entry.Source.HF != hf {
+		return refuse("%s there is %s, not %s, so it is a different model", entry.Name, entry.Source.HF, hf)
+	}
+	if v.Engine != prev.Engine {
+		return refuse("variant %s runs on %s there, not %s", v.ID, v.Engine, prev.Engine)
+	}
+	return nil
+}
+
+// recordedHF reads the HF repo of a plan written before plans recorded it, from
+// the catalog the plan names or sits at -- never the default, which may be
+// another catalog with the same model name. Best effort, and bounded so a dead
+// catalog costs a refusal rather than the request's whole timeout.
+func (s *Server) recordedHF(ctx context.Context, prev *plan.Plan) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	name := prev.Source.CatalogName
+	if name == "" {
+		repo, ok := s.CatalogFrom(ctx, prev.Source.Catalog)
+		if !ok {
+			return "", fmt.Errorf("the site lists no catalog at %s", prev.Source.Catalog)
+		}
+		name = repo.Name
+	}
+	cat, _, err := s.Catalog(ctx, name)
+	if err != nil {
+		return "", err
+	}
+	m, ok := cat.Index.Model(prev.Source.Model)
+	if !ok || m.Source.HF == "" {
+		return "", fmt.Errorf("catalog %q has no %s", name, prev.Source.Model)
+	}
+	return m.Source.HF, nil
 }
 
 // serviceIDOf is the identity a release is deployed under. Read from the
