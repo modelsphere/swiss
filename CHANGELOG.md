@@ -22,6 +22,8 @@ under it.
 - The web UI is built from a console commit without the proprietary
   `@riseaicloud/ui` kit; images up to and including 0.6.1 embedded it.
 - Server tests updated for the catalog's renamed `qwen3.6-35b-a3b` variant.
+- `examples/site-prod.yaml` parses again (it still set `createNamespace`,
+  which moved to the deploy request).
 
 ## [0.6.1] - 2026-10-02
 
