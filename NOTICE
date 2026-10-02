@@ -1,0 +1,27 @@
+swiss
+Copyright (c) 2026 the ModelSphere authors
+
+Licensed under the Apache License, Version 2.0. See LICENSE.
+
+This product includes software developed by third parties. Their licenses apply
+to their own code, not to this project's.
+
+Go (compiled into swiss and swissd)
+  Kubernetes client-go, api,
+  apimachinery ...................... Apache-2.0
+  spf13/cobra ....................... Apache-2.0
+  gopkg.in/yaml.v3 .................. MIT / Apache-2.0
+  modernc.org/sqlite ................ BSD-3-Clause (SQLite itself: public domain)
+
+Web UI (embedded into swissd)
+  Built from modelsphere/console's web/ at the commit pinned by the web/console
+  submodule (Apache-2.0). Its third-party components are listed in that
+  repository's NOTICE.
+
+Tools shipped in the swissd image
+  Helm .............................. Apache-2.0
+  helmfile .......................... MIT
+  helm-diff ......................... Apache-2.0
+
+Container base image
+  gcr.io/distroless/static-debian12 — see the image's own licenses.
