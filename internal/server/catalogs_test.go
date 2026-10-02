@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -153,7 +154,8 @@ func TestPlansRecordTheCatalogName(t *testing.T) {
 	}
 }
 
-// An upgrade stays on the catalog its plan names, whatever the default is.
+// An upgrade naming no catalog stays on the one its plan names, whatever the
+// default is.
 func TestUpgradeStaysOnItsNamedCatalog(t *testing.T) {
 	_, s, _, _ := twoCatalogs(t, "internal", func(a, _ string) []cluster.Release {
 		return []cluster.Release{deployedFrom(catalogSource(a), "public", "sha256:old")}
@@ -161,9 +163,72 @@ func TestUpgradeStaysOnItsNamedCatalog(t *testing.T) {
 	if got, err := upgradeCatalog(t, s); err != nil || got != "public" {
 		t.Errorf("got %q, %v; want the named catalog, public", got, err)
 	}
-	if _, err := s.carryForward(t.Context(), planRequest{FromRelease: "r", Namespace: "ns", Catalog: "internal"}); err == nil ||
-		!strings.Contains(err.Error(), "stays on it") {
-		t.Errorf("moving a release to another catalog must be refused: %v", err)
+}
+
+// An upgrade naming another catalog moves the release there, carrying the
+// model id and the variant over unchanged.
+func TestUpgradeMovesToTheNamedCatalog(t *testing.T) {
+	_, s, _, _ := twoCatalogs(t, "", func(a, _ string) []cluster.Release {
+		return []cluster.Release{deployedFrom(catalogSource(a), "public", "sha256:old")}
+	})
+	out, err := s.carryForward(t.Context(), planRequest{FromRelease: "r", Namespace: "ns", Catalog: "internal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Catalog != "internal" || out.Model != "m" || out.Variant != "v" {
+		t.Errorf("got catalog %q model %q variant %q; want internal, m, v", out.Catalog, out.Model, out.Variant)
+	}
+}
+
+// Moving needs only the target catalog: the plan records everything about the
+// old one, so a release can leave a catalog the site no longer lists.
+func TestUpgradeMovesOffACatalogThatIsGone(t *testing.T) {
+	_, s, _, _ := twoCatalogs(t, "", releases(deployedFrom("https://gone.example.com/index.json", "archived", "sha256:old")))
+	out, err := s.carryForward(t.Context(), planRequest{FromRelease: "r", Namespace: "ns", Catalog: "public"})
+	if err != nil || out.Catalog != "public" {
+		t.Errorf("got %q, %v; want public", out.Catalog, err)
+	}
+}
+
+// movedServer lists one catalog, "internal", at the full catalog checkout --
+// not the one doc's plan was composed from, which the site does not list.
+func movedServer(t *testing.T, doc map[string]string) *Server {
+	t.Helper()
+	dir, err := filepath.Abs("../../../swiss-catalog")
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe := cluster.Fake{
+		Maps: map[string]map[string]string{
+			"swiss/site-profile": {"profile.yaml": profileYAML + "catalogs:\n  - name: internal\n    url: " + dir + "\n"},
+		},
+		Rel: []cluster.Release{{Name: "r", Namespace: "ns", Status: "deployed", Revision: 1, SwissFiles: doc}},
+	}
+	return New(testConfig("c"), probe, discardLogger(), "test")
+}
+
+// The composed plan records the catalog it moved to, under the same model.
+func TestUpgradeAcrossCatalogsRecordsTheNewOne(t *testing.T) {
+	prev, doc := livePlan(t, planRequest{Model: "qwen3.6-35b-a3b", Release: "r", ServiceID: "r"})
+	s := movedServer(t, doc)
+	p, err := s.compose(t.Context(), planRequest{FromRelease: "r", Namespace: "ns", Catalog: "internal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Source.CatalogName != "internal" || p.Source.Model != prev.Source.Model || p.Source.Variant != prev.Source.Variant {
+		t.Errorf("source = %+v; want catalog internal, model %s, variant %s", p.Source, prev.Source.Model, prev.Source.Variant)
+	}
+}
+
+// The target catalog must have the release's variant: the same model id is no
+// promise of the same variants, and a different one is a different deploy.
+func TestUpgradeAcrossCatalogsNeedsTheVariant(t *testing.T) {
+	prev, doc := livePlan(t, planRequest{Model: "qwen3.6-35b-a3b", Release: "r", ServiceID: "r"})
+	doc[plan.MetaFile] = strings.Replace(doc[plan.MetaFile], "variant: "+prev.Source.Variant, "variant: gone", 1)
+	s := movedServer(t, doc)
+	if _, err := s.compose(t.Context(), planRequest{FromRelease: "r", Namespace: "ns", Catalog: "internal"}); err == nil ||
+		!strings.Contains(err.Error(), `no variant "gone"`) {
+		t.Errorf("got %v, want a refusal naming the missing variant", err)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/modelsphere/swiss/internal/chart"
 	"github.com/modelsphere/swiss/internal/values"
 	"gopkg.in/yaml.v3"
 )
@@ -188,6 +189,10 @@ func (e Entry) Validate() error {
 		}
 		if v.Chart.Version == "" {
 			return fmt.Errorf("%s: chart.version is required -- an unpinned chart is not a reproducible deploy", where)
+		}
+		// A range is fine: the plan records the one version it resolved to.
+		if _, err := chart.ParseSpec(v.Chart.Version); err != nil {
+			return fmt.Errorf("%s: %w", where, err)
 		}
 		if v.Requires.GPUs < 1 {
 			return fmt.Errorf("%s: requires.gpus must be at least 1", where)

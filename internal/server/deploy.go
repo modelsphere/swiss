@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/modelsphere/swiss/internal/catalog"
+	"github.com/modelsphere/swiss/internal/chart"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"github.com/modelsphere/swiss/internal/cluster"
@@ -27,7 +29,8 @@ type planRequest struct {
 	// form layer, the model and the variant, and only the catalog layer moves.
 	FromRelease string `json:"fromRelease,omitempty"`
 	// Catalog names the configured catalog to compose from. Required when the
-	// site lists several; an upgrade stays on the one its release came from.
+	// site lists several. An upgrade naming none stays on the one its release
+	// came from; naming another moves the release there, same model id.
 	Catalog   string `json:"catalog,omitempty"`
 	Model     string `json:"model"`
 	Version   string `json:"version,omitempty"`
@@ -57,6 +60,12 @@ type planRequest struct {
 	// of the site profile's own setting. helm is what creates the namespace;
 	// this is where the plan says so.
 	CreateNamespace bool `json:"createNamespace,omitempty"`
+	// ChartVersion must fall in the variant's chart.version. Empty resolves as
+	// chart.Resolve does.
+	ChartVersion string `json:"chartVersion,omitempty"`
+
+	// runningChart is set by carryForward, never by the caller.
+	runningChart plan.ChartRef
 }
 
 type applyRequest struct {
@@ -92,7 +101,11 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	}
 	p, err := s.compose(ctx, req)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		code := http.StatusBadRequest
+		if errors.As(err, new(*chart.ListError)) {
+			code = http.StatusBadGateway
+		}
+		writeError(w, code, err.Error())
 		return
 	}
 	if s.store != nil {
@@ -132,6 +145,10 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 		return nil, err
 	}
 	prof, err := s.Profile(ctx)
+	if err != nil {
+		return nil, err
+	}
+	chartVersion, err := s.resolveChart(ctx, prof, v.Chart, req.ChartVersion, req.runningChart)
 	if err != nil {
 		return nil, err
 	}
@@ -207,6 +224,7 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 		Ref:             cat.Ref,
 		Entry:           entry,
 		Variant:         v,
+		ChartVersion:    chartVersion,
 		Profile:         *prof,
 		Release:         release,
 		Namespace:       req.Namespace,
@@ -227,25 +245,30 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 	// Release and namespace come from the previous plan and are not overridable.
 	// They identify the release being upgraded; changing them does not rename
 	// anything, it installs a second release beside the first.
-	// An upgrade composes from the catalog the release belongs to: that is
-	// where its model name and versions mean what the release says they mean.
-	// Moving a release to another catalog is a new deploy.
-	repo, err := s.ReleaseCatalog(ctx, prev.Source.CatalogName, prev.Source.Catalog)
-	if err != nil {
-		return req, fmt.Errorf("cannot upgrade %s: %w", prev.Release.Name, err)
-	}
-	if req.Catalog != "" && req.Catalog != repo.Name {
-		return req, fmt.Errorf("%s belongs to catalog %q and an upgrade stays on it, not %q -- deploy a new release to use another catalog",
-			prev.Release.Name, repo.Name, req.Catalog)
+	// An upgrade composes from the catalog the request names, which may be
+	// another one than the release came from: the model id is what carries
+	// across, and the target catalog has to have it, and the variant, itself.
+	// Naming none stays on the release's own catalog. Only that case looks the
+	// old catalog up -- the plan already records everything about it, so a
+	// release can move off a catalog the site no longer lists.
+	catalogName := req.Catalog
+	if catalogName == "" {
+		repo, err := s.ReleaseCatalog(ctx, prev.Source.CatalogName, prev.Source.Catalog)
+		if err != nil {
+			return req, fmt.Errorf("cannot upgrade %s: %w", prev.Release.Name, err)
+		}
+		catalogName = repo.Name
 	}
 	out := planRequest{
-		Catalog:   repo.Name,
-		Model:     prev.Source.Model,
-		Version:   req.Version,
-		Variant:   prev.Source.Variant,
-		Release:   prev.Release.Name,
-		Namespace: prev.Release.Namespace,
-		Overrides: prev.Layers[values.LayerForm],
+		Catalog:      catalogName,
+		Model:        prev.Source.Model,
+		Version:      req.Version,
+		Variant:      prev.Source.Variant,
+		Release:      prev.Release.Name,
+		Namespace:    prev.Release.Namespace,
+		Overrides:    prev.Layers[values.LayerForm],
+		ChartVersion: req.ChartVersion,
+		runningChart: prev.Chart,
 	}
 	if req.Variant != "" {
 		out.Variant = req.Variant

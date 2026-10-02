@@ -51,7 +51,10 @@ type Server struct {
 	// cats is every catalog opened so far, by location. Keyed on the location
 	// rather than the name, so a profile that repoints a name opens the new
 	// catalog instead of serving the old one for the rest of the TTL.
-	cats      map[string]openCatalog
+	cats map[string]openCatalog
+	// charts is what each chart source held of each chart, for resolving a
+	// catalog's version range without reading the registry on every plan.
+	charts    map[string]chartListing
 	profile   *site.Profile
 	profileAt time.Time
 }
@@ -70,6 +73,7 @@ func New(cfg *config.Config, probe cluster.Probe, log *slog.Logger, version stri
 		namespace: cluster.SelfNamespace(),
 		catCache:  catalog.NewCache(cfg.Server.CatalogCacheDir()),
 		cats:      map[string]openCatalog{},
+		charts:    map[string]chartListing{},
 	}
 }
 
@@ -329,6 +333,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/sites", s.handleSites)
 	mux.HandleFunc("GET /api/catalog", s.handleCatalog)
 	mux.HandleFunc("GET /api/catalog/{model}", s.handleCatalogModel)
+	mux.HandleFunc("GET /api/catalog/{model}/chart-versions", s.handleChartVersions)
 	mux.HandleFunc("GET /api/deployments", s.handleDeployments)
 	mux.HandleFunc("GET /api/nodes", s.handleNodes)
 	mux.HandleFunc("GET /api/profile", s.handleProfile)

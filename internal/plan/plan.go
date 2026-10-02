@@ -63,7 +63,7 @@ type Release struct {
 type SourceRef struct {
 	Catalog string `json:"catalog,omitempty"`
 	// CatalogName is the site's name for that catalog, which is what an upgrade
-	// stays on. Absent from plans written before sites listed several catalogs,
+	// naming no other stays on. Absent from plans written before sites listed several catalogs,
 	// and from the CLI's, which has no names: such a release belongs to the
 	// catalog at its location, or else to the site's default.
 	CatalogName string `json:"catalogName,omitempty"`
