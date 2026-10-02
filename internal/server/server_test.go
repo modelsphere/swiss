@@ -145,7 +145,7 @@ func TestCatalogModelEndpointResolvesTheMirroredImage(t *testing.T) {
 	if !ok {
 		t.Fatalf("no imageRepository: %v", body)
 	}
-	if images["sglang-tp2"] != "registry.internal/mirror/sglang" {
+	if images["sglang-tp2-h100"] != "registry.internal/mirror/sglang" {
 		t.Fatalf("mirror not applied: %v", images)
 	}
 }
@@ -157,7 +157,7 @@ func TestDeploymentsOmitUntrackedReleases(t *testing.T) {
 	probe.Rel = []cluster.Release{
 		{Name: "by-hand", Namespace: "models", Chart: "sglang-0.8.0", Status: "deployed", Revision: 1},
 		{Name: "glm-53", Namespace: "models", Chart: "sglang-0.8.0", Status: "deployed", Revision: 4,
-			SwissFiles: map[string]string{"plan.yaml": "source:\n  model: qwen3.6-35b-a3b\n  variant: sglang-tp2\n  ref: sha256:stale\nprofile: prod\n"}},
+			SwissFiles: map[string]string{"plan.yaml": "source:\n  model: qwen3.6-35b-a3b\n  variant: sglang-tp2-h100\n  ref: sha256:stale\nprofile: prod\n"}},
 	}
 	srv := testServer(t, probe)
 	code, body := get(t, srv, "/api/deployments")
