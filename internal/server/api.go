@@ -425,10 +425,7 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 			for _, p := range pods {
 				used += p.GPUs
 			}
-			free := n.GPUs - used
-			if free < 0 {
-				free = 0
-			}
+			free := max(n.GPUs-used, 0)
 			v.Used, v.Free, v.Pods = &used, &free, pods
 			usedGPUs += used
 		}
@@ -509,21 +506,19 @@ func (s *Server) handleDeployments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Each release is compared with the catalog it belongs to, as that catalog
-	// reads now: its ref, by name.
+	// reads now: its ref, by name. The entry digest is not compared here; that
+	// is one catalog read per release, and this page is a list.
 	repos, _ := s.Catalogs(ctx)
 	current := map[string]string{}
-	for _, r := range repos {
-		if c, err := s.openCatalog(ctx, r.URL); err == nil {
-			current[r.Name] = c.Ref
+	for _, repo := range repos {
+		if c, err := s.openCatalog(ctx, repo.URL); err == nil {
+			current[repo.Name] = c.Ref
 		}
 	}
 
 	total := len(refs)
 	page, perPage := pageParams(r)
-	from := (page - 1) * perPage
-	if from > total {
-		from = total
-	}
+	from := min((page-1)*perPage, total)
 	to := min(from+perPage, total)
 	window := refs[from:to]
 
@@ -533,9 +528,7 @@ func (s *Server) handleDeployments(w http.ResponseWriter, r *http.Request) {
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, deployFanout)
 	for i, ref := range window {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			rel, err := s.probe.Release(ctx, ref.Namespace, ref.Name)
@@ -558,7 +551,7 @@ func (s *Server) handleDeployments(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			rows[i] = s.deploymentRow(ctx, *rel)
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -633,6 +626,30 @@ func (s *Server) deploymentRow(ctx context.Context, rel cluster.Release) *deploy
 		d.Drift = "plan unreadable: " + err.Error()
 	}
 	return d
+}
+
+// digestDrift is the warning for a version that was rewritten in place: the
+// catalog still lists that version and variant, under a different entry digest
+// than the one this release was composed from. Empty when there is nothing to
+// say, including a plan that predates recording a digest.
+func digestDrift(idx *catalog.Index, model, version, variant, pinned string) string {
+	if idx == nil || model == "" || version == "" || variant == "" || pinned == "" {
+		return ""
+	}
+	m, ok := idx.Model(model)
+	if !ok {
+		return ""
+	}
+	iv, err := m.Version(version)
+	if err != nil || iv.Digest == "" || iv.Digest == pinned {
+		return ""
+	}
+	for _, v := range iv.Variants {
+		if v.ID == variant {
+			return fmt.Sprintf("version %s variant %s: upstream digest changed since this was deployed", version, variant)
+		}
+	}
+	return ""
 }
 
 // pageParams reads page and perPage, clamped. Anything unparseable is the

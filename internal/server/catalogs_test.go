@@ -1,13 +1,18 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/modelsphere/swiss/internal/cluster"
 	"github.com/modelsphere/swiss/internal/plan"
+	"github.com/modelsphere/swiss/internal/store"
 )
 
 // twoCatalogs is a server whose profile lists two catalogs, "public" at a and
@@ -314,6 +319,156 @@ func TestDeploymentsCompareWithTheirOwnCatalog(t *testing.T) {
 			t.Errorf("%s: catalogRef = %v, want empty with several catalogs", name, body["catalogRef"])
 		}
 	}
+}
+
+// A catalog that republishes the same version and variant under a new entry
+// digest is drift on that release's status, not on the deployments list. An
+// upgrade of that version is still accepted and records the digest the catalog
+// publishes now.
+func TestRepublishedVersionIsDriftAndStillUpgrades(t *testing.T) {
+	dir, digest := miniCatalog(t)
+	cfg := testConfig("c")
+	cfg.Catalog = dir
+	composed, err := New(cfg, fakeProbe(), discardLogger(), "test").compose(t.Context(), planRequest{
+		Model: "m", Version: "1.0.0", Variant: "v", Release: "r", ServiceID: "r",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if composed.Source.Digest != digest || composed.Source.Version != "1.0.0" || composed.Source.Variant != "v" {
+		t.Fatalf("composed %+v, catalog digest %s", composed.Source, digest)
+	}
+	files, err := composed.Files("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files[plan.MetaFile] = strings.NewReplacer(
+		digest, "sha256:old",
+		composed.Source.Ref, "sha256:stale",
+	).Replace(files[plan.MetaFile])
+
+	probe := fakeProbe()
+	probe.Rel = []cluster.Release{
+		{Name: "r", Namespace: "models", Status: "deployed", Revision: 1, SwissFiles: files},
+		{Name: "same", Namespace: "models", Status: "deployed", Revision: 1, SwissFiles: map[string]string{
+			plan.MetaFile: pinnedMeta("same", digest, "v"),
+		}},
+		{Name: "gone", Namespace: "models", Status: "deployed", Revision: 1, SwissFiles: map[string]string{
+			plan.MetaFile: pinnedMeta("gone", "sha256:old", "missing"),
+		}},
+	}
+	srv := serveCatalog(t, dir, probe, true)
+
+	_, body := get(t, srv, "/api/deployments")
+	rows, _ := body["deployments"].([]any)
+	for _, raw := range rows {
+		row := raw.(map[string]any)
+		if strings.Contains(fmt.Sprint(row["drift"]), "upstream digest") {
+			t.Errorf("list row %v reports an entry digest; that check is per release", row["release"])
+		}
+	}
+
+	const want = "version 1.0.0 variant v: upstream digest changed since this was deployed"
+	_, st := get(t, srv, "/api/releases/models/r/status")
+	if st["drift"] != want {
+		t.Errorf("status drift = %q, want %q", st["drift"], want)
+	}
+	if _, same := get(t, srv, "/api/releases/models/same/status"); same["drift"] != nil {
+		t.Errorf("unchanged entry status drift = %v, want none", same["drift"])
+	}
+	if _, gone := get(t, srv, "/api/releases/models/gone/status"); gone["drift"] != nil {
+		t.Errorf("missing variant status drift = %v, want none", gone["drift"])
+	}
+
+	code, up := post(t, srv, "/api/plans", map[string]any{"fromRelease": "r", "version": "1.0.0"})
+	if code != 200 {
+		t.Fatalf("upgrade status %d: %v", code, up)
+	}
+	src := up["source"].(map[string]any)
+	if src["version"] != "1.0.0" || src["variant"] != "v" || src["digest"] != digest {
+		t.Fatalf("upgrade source = %v, want version 1.0.0 variant v digest %s", src, digest)
+	}
+}
+
+func pinnedMeta(name, digest, variant string) string {
+	return fmt.Sprintf(`source:
+  catalogName: default
+  model: m
+  version: "1.0.0"
+  variant: %s
+  digest: %s
+  ref: sha256:stale
+release:
+  name: %s
+  namespace: models
+`, variant, digest, name)
+}
+
+// miniCatalog is one model, one version, one variant, with the entry digest the
+// index publishes matching the file. digest is that digest.
+func miniCatalog(t *testing.T) (dir, digest string) {
+	t.Helper()
+	const entry = `apiVersion: catalog.swiss/v1
+name: m
+version: "1.0.0"
+variants:
+  - id: v
+    engine: sglang
+    chart: {name: sglang, version: "0.8.0"}
+    requires: {gpus: 1}
+`
+	sum := sha256.Sum256([]byte(entry))
+	digest = "sha256:" + hex.EncodeToString(sum[:])
+	dir = t.TempDir()
+	modelDir := filepath.Join(dir, "models", "m")
+	if err := os.MkdirAll(modelDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(modelDir, "m-1.0.0.yaml"), []byte(entry), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	index := fmt.Sprintf(`{
+	  "apiVersion": "catalog.swiss/v1",
+	  "count": 1,
+	  "models": [{
+	    "name": "m",
+	    "source": {"hf": "org/m"},
+	    "latest": "1.0.0",
+	    "versions": [{
+	      "version": "1.0.0",
+	      "path": "models/m/m-1.0.0.yaml",
+	      "digest": %q,
+	      "variants": [{"id": "v", "engine": "sglang", "chart": {"name": "sglang", "version": "0.8.0"}, "requires": {"gpus": 1}}]
+	    }]
+	  }]
+	}`, digest)
+	if err := os.WriteFile(filepath.Join(dir, "index.json"), []byte(index), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dir, digest
+}
+
+func serveCatalog(t *testing.T, dir string, probe cluster.Probe, allow bool) *httptest.Server {
+	t.Helper()
+	cfg := testConfig("c")
+	cfg.Catalog = dir
+	cfg.Server.AllowDeploy = allow
+	if err := cfg.ValidateServer(); err != nil {
+		t.Fatal(err)
+	}
+	s := New(cfg, probe, discardLogger(), "test")
+	if allow {
+		db, err := store.Open(filepath.Join(t.TempDir(), "swiss.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { db.Close() })
+		s.SetStore(db)
+		s.SetWriter(&fakeWriter{})
+	}
+	srv := httptest.NewServer(s.Handler())
+	t.Cleanup(srv.Close)
+	return srv
 }
 
 // Model ids are only unique within a catalog: the same name with other weights

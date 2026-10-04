@@ -73,8 +73,9 @@ type SourceRef struct {
 	// not necessarily weights. Absent from plans written before it was recorded.
 	HF string `json:"hf,omitempty"`
 	// Version is the model version this was composed from, and Digest the
-	// sha256 of that entry: together they are the lock. A recompose that cannot
-	// reproduce the digest is refused.
+	// sha256 of that entry as published then. A catalog that republishes the
+	// same version and variant under a different digest is reported on that
+	// release's status, not a reason to refuse the upgrade.
 	Version string `json:"version,omitempty"`
 	Digest  string `json:"digest,omitempty"`
 	Variant string `json:"variant"`

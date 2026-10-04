@@ -38,6 +38,10 @@ type releaseStatus struct {
 	AuthHeader string `json:"authHeader,omitempty"`
 	AuthPrefix string `json:"authPrefix"`
 	Warning    string `json:"warning,omitempty"`
+	// Drift is set when the catalog republished the version and variant this
+	// release runs, under a different entry digest. A warning: upgrade is
+	// still accepted. Computed here, for one release, and not on the list.
+	Drift string `json:"drift,omitempty"`
 	// Plan is the status key written beside the release on every apply. It is
 	// the only thing that can say an apply was started and never finished --
 	// helm's own status describes the last apply that returned.
@@ -74,6 +78,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		selector = fmt.Sprintf("app=%s-%s", release, p.Engine)
 		out.Route = routeOf(p)
 		out.Model = servedName(p)
+		out.Drift = s.releaseDigestDrift(ctx, p)
 		if prof, err := s.Profile(ctx); err == nil {
 			out.URL = prof.Route.ModelURL(out.Route)
 			out.AuthHeader = prof.Route.Auth.HeaderName()
@@ -92,6 +97,22 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// releaseDigestDrift compares the digest this release pinned with the digest
+// its catalog now publishes for that same version and variant. A catalog that
+// cannot be read leaves the warning empty: status is polled, and a dead
+// catalog must not fail the page.
+func (s *Server) releaseDigestDrift(ctx context.Context, p *plan.Plan) string {
+	repo, err := s.ReleaseCatalog(ctx, p.Source.CatalogName, p.Source.Catalog)
+	if err != nil {
+		return ""
+	}
+	cat, err := s.openCatalog(ctx, repo.URL)
+	if err != nil {
+		return ""
+	}
+	return digestDrift(cat.Index, p.Source.Model, p.Source.Version, p.Source.Variant, p.Source.Digest)
 }
 
 // entrypointAuth is the per-request half of the entrypoint credentials: an
