@@ -7,6 +7,12 @@ updates:
     groups:
       k8s:
         patterns: ["k8s.io/*", "sigs.k8s.io/*"]
+    # Hold k8s libs at the current minor (0.36): client-go is only guaranteed
+    # against a cluster of its own minor, our target clusters are 1.36 or
+    # older, and this keeps us matched to llm-operator. Patches still flow.
+    ignore:
+      - dependency-name: "k8s.io/*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
     commit-message:
       prefix: "chore(deps)"
 
