@@ -47,8 +47,12 @@ type planRequest struct {
 	// which will do. Named here rather than left to Overrides because the node
 	// label they match on depends on the variant's vendor, which is the
 	// catalog's business and not the form's.
-	GPUProducts []string    `json:"gpuProducts,omitempty"`
-	Overrides   values.Tree `json:"overrides,omitempty"`
+	GPUProducts []string `json:"gpuProducts,omitempty"`
+	// ForceGPUProducts accepts gpuProducts the variant's catalog entry does not
+	// list, provided each one is on this cluster under the variant's vendor.
+	// The variant's GPU count, image and values are used unchanged.
+	ForceGPUProducts bool        `json:"forceGpuProducts,omitempty"`
+	Overrides        values.Tree `json:"overrides,omitempty"`
 	// OverridesYAML is the advanced section: a values fragment typed by hand.
 	// Parsed here rather than in the browser so there is one parser, and the
 	// ownership check still decides what it may contain.
@@ -103,7 +107,7 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	p, err := s.compose(ctx, req)
 	if err != nil {
 		code := http.StatusBadRequest
-		if errors.As(err, new(*chart.ListError)) {
+		if errors.As(err, new(*chart.ListError)) || errors.As(err, new(*gpuInventoryError)) {
 			code = http.StatusBadGateway
 		}
 		writeError(w, code, err.Error())
@@ -149,6 +153,10 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 		if err := s.checkMove(ctx, req.movedFrom, repo.Name, entry, v); err != nil {
 			return nil, err
 		}
+	}
+	warnings, err := s.checkGPUProducts(ctx, v, req.GPUProducts, req.ForceGPUProducts)
+	if err != nil {
+		return nil, err
 	}
 	prof, err := s.Profile(ctx)
 	if err != nil {
@@ -224,7 +232,7 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 		}
 	}
 
-	return compose.Compose(compose.Input{
+	p, err := compose.Compose(compose.Input{
 		Catalog:         cat.Fetcher.String(),
 		CatalogName:     repo.Name,
 		Ref:             cat.Ref,
@@ -238,6 +246,11 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 		Edits:           edits,
 		CreateNamespace: req.CreateNamespace,
 	})
+	if err != nil {
+		return nil, err
+	}
+	p.Warnings = warnings
+	return p, nil
 }
 
 // carryForward fills a request from a release's last plan, so an upgrade keeps
@@ -312,6 +325,7 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 	}
 	if len(req.GPUProducts) > 0 {
 		out.GPUProducts = req.GPUProducts
+		out.ForceGPUProducts = req.ForceGPUProducts
 	}
 	return out, nil
 }

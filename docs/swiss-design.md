@@ -72,7 +72,24 @@ swiss install --plan plan.json     # release must NOT exist
 | `POST /api/releases/{ns}/{release}/chat` | health check: one real inference request |
 | `GET /api/runs`, `GET /api/runs/{id}` | the operation log; output is per row, not in the list |
 | `GET /api/nodes` | the GPU inventory: type, allocatable, in use, and what holds it |
+| `GET /api/catalog/{model}/gpu-products` | what a deploy may send as `gpuProducts`, marked `catalogSupported` and `onCluster` |
 | `GET /api/profile` | the site profile as parsed, after defaults |
+
+**GPU products are the catalog's call, unless forced.** `gpuProducts` on
+`POST /api/plans` becomes a required node affinity under the variant's vendor
+label. Which products are accepted:
+
+| variant `requires.gpuProduct` | `forceGpuProducts` | listed product | unlisted product |
+| --- | --- | --- | --- |
+| empty (any of its vendor's) | either | accepted | accepted |
+| non-empty | `false` (default) | accepted | refused, 400 |
+| non-empty | `true` | accepted | accepted if on the cluster under the variant's GPU resource, with a plan `warnings` entry; else refused, 400 (502 if nodes are unreadable) |
+
+- Listed products are never checked against the cluster, forced or not: forcing only widens.
+- A forced product keeps the variant as published -- GPU count, image, engine arguments. Nothing is retuned for the card.
+- Another vendor's product cannot be forced: the resource, label and image are the variant's vendor's.
+- `warnings` sits in the plan, beside the release, outside the hash.
+- An upgrade re-checks only `gpuProducts` it is sent; affinity carried forward in the form layer is not re-checked.
 
 **`apply` and `install` are separate verbs, deliberately.** Helm's `upgrade
 --install` is forgiving, and that forgiveness is the hazard: a name or namespace
