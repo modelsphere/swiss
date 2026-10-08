@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -351,6 +353,80 @@ func (s *Server) checkMove(ctx context.Context, prev *plan.Plan, to string, entr
 		return refuse("variant %s runs on %s there, not %s", v.ID, v.Engine, prev.Engine)
 	}
 	return nil
+}
+
+// gpuInventoryError is a forced GPU product that could not be checked because
+// the node list was unreadable: the cluster's failure, not the request's.
+type gpuInventoryError struct{ err error }
+
+func (e *gpuInventoryError) Error() string {
+	return "forceGpuProducts: cannot read this cluster's GPU products to check against: " + e.err.Error()
+}
+
+func (e *gpuInventoryError) Unwrap() error { return e.err }
+
+// clusterProducts is every GPU product on the cluster under the variant's
+// extended resource. A node with no recorded resource counts: unknown is not a
+// mismatch.
+func clusterProducts(nodes []cluster.Node, r catalog.Requires) map[string]bool {
+	res := r.ResourceName()
+	out := map[string]bool{}
+	for _, n := range nodes {
+		if n.GPUProduct != "" && (n.GPUResource == "" || n.GPUResource == res) {
+			out[n.GPUProduct] = true
+		}
+	}
+	return out
+}
+
+// checkGPUProducts refuses requested products the variant does not list, unless
+// forced; a forced product must be on the cluster. Listed products are never
+// checked against the cluster, forced or not, so forcing only ever widens what
+// is accepted. Returns a warning per forced product.
+func (s *Server) checkGPUProducts(ctx context.Context, v catalog.Variant, products []string, force bool) ([]string, error) {
+	listed := v.Requires.GPUProduct
+	if len(listed) == 0 {
+		return nil, nil
+	}
+	var off []string
+	for _, p := range products {
+		if !slices.Contains(listed, p) && !slices.Contains(off, p) {
+			off = append(off, p)
+		}
+	}
+	if len(off) == 0 {
+		return nil, nil
+	}
+	if !force {
+		return nil, fmt.Errorf("variant %s supports GPU products %s, not %s -- set forceGpuProducts to deploy on a product on this cluster that the catalog does not list",
+			v.ID, strings.Join(listed, ", "), strings.Join(off, ", "))
+	}
+	nodes, err := s.probe.Nodes(ctx)
+	if err != nil {
+		return nil, &gpuInventoryError{err}
+	}
+	have := clusterProducts(nodes, v.Requires)
+	var missing []string
+	for _, p := range off {
+		if !have[p] {
+			missing = append(missing, p)
+		}
+	}
+	if len(missing) > 0 {
+		present := "none"
+		if len(have) > 0 {
+			present = strings.Join(slices.Sorted(maps.Keys(have)), ", ")
+		}
+		return nil, fmt.Errorf("forceGpuProducts: %s not on this cluster as %s (have: %s)",
+			strings.Join(missing, ", "), v.Requires.ResourceName(), present)
+	}
+	warnings := make([]string, 0, len(off))
+	for _, p := range off {
+		warnings = append(warnings, fmt.Sprintf(
+			"GPU product %s is not supported by variant %s in the catalog (supports %s); forced, so the variant's GPU count, image and values are used as published, untested on %s",
+			p, v.ID, strings.Join(listed, ", "), p))
+	}
+	return warnings, nil
 }
 
 // recordedHF reads the HF repo of a plan written before plans recorded it, from

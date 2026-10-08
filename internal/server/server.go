@@ -334,7 +334,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/catalog", s.handleCatalog)
 	mux.HandleFunc("GET /api/catalog/{model}", s.handleCatalogModel)
 	mux.HandleFunc("GET /api/catalog/{model}/chart-versions", s.handleChartVersions)
-	mux.HandleFunc("GET /api/catalog/{model}/gpu-products", s.handleGPUProducts)
 	mux.HandleFunc("GET /api/deployments", s.handleDeployments)
 	mux.HandleFunc("GET /api/nodes", s.handleNodes)
 	mux.HandleFunc("GET /api/profile", s.handleProfile)

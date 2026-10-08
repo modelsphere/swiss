@@ -72,7 +72,6 @@ swiss install --plan plan.json     # release must NOT exist
 | `POST /api/releases/{ns}/{release}/chat` | health check: one real inference request |
 | `GET /api/runs`, `GET /api/runs/{id}` | the operation log; output is per row, not in the list |
 | `GET /api/nodes` | the GPU inventory: type, allocatable, in use, and what holds it |
-| `GET /api/catalog/{model}/gpu-products` | what a deploy may send as `gpuProducts`, marked `catalogSupported` and `onCluster` |
 | `GET /api/profile` | the site profile as parsed, after defaults |
 
 **GPU products are the catalog's call, unless forced.** `gpuProducts` on

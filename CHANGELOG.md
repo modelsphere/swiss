@@ -18,8 +18,6 @@ under it.
   variant's catalog entry does not list, as long as the cluster has it under
   the variant's GPU resource. The plan carries a `warnings` entry per forced
   product.
-- `GET /api/catalog/{model}/gpu-products`: the variant's listed products and
-  the cluster's, each marked `catalogSupported` and `onCluster`.
 
 ### Changed
 - GitHub Actions pinned to commit SHAs.

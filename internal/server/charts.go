@@ -50,18 +50,20 @@ func (s *Server) chartVersions(ctx context.Context, prof *site.Profile, name str
 	return vs, nil
 }
 
-// variantFor is the variant a /api/catalog/{model}/... request names with its
-// catalog, version and variant query parameters, defaulting as compose does.
-func (s *Server) variantFor(ctx context.Context, w http.ResponseWriter, r *http.Request) (catalog.Variant, bool) {
+// handleChartVersions lists the versions a variant's chart.version allows,
+// newest first. A pinned variant has its one, with no registry read.
+func (s *Server) handleChartVersions(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := contextWithTimeout(r, 30*time.Second)
+	defer cancel()
 	c, _, ok := s.catalogFor(ctx, w, r)
 	if !ok {
-		return catalog.Variant{}, false
+		return
 	}
 	q := r.URL.Query()
 	e, err := c.Entry(ctx, r.PathValue("model"), q.Get("version"))
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
-		return catalog.Variant{}, false
+		return
 	}
 	var v catalog.Variant
 	if id := q.Get("variant"); id != "" {
@@ -71,18 +73,6 @@ func (s *Server) variantFor(ctx context.Context, w http.ResponseWriter, r *http.
 	}
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
-		return catalog.Variant{}, false
-	}
-	return v, true
-}
-
-// handleChartVersions lists the versions a variant's chart.version allows,
-// newest first. A pinned variant has its one, with no registry read.
-func (s *Server) handleChartVersions(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := contextWithTimeout(r, 30*time.Second)
-	defer cancel()
-	v, ok := s.variantFor(ctx, w, r)
-	if !ok {
 		return
 	}
 	spec, err := chart.ParseSpec(v.Chart.Version)
