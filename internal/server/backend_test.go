@@ -385,14 +385,3 @@ func containsString(ss []string, want string) bool {
 	}
 	return false
 }
-
-func warningsOf(body map[string]any) []string {
-	raw, _ := body["warnings"].([]any)
-	out := make([]string, 0, len(raw))
-	for _, w := range raw {
-		if s, ok := w.(string); ok {
-			out = append(out, s)
-		}
-	}
-	return out
-}

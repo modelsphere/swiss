@@ -44,12 +44,24 @@ jobs:
           cache-dependency-path: swiss/go.sum
       - name: gofmt
         run: |
-          unformatted=$(gofmt -l cmd internal web/embed.go)
+          unformatted=$(gofmt -l cmd internal helm web/embed.go)
           if [ -n "$unformatted" ]; then
             echo "::error::not gofmt-formatted:"; echo "$unformatted"; exit 1
           fi
+      # helm on PATH so helm/swiss/rbac_test.go renders the chart instead of skipping.
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
       - run: go vet ./...
       - run: go test ./...
+      - name: helm lint, each rbac.applyWith
+        run: |
+          set -eu
+          lint() { helm lint --strict helm/swiss --set 'rbac.namespaces={ci}' "$@"; }
+          deploy="--set config.allowDeploy=true --set persistence.enabled=true"
+          lint
+          lint $deploy
+          lint $deploy --set rbac.applyWith=both
+          lint $deploy --set rbac.applyWith=llmsvc --set config.applyWith=llmsvc
+          lint --set rbac.scope=cluster $deploy --set rbac.applyWith=both
 
   gate:
     runs-on: ubuntu-latest
