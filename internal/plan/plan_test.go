@@ -114,3 +114,33 @@ func TestCreateNamespaceIsOptIn(t *testing.T) {
 		t.Error("the site profile must be able to turn it on")
 	}
 }
+
+// Warnings explain a plan and are kept beside the release, so they survive the
+// round trip through the plan's files without moving the hash.
+func TestWarningsAreKeptButNotHashed(t *testing.T) {
+	a, b := testPlan(), testPlan()
+	b.Warnings = []string{"GPU product X is not supported by variant v in the catalog"}
+	if err := a.ComputeHash(); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.ComputeHash(); err != nil {
+		t.Fatal(err)
+	}
+	if a.Hash != b.Hash {
+		t.Fatal("warnings must not change the hash")
+	}
+	files, err := b.Files("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := FromFiles(files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(back.Warnings) != 1 || back.Warnings[0] != b.Warnings[0] {
+		t.Fatalf("warnings lost in the plan files: %v", back.Warnings)
+	}
+	if err := back.VerifyHash(); err != nil {
+		t.Fatal(err)
+	}
+}

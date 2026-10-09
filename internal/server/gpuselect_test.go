@@ -12,7 +12,7 @@ func TestGPUProductsBecomeNodeAffinity(t *testing.T) {
 	srv, _ := deployServer(t, true)
 	code, p := post(t, srv, "/api/plans", map[string]any{
 		"model": "qwen3.6-35b-a3b", "serviceId": "r",
-		"gpuProducts": []string{"NVIDIA-B300-SXM6-AC", "NVIDIA-H100-SXM5"},
+		"gpuProducts": []string{"NVIDIA-H100-80GB-HBM3", "NVIDIA-H800"},
 	})
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, p)
@@ -26,7 +26,7 @@ func TestGPUProductsBecomeNodeAffinity(t *testing.T) {
 		t.Fatalf("unexpected expression: %v", expr)
 	}
 	got := expr["values"].([]any)
-	if len(got) != 2 || got[0] != "NVIDIA-B300-SXM6-AC" || got[1] != "NVIDIA-H100-SXM5" {
+	if len(got) != 2 || got[0] != "NVIDIA-H100-80GB-HBM3" || got[1] != "NVIDIA-H800" {
 		t.Fatalf("both products must be offered as alternatives: %v", got)
 	}
 }
@@ -36,7 +36,7 @@ func TestGPUProductsKeepAPreferredAffinityRule(t *testing.T) {
 	srv, _ := deployServer(t, true)
 	_, p := post(t, srv, "/api/plans", map[string]any{
 		"model": "qwen3.6-35b-a3b", "serviceId": "r",
-		"gpuProducts": []string{"NVIDIA-B300-SXM6-AC"},
+		"gpuProducts": []string{"NVIDIA-H800"},
 		"overrides": map[string]any{
 			"affinity": map[string]any{
 				"nodeAffinity": map[string]any{

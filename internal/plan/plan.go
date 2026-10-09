@@ -47,6 +47,10 @@ type Plan struct {
 	// it explains the values rather than changing them.
 	Helmfile string `json:"helmfile,omitempty"`
 
+	// Warnings are what compose accepted but a person should see, such as a
+	// GPU product forced past the catalog. Excluded from Hash, like Helmfile.
+	Warnings []string `json:"warnings,omitempty"`
+
 	// Hash covers release identity, chart, and the composed values. Two plans
 	// with one hash render the same thing.
 	Hash string `json:"hash"`

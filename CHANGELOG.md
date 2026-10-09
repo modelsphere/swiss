@@ -14,9 +14,16 @@ under it.
 - Dependabot for Go modules, GitHub Actions, base images and the `web/console`
   submodule.
 - `NOTICE` listing third-party components.
+- `forceGpuProducts` on `POST /api/plans`: deploy on a GPU product the
+  variant's catalog entry does not list, as long as the cluster has it under
+  the variant's GPU resource. The plan carries a `warnings` entry per forced
+  product.
 
 ### Changed
 - GitHub Actions pinned to commit SHAs.
+- `gpuProducts` is checked against the variant's `requires.gpuProduct`;
+  an unlisted product is refused unless `forceGpuProducts` is set. Before, only
+  the web form restricted it.
 - deploy upgrading, relax upgrade restriction:
   - allow catalog repo switch, only to the same model: same HF repo (`source.hf`, now recorded in the plan) and same engine.
   - allow chart version upgrade in same catalog model version, model-catalog schema is upgraded with a more powerful semVer string

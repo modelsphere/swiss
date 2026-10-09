@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -47,8 +49,12 @@ type planRequest struct {
 	// which will do. Named here rather than left to Overrides because the node
 	// label they match on depends on the variant's vendor, which is the
 	// catalog's business and not the form's.
-	GPUProducts []string    `json:"gpuProducts,omitempty"`
-	Overrides   values.Tree `json:"overrides,omitempty"`
+	GPUProducts []string `json:"gpuProducts,omitempty"`
+	// ForceGPUProducts accepts gpuProducts the variant's catalog entry does not
+	// list, provided each one is on this cluster under the variant's vendor.
+	// The variant's GPU count, image and values are used unchanged.
+	ForceGPUProducts bool        `json:"forceGpuProducts,omitempty"`
+	Overrides        values.Tree `json:"overrides,omitempty"`
 	// OverridesYAML is the advanced section: a values fragment typed by hand.
 	// Parsed here rather than in the browser so there is one parser, and the
 	// ownership check still decides what it may contain.
@@ -103,7 +109,7 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	p, err := s.compose(ctx, req)
 	if err != nil {
 		code := http.StatusBadRequest
-		if errors.As(err, new(*chart.ListError)) {
+		if errors.As(err, new(*chart.ListError)) || errors.As(err, new(*gpuInventoryError)) {
 			code = http.StatusBadGateway
 		}
 		writeError(w, code, err.Error())
@@ -149,6 +155,10 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 		if err := s.checkMove(ctx, req.movedFrom, repo.Name, entry, v); err != nil {
 			return nil, err
 		}
+	}
+	warnings, err := s.checkGPUProducts(ctx, v, req.GPUProducts, req.ForceGPUProducts)
+	if err != nil {
+		return nil, err
 	}
 	prof, err := s.Profile(ctx)
 	if err != nil {
@@ -224,7 +234,7 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 		}
 	}
 
-	return compose.Compose(compose.Input{
+	p, err := compose.Compose(compose.Input{
 		Catalog:         cat.Fetcher.String(),
 		CatalogName:     repo.Name,
 		Ref:             cat.Ref,
@@ -238,6 +248,11 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 		Edits:           edits,
 		CreateNamespace: req.CreateNamespace,
 	})
+	if err != nil {
+		return nil, err
+	}
+	p.Warnings = warnings
+	return p, nil
 }
 
 // carryForward fills a request from a release's last plan, so an upgrade keeps
@@ -312,6 +327,7 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 	}
 	if len(req.GPUProducts) > 0 {
 		out.GPUProducts = req.GPUProducts
+		out.ForceGPUProducts = req.ForceGPUProducts
 	}
 	return out, nil
 }
@@ -337,6 +353,80 @@ func (s *Server) checkMove(ctx context.Context, prev *plan.Plan, to string, entr
 		return refuse("variant %s runs on %s there, not %s", v.ID, v.Engine, prev.Engine)
 	}
 	return nil
+}
+
+// gpuInventoryError is a forced GPU product that could not be checked because
+// the node list was unreadable: the cluster's failure, not the request's.
+type gpuInventoryError struct{ err error }
+
+func (e *gpuInventoryError) Error() string {
+	return "forceGpuProducts: cannot read this cluster's GPU products to check against: " + e.err.Error()
+}
+
+func (e *gpuInventoryError) Unwrap() error { return e.err }
+
+// clusterProducts is every GPU product on the cluster under the variant's
+// extended resource. A node with no recorded resource counts: unknown is not a
+// mismatch.
+func clusterProducts(nodes []cluster.Node, r catalog.Requires) map[string]bool {
+	res := r.ResourceName()
+	out := map[string]bool{}
+	for _, n := range nodes {
+		if n.GPUProduct != "" && (n.GPUResource == "" || n.GPUResource == res) {
+			out[n.GPUProduct] = true
+		}
+	}
+	return out
+}
+
+// checkGPUProducts refuses requested products the variant does not list, unless
+// forced; a forced product must be on the cluster. Listed products are never
+// checked against the cluster, forced or not, so forcing only ever widens what
+// is accepted. Returns a warning per forced product.
+func (s *Server) checkGPUProducts(ctx context.Context, v catalog.Variant, products []string, force bool) ([]string, error) {
+	listed := v.Requires.GPUProduct
+	if len(listed) == 0 {
+		return nil, nil
+	}
+	var off []string
+	for _, p := range products {
+		if !slices.Contains(listed, p) && !slices.Contains(off, p) {
+			off = append(off, p)
+		}
+	}
+	if len(off) == 0 {
+		return nil, nil
+	}
+	if !force {
+		return nil, fmt.Errorf("variant %s supports GPU products %s, not %s -- set forceGpuProducts to deploy on a product on this cluster that the catalog does not list",
+			v.ID, strings.Join(listed, ", "), strings.Join(off, ", "))
+	}
+	nodes, err := s.probe.Nodes(ctx)
+	if err != nil {
+		return nil, &gpuInventoryError{err}
+	}
+	have := clusterProducts(nodes, v.Requires)
+	var missing []string
+	for _, p := range off {
+		if !have[p] {
+			missing = append(missing, p)
+		}
+	}
+	if len(missing) > 0 {
+		present := "none"
+		if len(have) > 0 {
+			present = strings.Join(slices.Sorted(maps.Keys(have)), ", ")
+		}
+		return nil, fmt.Errorf("forceGpuProducts: %s not on this cluster as %s (have: %s)",
+			strings.Join(missing, ", "), v.Requires.ResourceName(), present)
+	}
+	warnings := make([]string, 0, len(off))
+	for _, p := range off {
+		warnings = append(warnings, fmt.Sprintf(
+			"GPU product %s is not supported by variant %s in the catalog (supports %s); forced, so the variant's GPU count, image and values are used as published, untested on %s",
+			p, v.ID, strings.Join(listed, ", "), p))
+	}
+	return warnings, nil
 }
 
 // recordedHF reads the HF repo of a plan written before plans recorded it, from

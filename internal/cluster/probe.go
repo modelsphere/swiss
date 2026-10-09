@@ -171,6 +171,7 @@ type Fake struct {
 	Pod     []Pod
 	Rel     []Release
 	Nod     []Node
+	NodErr  error
 	Maps    map[string]map[string]string
 	Secrets map[string]map[string]string
 	// SecretLabels is what SecretNames matches on, keyed like Secrets.
@@ -212,7 +213,12 @@ func (f Fake) Release(_ context.Context, namespace, name string) (*Release, erro
 	}
 	return nil, nil
 }
-func (f Fake) Nodes(context.Context) ([]Node, error) { return f.Nod, nil }
+func (f Fake) Nodes(context.Context) ([]Node, error) {
+	if f.NodErr != nil {
+		return nil, f.NodErr
+	}
+	return f.Nod, nil
+}
 func (f Fake) ConfigMap(_ context.Context, ref string) (map[string]string, error) {
 	return f.Maps[ref], nil
 }
