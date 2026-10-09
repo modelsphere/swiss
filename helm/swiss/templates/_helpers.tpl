@@ -126,3 +126,40 @@ passes them on.
   resources: ["modelroutes"]
   verbs: {{ $all | toJson }}
 {{- end -}}
+
+{{/*
+LLMService access for rbac.applyWith other than helm. With allowDeploy the
+release Role can write llmservices; without it, get/list/watch is enough for
+the deployments page. controllerrevisions are always read-only: they hold
+archived specs.
+*/}}
+{{- define "swiss.llmsvcRules" -}}
+{{- $verbs := list "get" "list" "watch" -}}
+{{- if .Values.config.allowDeploy -}}
+{{- $verbs = list "get" "list" "watch" "create" "update" "patch" "delete" -}}
+{{- end -}}
+- apiGroups: ["serving.modelsphere.dev"]
+  resources: ["llmservices"]
+  verbs: {{ $verbs | toJson }}
+- apiGroups: ["apps"]
+  resources: ["controllerrevisions"]
+  verbs: {{ list "get" "list" | toJson }}
+{{- end -}}
+
+{{/* config.applyWith and rbac.applyWith have to agree, or swissd is granted a backend it will not run, or runs one it cannot. */}}
+{{- define "swiss.validateApplyWith" -}}
+{{- $apply := .Values.config.applyWith | default "helm" -}}
+{{- $rbacApply := .Values.rbac.applyWith | default "helm" -}}
+{{- if not (or (eq $apply "helm") (eq $apply "llmsvc")) -}}
+{{- fail (printf "config.applyWith %q must be helm or llmsvc" $apply) -}}
+{{- end -}}
+{{- if not (or (eq $rbacApply "helm") (eq $rbacApply "both") (eq $rbacApply "llmsvc")) -}}
+{{- fail (printf "rbac.applyWith %q must be helm, both or llmsvc" $rbacApply) -}}
+{{- end -}}
+{{- if and (eq $apply "llmsvc") (eq $rbacApply "helm") -}}
+{{- fail "config.applyWith is llmsvc but rbac.applyWith is helm: swissd would write LLMServices without a grant. Set rbac.applyWith to both or llmsvc." -}}
+{{- end -}}
+{{- if and (eq $rbacApply "llmsvc") (eq $apply "helm") -}}
+{{- fail "rbac.applyWith is llmsvc but config.applyWith is helm: swissd would run helm without the deploy grant. Set config.applyWith to llmsvc, or rbac.applyWith to helm or both." -}}
+{{- end -}}
+{{- end -}}

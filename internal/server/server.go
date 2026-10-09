@@ -18,6 +18,7 @@ import (
 	"github.com/modelsphere/swiss/internal/cluster"
 	"github.com/modelsphere/swiss/internal/config"
 	"github.com/modelsphere/swiss/internal/exec"
+	"github.com/modelsphere/swiss/internal/llmsvc"
 	"github.com/modelsphere/swiss/internal/site"
 	"github.com/modelsphere/swiss/internal/store"
 )
@@ -37,6 +38,17 @@ type Server struct {
 	web       fs.FS
 	store     *store.Store
 	writer    cluster.Writer
+	// llms is nil when this process has no cluster client. The CRD being
+	// unserved is a separate, cached check: a nil client never calls discovery.
+	llms      *llmsvc.Client
+	servedMu  sync.Mutex
+	servedAt  time.Time
+	servedOK  bool
+	servedErr error
+	// forbidden caches a get/list Forbidden. The CRD is served, but this
+	// process cannot see LLMServices, so hot paths stop calling for one TTL.
+	forbidden bool
+	forbidAt  time.Time
 
 	// creds overrides where the login is read from. Nil is the real thing: the
 	// mounted Secret named by the config.
@@ -92,6 +104,9 @@ func (s *Server) cached() ([]string, *site.Profile) {
 
 // SetStore installs the database. Without one swissd is read-only.
 func (s *Server) SetStore(st *store.Store) { s.store = st }
+
+// SetLLMServices installs the LLMService client. Nil hides that backend.
+func (s *Server) SetLLMServices(c *llmsvc.Client) { s.llms = c }
 
 // SetWriter enables the endpoints that change a cluster.
 //

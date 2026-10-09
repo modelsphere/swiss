@@ -74,6 +74,11 @@ type Server struct {
 	// is a read-only view, which is what it should be until its RBAC is
 	// widened to match.
 	AllowDeploy bool `yaml:"allowDeploy,omitempty"`
+	// ApplyWith is the backend for a new install: "helm" (default) or "llmsvc".
+	// A release already in the cluster stays on the backend that owns it.
+	// llmsvc needs the LLMService CRD; when that CRD is not served, new
+	// installs stay on helm and /api/cluster says so.
+	ApplyWith string `yaml:"applyWith,omitempty"`
 	// Binaries, when not on PATH.
 	HelmBin     string `yaml:"helmBin,omitempty"`
 	HelmfileBin string `yaml:"helmfileBin,omitempty"`
@@ -229,6 +234,9 @@ func (c *Config) applyDefaults() {
 	if c.Server.Addr == "" {
 		c.Server.Addr = ":8080"
 	}
+	if c.Server.ApplyWith == "" {
+		c.Server.ApplyWith = "helm"
+	}
 	if c.Server.PlanHistory == 0 {
 		c.Server.PlanHistory = 5
 	}
@@ -299,6 +307,11 @@ func (c *Config) ValidateServer() error {
 	case "auto", "always", "never":
 	default:
 		return fmt.Errorf("%s: server.auth.cookieSecure %q is not auto, always or never", c.origin(), c.Server.Auth.CookieSecure)
+	}
+	switch c.Server.ApplyWith {
+	case "", "helm", "llmsvc":
+	default:
+		return fmt.Errorf("%s: server.applyWith %q is not helm or llmsvc", c.origin(), c.Server.ApplyWith)
 	}
 	return nil
 }

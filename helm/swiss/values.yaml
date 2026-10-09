@@ -72,6 +72,17 @@ config:
   # are yours to wire.
   allowDeploy: false
 
+  # Backend a new install uses, rendered as server.applyWith.
+  #
+  #   helm    (default) swissd runs helmfile, as today. Left out of the rendered
+  #           swiss.yaml: helm is already swissd's default, so a chart that does
+  #           not change this stays byte-for-byte the previous ConfigMap.
+  #   llmsvc  swissd creates an LLMService and the operator runs helm. Needs the
+  #           CRD, and rbac.applyWith of both or llmsvc. The chart refuses the
+  #           other pairing either way: llmsvc here with a helm-only grant, or
+  #           helm here with the llmsvc-only grant.
+  applyWith: helm
+
   # Drafts, plans and the audit log. Never the source of truth for what is
   # deployed -- every applied plan is also written beside its release.
   database: /data/swiss.db
@@ -162,6 +173,24 @@ rbac:
   # It is configmaps create/update in swissd's own namespace. RBAC cannot scope
   # a create to one name.
   manageProfile: true
+
+  # Which grant the release Role (or the cluster-scoped releases ClusterRole)
+  # carries. The deploy switch stays config.allowDeploy: this only chooses
+  # which rules that switch turns on. helm renders today's rules unchanged.
+  #
+  #   helm    (default) today's grant. With allowDeploy, everything the engine
+  #           charts render. Without it, the read rules only.
+  #   both    today's grant, plus LLMService. With allowDeploy: llmservices
+  #           get/list/watch/create/update/patch/delete and apps
+  #           controllerrevisions get/list, in the same Role. Without
+  #           allowDeploy: llmservices get/list/watch and controllerrevisions
+  #           get/list, so the deployments page can see them.
+  #   llmsvc  no Secret, Role or workload writes. With allowDeploy: llmservices
+  #           CRUD, controllerrevisions get/list, the namespaces ClusterRole,
+  #           and the read grants (secrets/configmaps/pods get/list, plus the
+  #           modelroute/scaler/slo reads). Without allowDeploy: the same read
+  #           views as both. Requires config.applyWith llmsvc.
+  applyWith: helm
 
   # Namespaces holding model releases. Used when scope is namespaced.
   namespaces: []

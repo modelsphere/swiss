@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -56,35 +55,11 @@ func (s *Server) handleRevisions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) revisions(ctx context.Context, ns, release string) ([]revision, error) {
-	archived, err := s.archivedRevisions(ctx, ns, release)
+	b, err := s.readBackend(ctx, ns, release)
 	if err != nil {
 		return nil, err
 	}
-
-	out := make([]revision, 0, len(archived)+1)
-	for _, n := range archived {
-		rev := revision{Revision: n}
-		if data, err := s.probe.Secret(ctx, archiveRef(ns, release, n)); err == nil {
-			if sum, err := parsePlanSummary([]byte(data[plan.MetaFile])); err == nil {
-				rev.Model, rev.Version, rev.Variant = sum.Model, sum.Version, sum.Variant
-				rev.Chart = sum.Chart
-			}
-		}
-		out = append(out, rev)
-	}
-
-	// The live workspace is the current revision, and is not an archive.
-	if st, err := exec.Lookup(ctx, s.probe, ns, release); err == nil && st.Exists {
-		cur := revision{Revision: st.Revision, Current: true}
-		if p, err := s.currentPlan(ctx, ns, release); err == nil {
-			cur.Model, cur.Version, cur.Variant = p.Source.Model, p.Source.Version, p.Source.Variant
-			cur.Chart, cur.PlanHash = chartRef(p.Chart.Name, p.Chart.Version), p.Hash
-		}
-		out = append(out, cur)
-	}
-
-	sort.Slice(out, func(i, j int) bool { return out[i].Revision > out[j].Revision })
-	return out, nil
+	return b.Revisions(ctx, ns, release)
 }
 
 // handleRevisionValues answers with the values helm holds for a revision,
@@ -252,12 +227,22 @@ func (s *Server) handleRollback(w http.ResponseWriter, r *http.Request) {
 	// No force here: a rollback restores a plan that was applied cleanly once,
 	// and taking fields from another manager during one would be a second
 	// surprise on top of the one being undone.
-	s.applyPlan(ctx, w, p, exec.Upgrade, req.ExpectRevision, "rollback", req.Note, exec.ApplyOptions{})
+	s.applyPlan(ctx, w, p, exec.Upgrade, req.ExpectRevision, "rollback", req.Note, false)
 }
 
 // archivedPlan reads the workspace that produced a revision, and checks it
 // still hashes to what it claims. Those bytes have been sitting in etcd.
-func (s *Server) archivedPlan(ctx context.Context, ns, release string, revision int) (*plan.Plan, error) {
+func (s *Server) archivedPlan(ctx context.Context, ns, release string, rev int) (*plan.Plan, error) {
+	b, err := s.readBackend(ctx, ns, release)
+	if err != nil {
+		return nil, err
+	}
+	return b.Archived(ctx, ns, release, rev)
+}
+
+// planSecret reads the workspace that produced a revision, and checks it
+// still hashes to what it claims. Those bytes have been sitting in etcd.
+func (s *Server) planSecret(ctx context.Context, ns, release string, revision int) (*plan.Plan, error) {
 	data, err := s.probe.Secret(ctx, archiveRef(ns, release, revision))
 	if err != nil {
 		return nil, err

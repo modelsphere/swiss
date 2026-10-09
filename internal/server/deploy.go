@@ -13,7 +13,6 @@ import (
 
 	"github.com/modelsphere/swiss/internal/catalog"
 	"github.com/modelsphere/swiss/internal/chart"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"github.com/modelsphere/swiss/internal/cluster"
 	"github.com/modelsphere/swiss/internal/compose"
@@ -388,11 +387,11 @@ func serviceIDOf(p *plan.Plan) string {
 // the cluster -- and it would disagree exactly when an apply fails between the
 // two writes. The database is the audit log, and losing it costs the log.
 func (s *Server) currentPlan(ctx context.Context, namespace, release string) (*plan.Plan, error) {
-	rel, err := s.releaseRecord(ctx, namespace, release)
+	b, err := s.readBackend(ctx, namespace, release)
 	if err != nil {
 		return nil, err
 	}
-	return planOf(rel)
+	return b.Current(ctx, namespace, release)
 }
 
 // planOf decodes the plan beside a release record already in hand. Split out so
@@ -417,15 +416,9 @@ func planOf(rel *cluster.Release) (*plan.Plan, error) {
 // plan was fetched too -- and would have answered with whichever namespace
 // happened to sort first if two held the same release name.
 func (s *Server) releaseRecord(ctx context.Context, namespace, release string) (*cluster.Release, error) {
-	if namespace == "" {
-		prof, err := s.Profile(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("no namespace for release %q, and the site profile is unreadable: %w", release, err)
-		}
-		namespace = prof.Namespace
-	}
-	if namespace == "" {
-		return nil, fmt.Errorf("no namespace for release %q: pass one, or set namespace in the site profile", release)
+	namespace, err := s.resolveNamespace(ctx, namespace, release)
+	if err != nil {
+		return nil, err
 	}
 	return s.probe.Release(ctx, namespace, release)
 }
@@ -493,119 +486,35 @@ func (s *Server) handleApply(mode exec.Mode) http.HandlerFunc {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		s.applyPlan(ctx, w, p, mode, req.ExpectRevision, actionName(mode), req.Note,
-			exec.ApplyOptions{ForceConflicts: req.ForceConflicts})
+		s.applyPlan(ctx, w, p, mode, req.ExpectRevision, actionName(mode), req.Note, req.ForceConflicts)
 	}
 }
 
 // applyPlan is the cluster-changing half, shared by apply, install and
 // rollback. They differ in where the plan came from and in nothing after that.
-func (s *Server) applyPlan(ctx context.Context, w http.ResponseWriter, p *plan.Plan, mode exec.Mode, expectRevision int, action, note string, opts exec.ApplyOptions) {
-	st, err := exec.Lookup(ctx, s.probe, p.Release.Namespace, p.Release.Name)
+func (s *Server) applyPlan(ctx context.Context, w http.ResponseWriter, p *plan.Plan, mode exec.Mode, expectRevision int, action, note string, forceConflicts bool) {
+	b, err := s.backendForApply(ctx, p, mode)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeStatus(w, err, http.StatusBadGateway)
 		return
 	}
-	if err := exec.Check(st, mode, p); err != nil {
-		writeError(w, http.StatusConflict, err.Error())
-		return
-	}
-	if err := exec.CheckRevision(st, expectRevision); err != nil {
-		writeError(w, http.StatusConflict, err.Error())
-		return
-	}
-
-	// The plan that produced the live revision is archived before it is
-	// overwritten, so every applied revision stays reproducible from the
-	// cluster -- which is what rollback reads, and what a lost database must
-	// not cost.
-	if st.Exists {
-		if err := s.archivePlan(ctx, p.Release.Namespace, p.Release.Name, st.Revision); err != nil {
-			s.log.WarnContext(ctx, "previous plan not archived", "release", p.Release.Name, "err", err)
-		}
-	}
-
-	// The plan is recorded in the release's own namespace, so with
-	// createNamespace that namespace has to exist first. helm creates it during
-	// the apply, which is too late: the write-ahead below would fail into a
-	// namespace that is not there yet and nothing would ever be applied.
-	//
-	// Creating it here rather than dropping the write-ahead: an empty namespace
-	// is the one cluster change that costs nothing if the apply then fails, and
-	// helm still applies its own Namespace object afterwards.
-	if p.CreateNamespace && s.writer != nil {
-		if err := s.writer.EnsureNamespace(ctx, p.Release.Namespace); err != nil {
-			writeError(w, http.StatusInternalServerError, "namespace not created, nothing applied: "+err.Error())
-			return
-		}
-	}
-
-	// Write-ahead: the plan is recorded before the cluster changes, so a
-	// permissions or quota failure costs nothing. A live release with no
-	// plan beside it reads as hand-installed, which is the one thing the
-	// reconciliation view must never say about swissd's own work.
-	started := time.Now()
-	if err := s.writePlan(ctx, p, planStatus{
-		Phase: phaseApplying, Action: action, StartedAt: stamp(started), Note: note,
-		Forced: opts.ForceConflicts,
-	}); err != nil {
-		msg := "plan not recorded, nothing applied: " + err.Error()
-		if !p.CreateNamespace && apierrors.IsNotFound(err) {
-			msg += "\n\nThe namespace does not exist. Recompose with createNamespace to have it created, or ask an admin for it -- createNamespace has to be in the plan, so setting it on the apply does nothing."
-		}
-		writeError(w, http.StatusInternalServerError, msg)
-		return
-	}
-
-	// Everything past the write-ahead outlives the request.
-	ctx, cancel := detach(ctx)
-	defer cancel()
-
-	// Logged as well as recorded: taking fields from another manager is the one
-	// apply that silently undoes somebody else's hand edit, and the log is
-	// where that is noticed by anyone not watching this release.
-	if opts.ForceConflicts {
-		s.log.WarnContext(ctx, "applying with --force-conflicts: fields owned by another manager will be overwritten",
-			"release", p.Release.Name, "namespace", p.Release.Namespace, "action", action)
-	}
-	res, applyErr := s.runner().Apply(ctx, p, opts)
-
-	// Looked up before the audit write, so the row can name the revision this
-	// produced -- which is what makes the log a list of rollback targets rather
-	// than a list of timestamps. A failed apply names none: helm may have left
-	// a revision behind, but it is not one to go back to.
-	after, _ := exec.Lookup(ctx, s.probe, p.Release.Namespace, p.Release.Name)
-	produced := after.Revision
-	if applyErr != nil {
-		produced = 0
-	}
-	s.record(ctx, action, p, res, applyErr, started, note, produced)
-
-	status := planStatus{
-		Phase: phaseApplied, Action: action,
-		StartedAt: stamp(started), UpdatedAt: stamp(time.Now()),
-		Revision: after.Revision, Note: note, Forced: opts.ForceConflicts,
-	}
-	if applyErr != nil {
-		status.Phase, status.Error = phaseFailed, applyErr.Error()
-	}
-	// Best effort: the plan is already recorded, only the phase goes stale.
-	var statusErr string
-	if err := s.writePlan(ctx, p, status); err != nil {
-		statusErr = err.Error()
-		s.log.ErrorContext(ctx, "plan status not updated", "release", p.Release.Name, "err", err)
-	}
-	if applyErr != nil {
-		writeError(w, http.StatusInternalServerError, applyErr.Error())
+	res, err := b.Apply(ctx, p, mode, applyOpts{
+		ExpectRevision: expectRevision,
+		Action:         action,
+		Note:           note,
+		ForceConflicts: forceConflicts,
+	})
+	if err != nil {
+		writeStatus(w, err, http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"planHash":    p.Hash,
 		"release":     p.Release.Name,
-		"revision":    after.Revision,
+		"revision":    res.Revision,
 		"output":      res.Output,
-		"status":      phaseApplied,
-		"statusError": statusErr,
+		"status":      res.Status,
+		"statusError": res.StatusError,
 	})
 }
 
@@ -622,61 +531,24 @@ func (s *Server) handleUninstall(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	ns, release := r.PathValue("namespace"), r.PathValue("release")
-	st, err := exec.Lookup(ctx, s.probe, ns, release)
+	b, _, err := s.backendFor(ctx, ns, release)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeStatus(w, err, http.StatusBadGateway)
 		return
 	}
-	if err := exec.CheckUninstall(st, ns, release); err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+	if b == nil {
+		b = s.helmBackend()
+	}
+	res, err := b.Uninstall(ctx, ns, release)
+	if err != nil {
+		writeStatus(w, err, http.StatusInternalServerError)
 		return
 	}
-
-	// Read the plan before the release goes, only to name it in the audit row.
-	// A release with no readable plan is still removable -- see Runner.Uninstall.
-	planHash := ""
-	if p, err := s.currentPlan(ctx, ns, release); err == nil {
-		planHash = p.Hash
-	}
-
-	// The uninstall outlives the request, like an apply: a browser navigating
-	// away must not SIGKILL helm halfway through deleting a release.
-	started := time.Now()
-	ctx, cancel = detach(ctx)
-	defer cancel()
-
-	res, uninstallErr := s.runner().Uninstall(ctx, ns, release)
-	s.recordRelease(ctx, "uninstall", ns, release, planHash, res, uninstallErr, started, "", 0)
-	if uninstallErr != nil {
-		writeError(w, http.StatusInternalServerError, uninstallErr.Error())
-		return
-	}
-
-	// Best effort, and reported rather than swallowed: the release is gone
-	// either way, and a stray plan ConfigMap shows up in the deployments view
-	// as a plan with no release rather than as anything dangerous.
-	var planErr string
-	if s.writer != nil {
-		// The history goes with it: one Secret per revision would otherwise be
-		// left behind for a release that no longer exists.
-		if revs, err := s.archivedRevisions(ctx, ns, release); err == nil {
-			for _, r := range revs {
-				if err := s.writer.DeleteSecret(ctx, archiveRef(ns, release, r)); err != nil {
-					s.log.WarnContext(ctx, "archived plan not removed", "release", release, "revision", r, "err", err)
-				}
-			}
-		}
-		if err := s.writer.DeleteConfigMap(ctx, planRef(ns, release)); err != nil {
-			planErr = err.Error()
-			s.log.ErrorContext(ctx, "plan configmap not removed", "release", release, "err", err)
-		}
-	}
-
 	writeJSON(w, http.StatusOK, map[string]any{
 		"release":   release,
 		"namespace": ns,
 		"output":    res.Output,
-		"planError": planErr,
+		"planError": res.PlanError,
 	})
 }
 

@@ -180,3 +180,80 @@ variants:
       extraArgs: [--tp-size=2, --mamba-radix-cache-strategy=extra_buffer, ...]
       startupProbe: { periodSeconds: 15, failureThreshold: 80 }
 ```
+
+## LLMService backend
+
+A release is stored either as a helm release swiss drives itself, or as an LLMService the operator drives. Handlers call one backend and stop there. `internal/llmsvc` is the mapping and the client.
+
+`server.applyWith` picks the backend for a **new** install. A release already in the cluster stays on the backend that owns it.
+
+| `server.applyWith` | CRD served | new install |
+| --- | --- | --- |
+| `helm` (default) | either | helm |
+| `llmsvc` | yes | llmsvc |
+| `llmsvc` | no | helm, and `/api/cluster` carries a warning |
+
+Ownership is read off the cluster. An unserved CRD makes an LLMService invisible.
+
+| LLMService `<ns>/<release>` | `swiss-plan-<release>` ConfigMap | CRD served | backend |
+| --- | --- | --- | --- |
+| yes | no | yes | llmsvc |
+| yes | yes | yes | llmsvc, clean-up unfinished |
+| no | yes | either | helm |
+| yes | either | no | helm if the ConfigMap exists, otherwise not managed |
+| no | no | either | not managed (untracked, as today) |
+
+| | helm | llmsvc |
+| --- | --- | --- |
+| install | helmfile. An existing release, tracked or untracked, is refused | `exec.Lookup` + `exec.Check(Install)` first, so an existing helm release is still refused. Then create the LLMService. `AlreadyExists` is the same 409 |
+| upgrade | helmfile. Missing or pending is refused | get, then update with the fetched `resourceVersion`. `expectRevision` is checked against `status.helm.revision`. Phase `Applying` is refused like a pending helm release. `Conflict` is 409 "the release moved under you; diff again" |
+| result | helmfile output, then `status.yaml` | wait, inside the same 15 minute budget, for `observedGeneration >= generation` and phase `Applied` or `Failed`. The body carries the helm revision and a one-line summary. `Failed` is the operator's `status.message` |
+| uninstall | `helm uninstall`, then delete the plan ConfigMap and archive Secrets | delete, then wait until the object is gone. The operator finalizer uninstalls helm |
+| rollback | re-apply the archived plan, action `rollback` | the same flow through this backend |
+| revisions | archive Secrets, plus the live helm revision | `status.history` joined with ControllerRevisions, then any legacy `swiss.plan.v1.<release>.v*` Secrets, listed after that history |
+| status | `status.yaml` | `LLMService.status` (phase, message, helm revision, conditions) |
+| force-conflicts | helm flag, recorded on `status.yaml` | annotation `serving.modelsphere.dev/force-conflicts` set to the generation the write produces |
+
+A `chartPath` plan is refused with 400 when the llmsvc backend would run it. The operator has no filesystem path. An LLMService with no `swiss.modelsphere.dev/` annotation is external: status, probe and chat still read it, and upgrade is refused.
+
+An upgrade keeps every annotation outside `swiss.modelsphere.dev/`, replaces that prefix from the plan (a stale note is dropped), and removes `serving.modelsphere.dev/force-conflicts` unless this apply sets it. The generation that annotation names comes from the spec. Annotation-only writes leave it where it is.
+
+`/api/deployments` is the union of `swiss-plan-*` refs and LLMServices, sorted and paged as before. Each row has `backend`. External rows set `external`. Rows found under both set `cleanupPending` and say the clean-up is unfinished. With the CRD absent the list is the helm list plus `"backend": "helm"`.
+
+`/api/cluster` adds:
+
+```json
+"llmservice": {"served": true, "applyWith": "llmsvc", "newInstalls": "llmsvc"}
+```
+
+`served` is API discovery. `newInstalls` is the backend a new install will actually use. A discovery failure is cached as not served, logged once per TTL, and warned on `/api/cluster`. `Forbidden` on get or list is cached the same way: the CRD still counts as served, LLMServices stay invisible, and the page warns `LLMService CRD is served but swissd has no llmservices grant; set rbac.applyWith`. With `server.applyWith: llmsvc`, either case installs with helm.
+
+`POST /api/diff` stays helmfile for both backends and still returns the live helm revision and whether that release exists.
+
+Deferred:
+
+- Migration, including a migrate action, `swiss migrate`, and migrate-back.
+- An operator dry-run for diff.
+- Operator health. The cluster page reports discovery only. A written LLMService with no operator waits out the 15 minute apply budget.
+- The CLI. `swiss install` and `swiss apply` stay on helm.
+
+## RBAC
+
+The chart's deploy switch is `config.allowDeploy`. It gates the write endpoints and the write grant together. `config.applyWith` is the new-install backend (`helm` or `llmsvc`), rendered as `server.applyWith`. `helm` is left out of the rendered config because it is already swissd's default. `rbac.applyWith` chooses the grant on the release Role, or the releases ClusterRole when `rbac.scope` is `cluster`.
+
+| `config.allowDeploy` | `rbac.applyWith` | Release Role |
+| --- | --- | --- |
+| false | `helm` (default) | today's read grant |
+| true | `helm` | today's deploy grant (`swiss.deployRules`) |
+| false | `both` or `llmsvc` | today's read grant, plus `llmservices` get/list/watch and `controllerrevisions` get/list |
+| true | `both` | today's deploy grant, plus `llmservices` get/list/watch/create/update/patch/delete and `controllerrevisions` get/list |
+| true | `llmsvc` | the read grants (`secrets`, `configmaps` and `pods` get/list, and `swiss.objectReadRules`), `llmservices` CRUD, and `controllerrevisions` get/list. `swiss.deployRules` is not included |
+
+The namespaces ClusterRole (`namespaces` get/create/patch) is still created only when `config.allowDeploy` is set, including `rbac.applyWith: llmsvc`.
+
+| Refused | Why |
+| --- | --- |
+| `config.applyWith` other than `helm` or `llmsvc` | unknown backend |
+| `rbac.applyWith` other than `helm`, `both` or `llmsvc` | unknown grant |
+| `config.applyWith: llmsvc` with `rbac.applyWith: helm` | swissd would write LLMServices it cannot |
+| `rbac.applyWith: llmsvc` with `config.applyWith: helm` | swissd would run helm without the deploy grant |
