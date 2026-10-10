@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -12,9 +13,12 @@ import (
 
 	"github.com/modelsphere/swiss/internal/catalog"
 	"github.com/modelsphere/swiss/internal/cluster"
+	"github.com/modelsphere/swiss/internal/llmsvc"
 	"github.com/modelsphere/swiss/internal/plan"
 	"github.com/modelsphere/swiss/internal/site"
 	"gopkg.in/yaml.v3"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
@@ -78,6 +82,17 @@ type clusterInfo struct {
 	AllowDeploy bool          `json:"allowDeploy"`
 	Sites       []site.Site   `json:"sites,omitempty"`
 	Warnings    []string      `json:"warnings,omitempty"`
+	// LLMService is whether new installs can use the operator, and which
+	// backend they will use.
+	LLMService *llmClusterInfo `json:"llmservice,omitempty"`
+}
+
+// llmClusterInfo is the cluster page's view of the operator's CRD. Served is
+// discovery, not a Deployment readiness check.
+type llmClusterInfo struct {
+	Served      bool   `json:"served"`
+	ApplyWith   string `json:"applyWith"`
+	NewInstalls string `json:"newInstalls"`
 }
 
 // catalogInfo is one selectable catalog. Source is its location as a plan
@@ -147,6 +162,26 @@ func (s *Server) handleCluster(w http.ResponseWriter, r *http.Request) {
 		if i == 0 || c.Default {
 			info.Catalog, info.CatalogRef = c.URL, c.Ref
 		}
+	}
+	access := s.llmsvcAccess(ctx)
+	applyWith := s.applyWith()
+	newInstalls := backendHelm
+	if applyWith == backendLLMSVC && access.visible() {
+		newInstalls = backendLLMSVC
+	}
+	info.LLMService = &llmClusterInfo{Served: access.served, ApplyWith: applyWith, NewInstalls: newInstalls}
+	if access.discErr != nil {
+		info.Warnings = append(info.Warnings, "LLMService discovery failed: "+access.discErr.Error())
+	}
+	if applyWith == backendLLMSVC && !access.served {
+		msg := "server.applyWith is llmsvc but the LLMService CRD is not served; new installs use helm"
+		if access.discErr != nil {
+			msg += ": " + access.discErr.Error()
+		}
+		info.Warnings = append(info.Warnings, msg)
+	}
+	if access.forbidden {
+		info.Warnings = append(info.Warnings, "LLMService CRD is served but swissd has no llmservices grant; set rbac.applyWith")
 	}
 	writeJSON(w, http.StatusOK, info)
 }
@@ -463,6 +498,11 @@ type deployment struct {
 	// the plan the way the detail view derives it. Empty when the plan names no
 	// route.
 	Route string `json:"route,omitempty"`
+	// Backend is helm or llmsvc. External is an LLMService swiss did not
+	// write. CleanupPending means both records still exist.
+	Backend        string `json:"backend"`
+	External       bool   `json:"external,omitempty"`
+	CleanupPending bool   `json:"cleanupPending,omitempty"`
 
 	// What the plan recorded about its catalog, for finding the configured
 	// catalog the release belongs to.
@@ -484,6 +524,107 @@ const (
 // not entitled to all of it.
 const deployFanout = 8
 
+// deployRef is one managed release. obj is set when the row comes from an
+// LLMService; a helm-only row leaves it nil and is read from the probe.
+type deployRef struct {
+	cluster.ManagedRef
+	obj     *unstructured.Unstructured
+	cleanup bool
+}
+
+// deploymentRefs is the managed set: plan ConfigMaps, plus LLMServices when
+// the CRD is served. Absent CRD means the ConfigMap list alone.
+func (s *Server) deploymentRefs(ctx context.Context) ([]deployRef, error) {
+	managed, err := s.probe.ManagedRefs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]deployRef, 0, len(managed))
+	index := map[string]int{}
+	for _, ref := range managed {
+		index[ref.Namespace+"/"+ref.Name] = len(out)
+		out = append(out, deployRef{ManagedRef: ref})
+	}
+	access := s.llmsvcAccess(ctx)
+	if !access.visible() || s.llms == nil {
+		return out, nil
+	}
+	list, err := s.llms.List(ctx, s.releaseNamespaces())
+	if apierrors.IsForbidden(err) {
+		s.noteLLMSVCForbidden()
+		return out, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	for _, u := range list {
+		key := u.GetNamespace() + "/" + u.GetName()
+		if i, ok := index[key]; ok {
+			out[i].obj = u
+			out[i].cleanup = true
+			continue
+		}
+		index[key] = len(out)
+		out = append(out, deployRef{
+			ManagedRef: cluster.ManagedRef{Namespace: u.GetNamespace(), Name: u.GetName()},
+			obj:        u,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Namespace != out[j].Namespace {
+			return out[i].Namespace < out[j].Namespace
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out, nil
+}
+
+func (s *Server) deploymentFromService(ctx context.Context, ref deployRef) *deployment {
+	u := ref.obj
+	d := &deployment{
+		Release: u.GetName(), Namespace: u.GetNamespace(),
+		Backend: backendLLMSVC, External: llmsvc.IsExternal(u), CleanupPending: ref.cleanup,
+	}
+	obj, err := llmsvc.FromUnstructured(u)
+	if err != nil {
+		s.log.WarnContext(ctx, "llmservice does not decode",
+			"namespace", u.GetNamespace(), "release", u.GetName(), "err", err)
+		d.Drift = "plan unreadable: " + err.Error()
+		return d
+	}
+	if obj.Status != nil {
+		d.Phase = obj.Status.Phase
+		if obj.Status.Helm != nil {
+			d.Revision = int(obj.Status.Helm.Revision)
+			d.Status = obj.Status.Helm.Status
+		}
+		if obj.Status.Chart != nil {
+			d.Chart = chartLabel(obj.Status.Chart.Name, obj.Status.Chart.Version)
+		}
+		switch obj.Status.Phase {
+		case llmsvc.PhaseFailed:
+			d.Drift = "last apply failed: " + obj.Status.Message
+		case llmsvc.PhaseApplying:
+			d.Drift = "an apply is in progress"
+		}
+	}
+	if d.Chart == "" {
+		d.Chart = chartLabel(obj.Spec.Chart.Name, obj.Spec.Chart.Version)
+	}
+	p, err := llmsvc.ToPlan(u)
+	if err != nil {
+		s.log.WarnContext(ctx, "llmservice plan does not decode",
+			"namespace", u.GetNamespace(), "release", u.GetName(), "err", err)
+		d.Drift = "plan unreadable: " + err.Error()
+		return d
+	}
+	d.Route = routeOf(p)
+	d.Model, d.Variant, d.Version = p.Source.Model, p.Source.Variant, p.Source.Version
+	d.CatalogRef = p.Source.Ref
+	d.source, d.catalogName = p.Source.Catalog, p.Source.CatalogName
+	return d
+}
+
 // handleDeployments is the reconciliation view: the releases swiss deployed,
 // and whether each still matches the catalog it came from.
 //
@@ -500,7 +641,7 @@ func (s *Server) handleDeployments(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := contextWithTimeout(r, 30*time.Second)
 	defer cancel()
 
-	refs, err := s.probe.ManagedRefs(ctx)
+	refs, err := s.deploymentRefs(ctx)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
@@ -531,6 +672,10 @@ func (s *Server) handleDeployments(w http.ResponseWriter, r *http.Request) {
 		wg.Go(func() {
 			sem <- struct{}{}
 			defer func() { <-sem }()
+			if ref.obj != nil {
+				rows[i] = s.deploymentFromService(ctx, ref)
+				return
+			}
 			rel, err := s.probe.Release(ctx, ref.Namespace, ref.Name)
 			if err != nil {
 				// The plan named it a moment ago. Report the row with what is
@@ -538,19 +683,21 @@ func (s *Server) handleDeployments(w http.ResponseWriter, r *http.Request) {
 				s.log.WarnContext(ctx, "release not resolved",
 					"namespace", ref.Namespace, "release", ref.Name, "err", err)
 				rows[i] = &deployment{
-					Release: ref.Name, Namespace: ref.Namespace,
+					Release: ref.Name, Namespace: ref.Namespace, Backend: backendHelm,
 					Drift: "could not read this release: " + err.Error(),
 				}
 				return
 			}
 			if rel == nil {
 				rows[i] = &deployment{
-					Release: ref.Name, Namespace: ref.Namespace,
+					Release: ref.Name, Namespace: ref.Namespace, Backend: backendHelm,
 					Drift: "a plan is recorded but the release is gone",
 				}
 				return
 			}
-			rows[i] = s.deploymentRow(ctx, *rel)
+			row := s.deploymentRow(ctx, *rel)
+			row.Backend = backendHelm
+			rows[i] = row
 		})
 	}
 	wg.Wait()
@@ -570,6 +717,14 @@ func (s *Server) handleDeployments(w http.ResponseWriter, r *http.Request) {
 			behind++
 			if d.Drift == "" {
 				d.Drift = "catalog moved since this was deployed"
+			}
+		}
+		if d.CleanupPending {
+			const msg = "clean-up is unfinished"
+			if d.Drift == "" {
+				d.Drift = msg
+			} else if !strings.Contains(d.Drift, msg) {
+				d.Drift += "; " + msg
 			}
 		}
 		out = append(out, *d)

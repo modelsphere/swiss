@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/modelsphere/swiss/internal/cluster"
+	"github.com/modelsphere/swiss/internal/llmsvc"
 	"github.com/modelsphere/swiss/internal/plan"
 	"github.com/modelsphere/swiss/internal/site"
 	"github.com/modelsphere/swiss/internal/values"
@@ -42,10 +43,30 @@ type releaseStatus struct {
 	// release runs, under a different entry digest. A warning: upgrade is
 	// still accepted. Computed here, for one release, and not on the list.
 	Drift string `json:"drift,omitempty"`
-	// Plan is the status key written beside the release on every apply. It is
+	// Plan is the status key written beside a helm release on every apply. It is
 	// the only thing that can say an apply was started and never finished --
-	// helm's own status describes the last apply that returned.
+	// helm's own status describes the last apply that returned. An llmsvc
+	// release reports Service instead.
 	Plan *planStatus `json:"planStatus,omitempty"`
+	// Backend is helm or llmsvc when swiss manages the release.
+	Backend        string         `json:"backend,omitempty"`
+	CleanupPending bool           `json:"cleanupPending,omitempty"`
+	Service        *llmStatusView `json:"llmservice,omitempty"`
+}
+
+// llmStatusView is the operator's status, in place of status.yaml.
+type llmStatusView struct {
+	Phase      string         `json:"phase,omitempty"`
+	Message    string         `json:"message,omitempty"`
+	Revision   int64          `json:"revision,omitempty"`
+	Conditions []llmCondition `json:"conditions,omitempty"`
+}
+
+type llmCondition struct {
+	Type    string `json:"type"`
+	Status  string `json:"status,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -59,22 +80,64 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	b, cleanup, berr := s.backendFor(ctx, ns, release)
+	if berr != nil {
+		writeError(w, http.StatusBadGateway, berr.Error())
+		return
+	}
+
 	out := releaseStatus{Release: release, Namespace: ns}
-	if rel != nil {
+	var p *plan.Plan
+	if b != nil && b.Name() == backendLLMSVC {
+		out.Backend = backendLLMSVC
+		out.CleanupPending = cleanup
+		if cleanup {
+			out.Warning = "helm plan ConfigMap is still present; clean-up is unfinished"
+		}
+		resolved, err := s.resolveNamespace(ctx, ns, release)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		u, err := s.llms.Get(ctx, resolved, release)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		if obj, err := llmsvc.FromUnstructured(u); err == nil && obj.Status != nil {
+			out.Exists = true
+			out.Service = &llmStatusView{Phase: obj.Status.Phase, Message: obj.Status.Message}
+			for _, c := range obj.Status.Conditions {
+				out.Service.Conditions = append(out.Service.Conditions, llmCondition{
+					Type: c.Type, Status: string(c.Status), Reason: c.Reason, Message: c.Message,
+				})
+			}
+			if obj.Status.Helm != nil {
+				out.Revision = int(obj.Status.Helm.Revision)
+				out.HelmStatus = obj.Status.Helm.Status
+				out.Service.Revision = obj.Status.Helm.Revision
+			}
+		} else {
+			out.Exists = true
+		}
+		if decoded, err := llmsvc.ToPlan(u); err == nil {
+			p = decoded
+		}
+	} else if rel != nil {
 		out.Exists, out.Revision, out.HelmStatus = true, rel.Revision, rel.Status
 		if st := parseStatus(rel.SwissStatus); st.Phase != "" {
 			out.Plan = &st
 		}
+		if b != nil && b.Name() == backendHelm || len(rel.SwissFiles) > 0 {
+			out.Backend = backendHelm
+		}
+		p, _ = planOf(rel)
 	}
 
 	// The chart labels engine pods app=<release>-<engine>; without a stored plan
 	// the engine is unknown, so fall back to the helm instance label.
-	//
-	// Decoded from the record already in hand rather than through currentPlan,
-	// which would look the same release up a second time. This endpoint is
-	// polled every fifteen seconds by two pages.
 	selector := "app.kubernetes.io/instance=" + release
-	if p, err := planOf(rel); err == nil {
+	if p != nil {
 		selector = fmt.Sprintf("app=%s-%s", release, p.Engine)
 		out.Route = routeOf(p)
 		out.Model = servedName(p)
@@ -87,7 +150,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	pods, err := s.probe.Pods(ctx, ns, selector)
 	if err != nil {
-		out.Warning = err.Error()
+		if out.Warning != "" {
+			out.Warning += "; " + err.Error()
+		} else {
+			out.Warning = err.Error()
+		}
 	}
 	out.Pods = pods
 	out.Total = len(pods)

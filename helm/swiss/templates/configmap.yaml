@@ -1,3 +1,4 @@
+{{- include "swiss.validateApplyWith" . -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -26,6 +27,9 @@ data:
       addr: ":8080"
       cacheTTL: {{ .Values.config.cacheTTL }}
       allowDeploy: {{ .Values.config.allowDeploy }}
+      {{- if ne (.Values.config.applyWith | default "helm") "helm" }}
+      applyWith: {{ .Values.config.applyWith }}
+      {{- end }}
       database: {{ .Values.config.database | quote }}
       auth:
         {{- if .Values.auth.disabled }}

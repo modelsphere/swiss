@@ -172,6 +172,41 @@ func TestAuthDirResolvesAgainstTheConfigFile(t *testing.T) {
 	}
 }
 
+func TestApplyWith(t *testing.T) {
+	dir := t.TempDir()
+	base := "catalog: ./c\ncluster:\n  profile: {configMap: swiss/p}\nserver:\n  auth: {disabled: true}\n"
+
+	c, err := Load(write(t, dir, "default.yaml", base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Server.ApplyWith != "helm" {
+		t.Fatalf("applyWith = %q, want helm", c.Server.ApplyWith)
+	}
+	if err := c.ValidateServer(); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err = Load(write(t, dir, "llm.yaml", base+"  applyWith: llmsvc\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Server.ApplyWith != "llmsvc" {
+		t.Fatalf("applyWith = %q", c.Server.ApplyWith)
+	}
+	if err := c.ValidateServer(); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err = Load(write(t, dir, "bad.yaml", base+"  applyWith: operator\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ValidateServer(); err == nil {
+		t.Fatal("applyWith operator should be rejected")
+	}
+}
+
 func TestGPUProductLabelsConfig(t *testing.T) {
 	dir := t.TempDir()
 	c, err := Load(write(t, dir, "swiss.yaml", `

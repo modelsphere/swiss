@@ -40,6 +40,9 @@ type Kube struct {
 	// dyn reads the custom resources a release rendered. Nil in tests that do
 	// not exercise it; Object says so.
 	dyn dynamic.Interface
+	// rest is the config the clients above were built from. Nil when a test
+	// injected a clientset.
+	rest *rest.Config
 	// SwissPlanPrefix names the ConfigMap holding a release's plan. It is read
 	// alongside the release so a reconciliation view can tell a Swiss-managed
 	// release from one installed by hand.
@@ -86,8 +89,21 @@ func NewKube(kubeconfig, context_ string, namespaces ...string) (*Kube, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Kube{client: cs, meta: md, dyn: dyn, SwissPlanPrefix: PlanConfigMapPrefix, Namespaces: namespaces}, nil
+	return &Kube{client: cs, meta: md, dyn: dyn, rest: cfg, SwissPlanPrefix: PlanConfigMapPrefix, Namespaces: namespaces}, nil
 }
+
+// RESTConfig is the config NewKube built its clients from.
+func (k *Kube) RESTConfig() *rest.Config { return k.rest }
+
+// Dynamic is the dynamic client NewKube built, for callers that share its transport.
+func (k *Kube) Dynamic() dynamic.Interface { return k.dyn }
+
+// Clientset is the typed client NewKube built.
+func (k *Kube) Clientset() kubernetes.Interface { return k.client }
+
+// Scopes is the namespace list every list is bounded to. One entry of
+// NamespaceAll means cluster-wide.
+func (k *Kube) Scopes() []string { return k.scopes() }
 
 // NewKubeWithClient is for tests, which supply a fake clientset.
 func NewKubeWithClient(c kubernetes.Interface) *Kube {

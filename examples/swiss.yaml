@@ -40,6 +40,11 @@ cluster:
 server:
   addr: ":8080"
 
+  # Backend for a new install: helm (default) or llmsvc. A release already in
+  # the cluster stays on whichever backend owns it. llmsvc needs the
+  # LLMService CRD; without it, new installs stay on helm and /api/cluster warns.
+  applyWith: helm
+
   # How long a fetched catalog or profile is reused before refetching.
   cacheTTL: 60s
 

@@ -21,6 +21,7 @@ import (
 	"github.com/modelsphere/swiss/internal/auth"
 	"github.com/modelsphere/swiss/internal/cluster"
 	"github.com/modelsphere/swiss/internal/config"
+	"github.com/modelsphere/swiss/internal/llmsvc"
 	"github.com/modelsphere/swiss/internal/server"
 	"github.com/modelsphere/swiss/internal/store"
 	"github.com/modelsphere/swiss/internal/version"
@@ -82,6 +83,9 @@ func run(configPath, addr, logLevel, webDir string) error {
 	defer stop()
 
 	srv := server.New(cfg, probe, log, version.Version)
+	if dyn, cs := probe.Dynamic(), probe.Clientset(); dyn != nil && cs != nil {
+		srv.SetLLMServices(llmsvc.New(dyn, cs.Discovery(), cs))
+	}
 
 	// The login is checked here rather than at the first login attempt: a
 	// swissd whose credential Secret was never mounted should fail to start,
