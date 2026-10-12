@@ -19,6 +19,14 @@ type Index struct {
 	Site   string       `json:"site,omitempty"`
 	Count  int          `json:"count"`
 	Models []IndexModel `json:"models"`
+
+	// rawBase and rawCommit are the v2 index's raw-content coordinates
+	// (<raw><commit>/<path>). Nothing reads them for a fetch yet.
+	//
+	// TODO: FetchAt for a pin older than the latest variant files. History
+	// resolution is out of scope; Entry loads only what the index lists now.
+	rawBase   string `json:"-"`
+	rawCommit string `json:"-"`
 }
 
 // IndexModel is a summary, deliberately a different type from Entry. It carries
@@ -68,6 +76,11 @@ type IndexWorkload struct {
 // IndexVersion is one published version of a model. Digest is a sha256 of the
 // entry file: a deploy records it, and a later fetch that does not match is
 // refused rather than used.
+//
+// A v2 model is projected as a single version holding every latest variant.
+// Path and Digest on that version are the default variant's, or the first
+// variant's when none is marked default. Each variant's own pin is
+// IndexVariant.Path, Digest and Version.
 type IndexVersion struct {
 	Version  string         `json:"version"`
 	Path     string         `json:"path"`
@@ -89,6 +102,12 @@ type IndexVariant struct {
 	Link        string   `json:"link,omitempty"`
 	Chart       Chart    `json:"chart"`
 	Requires    Requires `json:"requires"`
+	// Path, Digest and Version pin one v2 variant file. Empty on v1, which
+	// pins the whole entry on IndexVersion; omitempty keeps a v1 listing's
+	// JSON the same.
+	Path    string `json:"path,omitempty"`
+	Digest  string `json:"digest,omitempty"`
+	Version string `json:"version,omitempty"` // variant pin version (v2)
 }
 
 func parseIndex(b []byte) (*Index, error) {

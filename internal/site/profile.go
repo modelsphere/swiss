@@ -283,7 +283,11 @@ func Parse(raw []byte, origin string) (*Profile, error) {
 	dflt := ""
 	for i, c := range p.Catalogs {
 		c.Name, c.URL = strings.TrimSpace(c.Name), strings.TrimSpace(c.URL)
+		c.SchemaVersion = strings.TrimSpace(c.SchemaVersion)
 		p.Catalogs[i] = c
+		if c.SchemaVersion != "" && c.SchemaVersion != "v1" && c.SchemaVersion != "v2" {
+			return nil, fmt.Errorf("%s: catalogs[%d] schemaVersion %q must be v1 or v2", origin, i, c.SchemaVersion)
+		}
 		switch {
 		case c.Name == "" || c.URL == "":
 			return nil, fmt.Errorf("%s: catalogs[%d] needs both name and url", origin, i)
@@ -329,9 +333,26 @@ type CatalogRepo struct {
 	Name string `yaml:"name" json:"name"`
 	// URL is an https base or an absolute path, the shape the config file takes.
 	URL string `yaml:"url" json:"url"`
+	// SchemaVersion selects which published index the URL resolves to:
+	// "v1" (or empty) loads index.json; "v2" loads index-v2.json. An explicit
+	// URL that already ends in .json wins either way. Empty defaults to v1 so
+	// existing profiles keep their v1 pins and URLs.
+	SchemaVersion string `yaml:"schemaVersion,omitempty" json:"schemaVersion,omitempty"`
 	// Default is the catalog a page opens in, and a request uses, when none is
 	// named. At most one is; with none, several catalogs have to be named.
 	Default bool `yaml:"default,omitempty" json:"default,omitempty"`
+}
+
+// SchemaVersionOrDefault is "v1" when SchemaVersion is unset, otherwise the
+// trimmed value. Callers that open a catalog branch on this rather than on the
+// raw field, so an omitted key and an explicit "v1" mean the same thing.
+func (c CatalogRepo) SchemaVersionOrDefault() string {
+	switch strings.TrimSpace(c.SchemaVersion) {
+	case "", "v1":
+		return "v1"
+	default:
+		return strings.TrimSpace(c.SchemaVersion)
+	}
 }
 
 // DefaultCatalogName is what a lone catalog is called: the profile's legacy

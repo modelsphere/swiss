@@ -1,0 +1,106 @@
+{
+  "apiVersion": "catalog.swiss/v2",
+  "site": "https://modelsphere.github.io/model-catalog/",
+  "repo": "https://github.com/modelsphere/model-catalog",
+  "raw": "https://raw.githubusercontent.com/modelsphere/model-catalog/",
+  "commit": "2c4b33de827e2ee18f1581a692c390645dbfc1ef",
+  "count": 2,
+  "models": [
+    {
+      "name": "kimi-k2.5",
+      "displayName": "Kimi K2.5",
+      "description": "Does not fit on one node. A two-pod LeaderWorkerSet group, TP8 inside each node and PP2 across the InfiniBand fabric between them. Needs the LWS controller, rdma-shared-dev-plugin and rdma-injector.",
+      "family": "kimi",
+      "tags": [
+        "chat",
+        "reasoning",
+        "long-context",
+        "multi-node"
+      ],
+      "source": {
+        "hf": "moonshotai/Kimi-K2.5"
+      },
+      "defaultVariant": "sglang-pp2-lws",
+      "reports": [],
+      "tuning": [],
+      "variants": [
+        {
+          "id": "sglang-pp2-lws",
+          "version": "1.0.0",
+          "releaseDate": "2026-10-12",
+          "commit": "2c4b33de827e2ee18f1581a692c390645dbfc1ef",
+          "path": "models/kimi-k2.5/sglang-pp2-lws.yaml",
+          "digest": "sha256:b545702a54d50dcc203014feb4657d1e19dda89694c2f85d64c1924c515442d4",
+          "history": "models/kimi-k2.5/sglang-pp2-lws.history.json",
+          "servedName": "kimi-k2.5",
+          "engine": "sglang",
+          "description": "TP8 per node, PP2 across two nodes over IB.",
+          "chart": {
+            "name": "sglang",
+            "version": ">=0.7.0"
+          },
+          "image": {
+            "repository": "4pdosc/sglang",
+            "tag": "v0.5.10.post1-gm-fix-v0.1"
+          },
+          "requires": {
+            "gpus": 8,
+            "nodes": 2,
+            "topology": "lws",
+            "rdma": true,
+            "gpuProduct": [
+              "NVIDIA-H100-80GB-HBM3",
+              "NVIDIA-H800"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "qwen3-8b",
+      "displayName": "Qwen3-8B",
+      "description": "Qwen3-8B in bf16 on one Ascend 910B card, served by vLLM's Ascend backend. Small enough for a single card, which is what makes it the model to prove a non-NVIDIA node with.",
+      "family": "qwen",
+      "tags": [
+        "chat"
+      ],
+      "source": {
+        "hf": "Qwen/Qwen3-8B"
+      },
+      "defaultVariant": "vllm-tp1-910b",
+      "reports": [],
+      "tuning": [],
+      "variants": [
+        {
+          "id": "vllm-tp1-910b",
+          "version": "1.0.0",
+          "releaseDate": "2026-10-12",
+          "commit": "2c4b33de827e2ee18f1581a692c390645dbfc1ef",
+          "path": "models/qwen3-8b/vllm-tp1-910b.yaml",
+          "digest": "sha256:4d70fe9d18f86b722d6fe287f46b597ca063952a7bfb572fc29c0248a8a36034",
+          "history": "models/qwen3-8b/vllm-tp1-910b.history.json",
+          "servedName": "Qwen3-8B",
+          "engine": "vllm",
+          "description": "Baseline: one Ascend 910B card, single node. vLLM's Ascend backend (CANN), not a CUDA build. Not yet tuned -- no AutoTune run on this hardware.",
+          "chart": {
+            "name": "vllm",
+            "version": ">=0.7.6"
+          },
+          "image": {
+            "repository": "quay.io/ascend/vllm-ascend",
+            "tag": "v0.23.0.post1",
+            "digest": "sha256:ffe9306186781ddb80812eda574134e601ee8499693ea36e4a97173111ddf7e7"
+          },
+          "requires": {
+            "gpus": 1,
+            "topology": "single-node",
+            "vendor": "ascend",
+            "gpuProduct": [
+              "Ascend-910B3"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

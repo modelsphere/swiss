@@ -38,11 +38,18 @@ func (c *Cache) Dir() string {
 	return c.dir
 }
 
-// One file per location, named by a digest of it: two catalogs configured on
-// one host do not share a slot, and the name carries no part of a URL that
-// could escape the directory.
-func (c *Cache) file(loc string) string {
-	sum := sha256.Sum256([]byte(loc))
+// CacheKey identifies one (location, schema) pair so a site that lists the
+// same base URL once as v1 and once as v2 does not share a cache slot.
+func CacheKey(loc, schema string) string {
+	schema, _ = NormalizeSchema(schema)
+	return schema + "|" + loc
+}
+
+// One file per location+schema, named by a digest of the key: two catalogs
+// configured on one host do not share a slot, and the name carries no part of
+// a URL that could escape the directory.
+func (c *Cache) file(key string) string {
+	sum := sha256.Sum256([]byte(key))
 	return filepath.Join(c.dir, "index-"+hex.EncodeToString(sum[:8])+".json")
 }
 
@@ -69,7 +76,11 @@ func (c *Cache) Save(loc string, cat *Catalog) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	target := c.file(loc)
+	schema := cat.SchemaVersion
+	if schema == "" {
+		schema = SchemaV1
+	}
+	target := c.file(CacheKey(loc, schema))
 	if err := os.Rename(tmp.Name(), target); err != nil {
 		return err
 	}
@@ -131,15 +142,24 @@ func (c *Cache) prune(keep string) {
 // written. The bytes are parsed and validated exactly as a fetched index is:
 // having been in a cache is not a reason to trust what is in it.
 func (c *Cache) Open(f Fetcher, loc string) (*Catalog, time.Time, error) {
+	return c.OpenSchema(f, loc, SchemaV1)
+}
+
+// OpenSchema builds a catalog from the cached index for loc at schema.
+func (c *Cache) OpenSchema(f Fetcher, loc, schema string) (*Catalog, time.Time, error) {
 	if c == nil {
 		return nil, time.Time{}, fmt.Errorf("no catalog cache configured")
 	}
-	name := c.file(loc)
+	schema, err := NormalizeSchema(schema)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	name := c.file(CacheKey(loc, schema))
 	raw, err := os.ReadFile(name)
 	if err != nil {
 		return nil, time.Time{}, err
 	}
-	idx, err := parseIndex(raw)
+	idx, err := parseIndexForSchema(raw, schema)
 	if err != nil {
 		return nil, time.Time{}, fmt.Errorf("cached index %s: %w", name, err)
 	}
@@ -148,7 +168,8 @@ func (c *Cache) Open(f Fetcher, loc string) (*Catalog, time.Time, error) {
 		at = fi.ModTime()
 	}
 	return &Catalog{
-		Fetcher: f, Index: idx, Ref: contentRef(raw), raw: raw,
+		Fetcher: f, Index: idx, SchemaVersion: schema,
+		Ref: contentRef(raw), raw: raw,
 		entries: map[string]Entry{},
 	}, at, nil
 }

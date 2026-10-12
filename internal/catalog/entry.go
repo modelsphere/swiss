@@ -6,6 +6,10 @@
 // is untrusted input at the point of use, and a consumer that trusts a remote
 // file because some CI somewhere was supposed to have run is not validating, it
 // is hoping.
+//
+// Schema v2 (index-v2.json) is a second published surface. It is normalized
+// into these same types before anything composes from it; v1 documents and
+// URLs are unchanged.
 package catalog
 
 import (
@@ -15,6 +19,12 @@ import (
 )
 
 const APIVersion = "catalog.swiss/v1"
+
+// APIVersionV2 is the wire apiVersion on index-v2.json and on a v2 variant
+// file. A loaded Entry is normalized to APIVersion: Validate and compose
+// already branch on that constant, and the wire version is not a second
+// in-memory shape. See entryV2.
+const APIVersionV2 = "catalog.swiss/v2"
 
 type Entry struct {
 	APIVersion  string   `yaml:"apiVersion" json:"apiVersion"`
@@ -58,6 +68,14 @@ type Variant struct {
 	Image       *Image      `yaml:"image,omitempty" json:"image,omitempty"`
 	Requires    Requires    `yaml:"requires" json:"requires"`
 	Values      values.Tree `yaml:"values,omitempty" json:"values,omitempty"`
+	// Digest, Version and Path pin a v2 variant file, copied from the index
+	// on load. Empty on v1, where the pin lives on the entry. yaml:"-" so a
+	// v1 document that does not have them stays strict; json omitempty so a
+	// v1 plan and a v1 API listing do not grow new keys. compose prefers
+	// these over the entry pin when they are set.
+	Digest  string `yaml:"-" json:"digest,omitempty"`
+	Version string `yaml:"-" json:"version,omitempty"`
+	Path    string `yaml:"-" json:"path,omitempty"`
 }
 
 // Chart carries a name and a version, never a repository: a public catalog

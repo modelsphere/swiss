@@ -33,7 +33,37 @@ type Fetcher interface {
 	String() string
 }
 
-// NewFetcher picks an implementation from a location:
+// SchemaV1 and SchemaV2 are the values CatalogRepo.SchemaVersion accepts.
+const (
+	SchemaV1 = "v1"
+	SchemaV2 = "v2"
+)
+
+// NormalizeSchema returns SchemaV1 when s is empty or "v1", SchemaV2 for "v2",
+// and an error for anything else.
+func NormalizeSchema(s string) (string, error) {
+	switch strings.TrimSpace(s) {
+	case "", SchemaV1:
+		return SchemaV1, nil
+	case SchemaV2:
+		return SchemaV2, nil
+	default:
+		return "", fmt.Errorf("catalog schemaVersion %q must be v1 or v2", s)
+	}
+}
+
+// indexFileName is the published index document for a schema. An explicit
+// location that already ends in .json bypasses this.
+func indexFileName(schema string) string {
+	if schema == SchemaV2 {
+		return "index-v2.json"
+	}
+	return "index.json"
+}
+
+// NewFetcher picks an implementation from a location, loading schema v1
+// (index.json). Prefer NewFetcherWithSchema when the site profile names a
+// schemaVersion.
 //
 //	https://models.example.com/catalog/      -> https, index.json appended
 //	https://models.example.com/index.json    -> https
@@ -44,6 +74,18 @@ type Fetcher interface {
 // the documents it points at; making the consumer speak git would buy nothing a
 // static file server does not already give it.
 func NewFetcher(loc string) (Fetcher, error) {
+	return NewFetcherWithSchema(loc, SchemaV1)
+}
+
+// NewFetcherWithSchema is NewFetcher for a specific catalog schema. schema is
+// "v1" or "v2" (empty means v1). When loc does not already name a .json file,
+// v1 appends index.json and v2 appends index-v2.json — the v1 URL shape is
+// unchanged.
+func NewFetcherWithSchema(loc, schema string) (Fetcher, error) {
+	schema, err := NormalizeSchema(schema)
+	if err != nil {
+		return nil, err
+	}
 	if loc == "" {
 		return nil, fmt.Errorf("no catalog location")
 	}
@@ -53,18 +95,18 @@ func NewFetcher(loc string) (Fetcher, error) {
 			return nil, fmt.Errorf("catalog url %q: %w", loc, err)
 		}
 		if !strings.HasSuffix(u.Path, ".json") {
-			u = u.JoinPath("index.json")
+			u = u.JoinPath(indexFileName(schema))
 		}
-		return &httpSource{index: u, client: &http.Client{Timeout: 30 * time.Second}}, nil
+		return &httpSource{index: u, schema: schema, client: &http.Client{Timeout: 30 * time.Second}}, nil
 	}
 	abs, err := filepath.Abs(loc)
 	if err != nil {
 		return nil, err
 	}
 	if fi, err := os.Stat(abs); err == nil && fi.IsDir() {
-		return &fileSource{index: filepath.Join(abs, "index.json")}, nil
+		return &fileSource{index: filepath.Join(abs, indexFileName(schema)), schema: schema}, nil
 	}
-	return &fileSource{index: abs}, nil
+	return &fileSource{index: abs, schema: schema}, nil
 }
 
 // safeRel rejects an index whose paths would read outside the catalog. The index
@@ -83,7 +125,10 @@ func safeRel(rel string) error {
 	return nil
 }
 
-type fileSource struct{ index string }
+type fileSource struct {
+	index  string
+	schema string
+}
 
 func (s *fileSource) String() string { return s.index }
 
@@ -92,7 +137,7 @@ func (s *fileSource) Index(ctx context.Context) (*Index, []byte, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("catalog index: %w", err)
 	}
-	idx, err := parseIndex(b)
+	idx, err := parseIndexForSchema(b, s.schema)
 	return idx, b, err
 }
 
@@ -105,6 +150,7 @@ func (s *fileSource) Fetch(_ context.Context, rel string) ([]byte, error) {
 
 type httpSource struct {
 	index  *url.URL
+	schema string
 	client *http.Client
 }
 
@@ -115,7 +161,7 @@ func (s *httpSource) Index(ctx context.Context) (*Index, []byte, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("catalog index: %w", err)
 	}
-	idx, err := parseIndex(b)
+	idx, err := parseIndexForSchema(b, s.schema)
 	return idx, b, err
 }
 

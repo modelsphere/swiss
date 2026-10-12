@@ -108,7 +108,7 @@ func (s *Server) releaseDigestDrift(ctx context.Context, p *plan.Plan) string {
 	if err != nil {
 		return ""
 	}
-	cat, err := s.openCatalog(ctx, repo.URL)
+	cat, err := s.openCatalog(ctx, repo.URL, repo.SchemaVersionOrDefault())
 	if err != nil {
 		return ""
 	}

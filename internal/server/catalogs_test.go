@@ -142,7 +142,7 @@ func TestClusterListsTheCatalogs(t *testing.T) {
 		t.Fatalf("catalogs = %v, want two", body["catalogs"])
 	}
 	first := cats[0].(map[string]any)
-	if first["name"] != "public" || first["url"] != a || first["source"] != catalogSource(a) || first["ref"] == "" {
+	if first["name"] != "public" || first["url"] != a || first["source"] != catalogSource(a, "v1") || first["ref"] == "" {
 		t.Errorf("first catalog = %v", first)
 	}
 	if body["catalogFrom"] != "profile" {
@@ -163,7 +163,7 @@ func TestPlansRecordTheCatalogName(t *testing.T) {
 // default is.
 func TestUpgradeStaysOnItsNamedCatalog(t *testing.T) {
 	_, s, _, _ := twoCatalogs(t, "internal", func(a, _ string) []cluster.Release {
-		return []cluster.Release{deployedFrom(catalogSource(a), "public", "sha256:old")}
+		return []cluster.Release{deployedFrom(catalogSource(a, "v1"), "public", "sha256:old")}
 	})
 	if got, err := upgradeCatalog(t, s); err != nil || got != "public" {
 		t.Errorf("got %q, %v; want the named catalog, public", got, err)
@@ -174,7 +174,7 @@ func TestUpgradeStaysOnItsNamedCatalog(t *testing.T) {
 // model id and the variant over unchanged.
 func TestUpgradeMovesToTheNamedCatalog(t *testing.T) {
 	_, s, _, _ := twoCatalogs(t, "", func(a, _ string) []cluster.Release {
-		return []cluster.Release{deployedFrom(catalogSource(a), "public", "sha256:old")}
+		return []cluster.Release{deployedFrom(catalogSource(a, "v1"), "public", "sha256:old")}
 	})
 	out, err := s.carryForward(t.Context(), planRequest{FromRelease: "r", Namespace: "ns", Catalog: "internal"})
 	if err != nil {
@@ -259,7 +259,7 @@ func TestUpgradeFromANamedCatalogThatIsGoneIsRefused(t *testing.T) {
 // location it records, when the site lists one there -- default or not.
 func TestUnnamedPlanMatchesByLocation(t *testing.T) {
 	_, s, _, _ := twoCatalogs(t, "internal", func(a, _ string) []cluster.Release {
-		return []cluster.Release{deployedFrom(catalogSource(a), "", "sha256:old")}
+		return []cluster.Release{deployedFrom(catalogSource(a, "v1"), "", "sha256:old")}
 	})
 	if got, err := upgradeCatalog(t, s); err != nil || got != "public" {
 		t.Errorf("got %q, %v; want public, whose location the plan records", got, err)
@@ -297,7 +297,7 @@ func TestDeploymentsCompareWithTheirOwnCatalog(t *testing.T) {
 	for name, rel := range map[string]func(a, b string) []cluster.Release{
 		"named": releases(deployedFrom("https://moved.example.com/index.json", "internal", "sha256:old")),
 		"by location": func(_, b string) []cluster.Release {
-			return releases(deployedFrom(catalogSource(b), "", "sha256:old"))("", "")
+			return releases(deployedFrom(catalogSource(b, "v1"), "", "sha256:old"))("", "")
 		},
 		"falls to default": releases(deployedFrom("/Users/someone/swiss-catalog/index.json", "", "sha256:old")),
 	} {

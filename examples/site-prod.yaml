@@ -2,6 +2,17 @@
 name: testenv
 namespace: swiss-deploy
 
+# Catalogs this site deploys from. schemaVersion selects the published index:
+# omit or "v1" → index.json (unchanged); "v2" → index-v2.json. Each repo can
+# choose independently.
+# catalogs:
+#   - name: public
+#     url: https://modelsphere.github.io/model-catalog/
+#     schemaVersion: v2
+#   - name: archive
+#     url: https://modelsphere.github.io/model-catalog/
+#     # schemaVersion omitted → v1
+
 # Charts come from the registry. A local path works for the CLI; swissd has no
 # checkout to point at, so the registry is the real answer.
 chartRepo: https://modelsphere.github.io/helm-charts

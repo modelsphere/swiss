@@ -96,7 +96,7 @@ func TestCacheRejectsCorruptedBytes(t *testing.T) {
 	if err := cache.Save(dir, c); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(cache.file(dir), []byte("{ not json"), 0o600); err != nil {
+	if err := os.WriteFile(cache.file(CacheKey(dir, SchemaV1)), []byte("{ not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	f, err := NewFetcher(dir)
@@ -147,7 +147,7 @@ func TestCacheSweepsWhatIsNoLongerRead(t *testing.T) {
 	if _, err := os.Stat(recent); err != nil {
 		t.Errorf("a recent index must be kept -- a repoint may come straight back: %v", err)
 	}
-	if _, err := os.Stat(cache.file(dir)); err != nil {
+	if _, err := os.Stat(cache.file(CacheKey(dir, SchemaV1))); err != nil {
 		t.Errorf("the index just saved must survive its own sweep: %v", err)
 	}
 }
@@ -167,7 +167,7 @@ func TestCacheKeepsTheIndexInUseHoweverOld(t *testing.T) {
 		t.Fatal(err)
 	}
 	old := time.Now().Add(-90 * 24 * time.Hour)
-	if err := os.Chtimes(cache.file(dir), old, old); err != nil {
+	if err := os.Chtimes(cache.file(CacheKey(dir, SchemaV1)), old, old); err != nil {
 		t.Fatal(err)
 	}
 	// A second save for the same location: the sweep it triggers sees its own

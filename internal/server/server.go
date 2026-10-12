@@ -109,41 +109,48 @@ func (s *Server) Catalog(ctx context.Context, name string) (*catalog.Catalog, si
 	if err != nil {
 		return nil, repo, err
 	}
-	c, err := s.openCatalog(ctx, repo.URL)
+	c, err := s.openCatalog(ctx, repo.URL, repo.SchemaVersionOrDefault())
 	return c, repo, err
 }
 
-// openCatalog returns the catalog at loc, refetching once the TTL has passed.
+// openCatalog returns the catalog at loc for schema (v1 or v2), refetching once
+// the TTL has passed. The in-memory key includes the schema so one base URL
+// listed twice (v1 and v2) does not share a slot.
 //
-// A catalog fetch is one HTTP GET of index.json, so the TTL is about not doing
+// A catalog fetch is one HTTP GET of the index, so the TTL is about not doing
 // it per request rather than about the fetch being expensive. On failure the
 // previous catalog is kept and served: a published catalog going briefly
 // unreachable should not empty the marketplace.
-func (s *Server) openCatalog(ctx context.Context, loc string) (*catalog.Catalog, error) {
+func (s *Server) openCatalog(ctx context.Context, loc, schema string) (*catalog.Catalog, error) {
+	schema, err := catalog.NormalizeSchema(schema)
+	if err != nil {
+		return nil, err
+	}
+	key := catalog.CacheKey(loc, schema)
 	s.mu.Lock()
-	cached, have := s.cats[loc]
+	cached, have := s.cats[key]
 	s.mu.Unlock()
 	if have && time.Since(cached.at) < s.cfg.Server.CacheTTL {
 		return cached.cat, nil
 	}
 
-	f, err := catalog.NewFetcher(loc)
+	f, err := catalog.NewFetcherWithSchema(loc, schema)
 	if err != nil {
 		return nil, err
 	}
 	c, err := catalog.OpenFetcher(ctx, f)
 	if err != nil {
 		if have {
-			s.log.WarnContext(ctx, "catalog refresh failed, serving previous", "err", err, "ref", cached.cat.Ref, "catalog", loc)
+			s.log.WarnContext(ctx, "catalog refresh failed, serving previous", "err", err, "ref", cached.cat.Ref, "catalog", loc, "schema", schema)
 			return cached.cat, nil
 		}
 		// Nothing in memory for this location: this process may have just
 		// started, which is exactly when an unreachable catalog would otherwise
 		// mean an empty marketplace.
-		if disk, wrote, derr := s.catCache.Open(f, loc); derr == nil {
+		if disk, wrote, derr := s.catCache.OpenSchema(f, loc, schema); derr == nil {
 			s.log.WarnContext(ctx, "catalog unreachable, serving the cached index",
-				"err", err, "cachedAt", wrote, "ref", disk.Ref, "catalog", loc)
-			s.keepCatalog(disk, loc)
+				"err", err, "cachedAt", wrote, "ref", disk.Ref, "catalog", loc, "schema", schema)
+			s.keepCatalog(disk, key)
 			return disk, nil
 		}
 		return nil, err
@@ -151,13 +158,13 @@ func (s *Server) openCatalog(ctx context.Context, loc string) (*catalog.Catalog,
 	if err := s.catCache.Save(loc, c); err != nil {
 		s.log.WarnContext(ctx, "catalog index cache not written", "err", err, "dir", s.catCache.Dir())
 	}
-	s.keepCatalog(c, loc)
+	s.keepCatalog(c, key)
 	return c, nil
 }
 
-func (s *Server) keepCatalog(c *catalog.Catalog, loc string) {
+func (s *Server) keepCatalog(c *catalog.Catalog, key string) {
 	s.mu.Lock()
-	s.cats[loc] = openCatalog{cat: c, at: time.Now()}
+	s.cats[key] = openCatalog{cat: c, at: time.Now()}
 	s.mu.Unlock()
 }
 
@@ -216,7 +223,7 @@ func (s *Server) CatalogRepo(ctx context.Context, name string) (site.CatalogRepo
 func (s *Server) CatalogFrom(ctx context.Context, source string) (site.CatalogRepo, bool) {
 	repos, _ := s.Catalogs(ctx)
 	for _, r := range repos {
-		if catalogSource(r.URL) == source {
+		if catalogSource(r.URL, r.SchemaVersionOrDefault()) == source {
 			return r, true
 		}
 	}
@@ -257,10 +264,10 @@ func (s *Server) ReleaseCatalog(ctx context.Context, name, source string) (site.
 	return r, nil
 }
 
-// catalogSource is a location as a plan records it. Empty when it does not
-// parse, which matches nothing.
-func catalogSource(loc string) string {
-	f, err := catalog.NewFetcher(loc)
+// catalogSource is a location as a plan records it for the given schema.
+// Empty when it does not parse, which matches nothing.
+func catalogSource(loc, schema string) string {
+	f, err := catalog.NewFetcherWithSchema(loc, schema)
 	if err != nil {
 		return ""
 	}

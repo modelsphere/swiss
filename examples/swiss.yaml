@@ -9,8 +9,9 @@
 # ~/.config/swiss/swiss.yaml. The CLI works without one; swissd requires it.
 
 # An https base or a local path. index.json is appended when the location does
-# not already name a .json file. No git: a catalog is a published index plus the
-# documents it points at.
+# not already name a .json file (schema v1, the default). A site profile can
+# mark a catalog schemaVersion: v2 to append index-v2.json instead. No git: a
+# catalog is a published index plus the documents it points at.
 #
 # For swissd this is the default: a site profile naming a catalog of its own
 # wins, so the catalog can be repointed from the web without a helm upgrade.

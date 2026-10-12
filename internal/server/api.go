@@ -135,8 +135,8 @@ func (s *Server) handleCluster(w http.ResponseWriter, r *http.Request) {
 		info.Warnings = append(info.Warnings, "catalog: "+err.Error())
 	}
 	for _, r := range repos {
-		ci := catalogInfo{Name: r.Name, URL: r.URL, Source: catalogSource(r.URL), Default: r.Default}
-		if c, err := s.openCatalog(ctx, r.URL); err == nil {
+		ci := catalogInfo{Name: r.Name, URL: r.URL, Source: catalogSource(r.URL, r.SchemaVersionOrDefault()), Default: r.Default}
+		if c, err := s.openCatalog(ctx, r.URL, r.SchemaVersionOrDefault()); err == nil {
 			ci.Ref = c.Ref
 		} else {
 			info.Warnings = append(info.Warnings, fmt.Sprintf("catalog %s: %v", r.Name, err))
@@ -197,7 +197,7 @@ func (s *Server) catalogFor(ctx context.Context, w http.ResponseWriter, r *http.
 		writeError(w, http.StatusBadRequest, err.Error())
 		return nil, repo, false
 	}
-	c, err := s.openCatalog(ctx, repo.URL)
+	c, err := s.openCatalog(ctx, repo.URL, repo.SchemaVersionOrDefault())
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return nil, repo, false
@@ -511,7 +511,7 @@ func (s *Server) handleDeployments(w http.ResponseWriter, r *http.Request) {
 	repos, _ := s.Catalogs(ctx)
 	current := map[string]string{}
 	for _, repo := range repos {
-		if c, err := s.openCatalog(ctx, repo.URL); err == nil {
+		if c, err := s.openCatalog(ctx, repo.URL, repo.SchemaVersionOrDefault()); err == nil {
 			current[repo.Name] = c.Ref
 		}
 	}

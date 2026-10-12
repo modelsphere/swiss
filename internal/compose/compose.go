@@ -114,9 +114,11 @@ func Compose(in Input) (*plan.Plan, error) {
 			Ref:         in.Ref,
 			Model:       in.Entry.Name,
 			HF:          in.Entry.Source.HF,
-			Version:     in.Entry.Version,
-			Digest:      in.Entry.Digest,
-			Variant:     in.Variant.ID,
+			// A v2 variant carries its own pin; v1 leaves these empty and the
+			// entry (version file) pin is what was recorded before.
+			Version: pinVersion(in.Entry, in.Variant),
+			Digest:  pinDigest(in.Entry, in.Variant),
+			Variant: in.Variant.ID,
 		},
 		Chart: plan.ChartRef{
 			Name:    in.Variant.Chart.Name,
@@ -327,4 +329,22 @@ func toAnySlice(s []string) []any {
 		out[i] = v
 	}
 	return out
+}
+
+// pinVersion is the version recorded on a plan: the v2 variant pin when set,
+// otherwise the entry (v1 version-file) version.
+func pinVersion(e catalog.Entry, v catalog.Variant) string {
+	if v.Version != "" {
+		return v.Version
+	}
+	return e.Version
+}
+
+// pinDigest is the digest recorded on a plan: the v2 variant file when set,
+// otherwise the entry digest.
+func pinDigest(e catalog.Entry, v catalog.Variant) string {
+	if v.Digest != "" {
+		return v.Digest
+	}
+	return e.Digest
 }
