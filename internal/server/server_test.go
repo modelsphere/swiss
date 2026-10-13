@@ -269,7 +269,7 @@ func TestCatalogRefreshFailureServesPrevious(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a failed refresh must fall back, not fail: %v", err)
 	}
-	if again.Ref != first.Ref {
+	if again.Ref() != first.Ref() {
 		t.Error("fallback did not serve the previously fetched catalog")
 	}
 }
@@ -314,8 +314,8 @@ func TestCatalogServesTheCachedIndexAfterARestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("an unreachable catalog must fall back to the cached index: %v", err)
 	}
-	if restarted.Ref != first.Ref {
-		t.Errorf("ref %s, want the cached %s", restarted.Ref, first.Ref)
+	if restarted.Ref() != first.Ref() {
+		t.Errorf("ref %s, want the cached %s", restarted.Ref(), first.Ref())
 	}
 }
 

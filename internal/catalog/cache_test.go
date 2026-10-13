@@ -52,13 +52,13 @@ func TestCacheRoundTripsTheIndexBytes(t *testing.T) {
 	}
 	// The ref is a digest of the index bytes, so an equal ref is the whole
 	// assertion: what comes back is byte-identical to what was published.
-	if got.Ref != c.Ref {
-		t.Errorf("ref %s, want %s", got.Ref, c.Ref)
+	if got.Ref() != c.Ref() {
+		t.Errorf("ref %s, want %s", got.Ref(), c.Ref())
 	}
 	if at.IsZero() {
 		t.Error("the cache has to report when it was written")
 	}
-	if _, ok := got.Index.Model("glm-5"); !ok {
+	if _, ok := got.(*V1).Index.Model("glm-5"); !ok {
 		t.Error("the cached index did not parse into a usable catalog")
 	}
 }
@@ -196,7 +196,7 @@ func TestNilCacheIsUsable(t *testing.T) {
 	if got := NewCache(""); got != nil {
 		t.Errorf("an empty dir must turn the cache off, got %#v", got)
 	}
-	if err := c.Save("loc", "", &Catalog{}); err != nil {
+	if err := c.Save("loc", "", &V1{}); err != nil {
 		t.Errorf("saving to a nil cache must be a no-op, got %v", err)
 	}
 	if c.Dir() != "" {

@@ -21,15 +21,18 @@ import (
 const maxFetch = 8 << 20
 
 // Fetcher is where a catalog is read from: a local directory or an https base.
-// Both resolve entry paths relative to where index.json was found, which is what
+// Both resolve entry paths relative to where the index was found, which is what
 // lets the same catalog be served from a checkout, a static bucket or a plain
 // web server with no code change.
 type Fetcher interface {
-	// Index fetches index.json and returns it with the raw bytes it was parsed
-	// from -- the bytes are what the catalog reference is computed over.
-	Index(ctx context.Context) (*Index, []byte, error)
+	// Index fetches the index document's bytes, which are what the catalog
+	// reference is computed over. Parsing is Open's, by Schema.
+	Index(ctx context.Context) ([]byte, error)
 	// Fetch reads one path relative to the index.
 	Fetch(ctx context.Context, rel string) ([]byte, error)
+	// Schema is the schemaVersion the location was configured with: v1, v2,
+	// or "" for unset.
+	Schema() string
 	String() string
 }
 
@@ -71,7 +74,7 @@ func namesJSON(loc string) bool {
 	return strings.HasSuffix(loc, ".json")
 }
 
-// NewFetcher picks an implementation from a location, with schemaVersion unset.
+// NewFetcher picks an implementation from a location, with schemaVersion unset:
 //
 //	https://models.example.com/catalog/      -> https, index.json appended
 //	https://models.example.com/index.json    -> https
@@ -131,21 +134,19 @@ func safeRel(rel string) error {
 	return nil
 }
 
-type fileSource struct {
-	index  string
-	schema string
-}
+type fileSource struct{ index, schema string }
 
 func (s *fileSource) String() string { return s.index }
 
-func (s *fileSource) Index(ctx context.Context) (*Index, []byte, error) {
+func (s *fileSource) Index(ctx context.Context) ([]byte, error) {
 	b, err := os.ReadFile(s.index)
 	if err != nil {
-		return nil, nil, fmt.Errorf("catalog index: %w", err)
+		return nil, fmt.Errorf("catalog index: %w", err)
 	}
-	idx, err := parseIndexForSchema(b, s.schema)
-	return idx, b, err
+	return b, nil
 }
+
+func (s *fileSource) Schema() string { return s.schema }
 
 func (s *fileSource) Fetch(_ context.Context, rel string) ([]byte, error) {
 	if err := safeRel(rel); err != nil {
@@ -162,14 +163,15 @@ type httpSource struct {
 
 func (s *httpSource) String() string { return s.index.String() }
 
-func (s *httpSource) Index(ctx context.Context) (*Index, []byte, error) {
+func (s *httpSource) Index(ctx context.Context) ([]byte, error) {
 	b, err := s.get(ctx, s.index)
 	if err != nil {
-		return nil, nil, fmt.Errorf("catalog index: %w", err)
+		return nil, fmt.Errorf("catalog index: %w", err)
 	}
-	idx, err := parseIndexForSchema(b, s.schema)
-	return idx, b, err
+	return b, nil
 }
+
+func (s *httpSource) Schema() string { return s.schema }
 
 func (s *httpSource) Fetch(ctx context.Context, rel string) ([]byte, error) {
 	if err := safeRel(rel); err != nil {
@@ -181,12 +183,17 @@ func (s *httpSource) Fetch(ctx context.Context, rel string) ([]byte, error) {
 }
 
 func (s *httpSource) get(ctx context.Context, u *url.URL) ([]byte, error) {
+	return httpGet(ctx, s.client, u)
+}
+
+// httpGet reads one document, capped at maxFetch.
+func httpGet(ctx context.Context, client *http.Client, u *url.URL) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/json, application/yaml, text/yaml, */*")
-	resp, err := s.client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}

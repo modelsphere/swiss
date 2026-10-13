@@ -78,7 +78,7 @@ func TestOpenOverHTTPAndFetchEntry(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", loc, err)
 		}
-		e, err := c.Entry(context.Background(), "m", "")
+		e, err := c.(*V1).Entry(context.Background(), "m", "")
 		if err != nil {
 			t.Fatalf("%s: %v", loc, err)
 		}
@@ -95,7 +95,7 @@ func TestVersionPinning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	latest, err := c.Entry(context.Background(), "m", "")
+	latest, err := c.(*V1).Entry(context.Background(), "m", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestVersionPinning(t *testing.T) {
 		t.Fatalf("empty version should resolve to latest, got %s", latest.Version)
 	}
 
-	pinned, err := c.Entry(context.Background(), "m", "1.0.0")
+	pinned, err := c.(*V1).Entry(context.Background(), "m", "1.0.0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestVersionPinning(t *testing.T) {
 		t.Error("each version carries its own digest")
 	}
 
-	if _, err := c.Entry(context.Background(), "m", "9.9.9"); err == nil {
+	if _, err := c.(*V1).Entry(context.Background(), "m", "9.9.9"); err == nil {
 		t.Error("an unpublished version must be refused")
 	}
 }
@@ -130,7 +130,7 @@ func TestDigestMismatchIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = c.Entry(context.Background(), "m", "1.1.0")
+	_, err = c.(*V1).Entry(context.Background(), "m", "1.1.0")
 	if err == nil || !strings.Contains(err.Error(), "rewritten") {
 		t.Fatalf("got %v", err)
 	}
@@ -146,8 +146,8 @@ func TestRefIsContentAddressed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.Ref != b.Ref || !strings.HasPrefix(a.Ref, "sha256:") {
-		t.Fatalf("refs differ or malformed: %q vs %q", a.Ref, b.Ref)
+	if a.Ref() != b.Ref() || !strings.HasPrefix(a.Ref(), "sha256:") {
+		t.Fatalf("refs differ or malformed: %q vs %q", a.Ref(), b.Ref())
 	}
 }
 
@@ -230,7 +230,7 @@ func TestStaleIndexIsDetected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Entry(context.Background(), "m", "1.1.0"); err == nil {
+	if _, err := c.(*V1).Entry(context.Background(), "m", "1.1.0"); err == nil {
 		t.Fatal("expected a stale-index error")
 	}
 }
@@ -248,7 +248,7 @@ func TestEntryValidationRunsOnFetch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = c.Entry(context.Background(), "m", "1.1.0")
+	_, err = c.(*V1).Entry(context.Background(), "m", "1.1.0")
 	if err == nil || !strings.Contains(err.Error(), "does not match engine") {
 		t.Fatalf("fetched entries must be validated, got %v", err)
 	}
@@ -260,7 +260,7 @@ func TestLocalDirectoryAndFileBothWork(t *testing.T) {
 		if err != nil {
 			t.Skipf("example catalog not present: %v", err)
 		}
-		if _, err := c.Entry(context.Background(), "qwen3.6-35b-a3b", ""); err != nil {
+		if _, err := c.(*V1).Entry(context.Background(), "qwen3.6-35b-a3b", ""); err != nil {
 			t.Errorf("%s: %v", loc, err)
 		}
 	}

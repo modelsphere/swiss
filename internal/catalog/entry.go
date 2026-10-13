@@ -6,10 +6,6 @@
 // is untrusted input at the point of use, and a consumer that trusts a remote
 // file because some CI somewhere was supposed to have run is not validating, it
 // is hoping.
-//
-// Schema v2 (index-v2.json) is a second published surface. It is normalized
-// into these same types before anything composes from it; v1 documents and
-// URLs are unchanged.
 package catalog
 
 import (
@@ -19,12 +15,6 @@ import (
 )
 
 const APIVersion = "catalog.swiss/v1"
-
-// APIVersionV2 is the wire apiVersion on index-v2.json and on a v2 variant
-// file. A loaded Entry is normalized to APIVersion: Validate and compose
-// already branch on that constant, and the wire version is not a second
-// in-memory shape. See entryV2.
-const APIVersionV2 = "catalog.swiss/v2"
 
 type Entry struct {
 	APIVersion  string   `yaml:"apiVersion" json:"apiVersion"`
@@ -44,13 +34,6 @@ type Entry struct {
 	// Digest is set on fetch from the index, not read from the document.
 	Digest   string    `yaml:"-" json:"digest,omitempty"`
 	Variants []Variant `yaml:"variants" json:"variants"`
-	// Unavailable is a v2 variant whose file could not be loaded, by id, with
-	// why. Its siblings are still served: each v2 file is pinned on its own, so
-	// one bad file blocks deploying only itself.
-	Unavailable map[string]string `yaml:"-" json:"unavailable,omitempty"`
-	// defaultID is the index's default variant, kept for when it is the one
-	// Unavailable -- falling back to another would deploy what was not asked.
-	defaultID string
 }
 
 // Source is model identity, never a location. The charts mount weights from
@@ -75,18 +58,6 @@ type Variant struct {
 	Image       *Image      `yaml:"image,omitempty" json:"image,omitempty"`
 	Requires    Requires    `yaml:"requires" json:"requires"`
 	Values      values.Tree `yaml:"values,omitempty" json:"values,omitempty"`
-	// Digest, Version and Path pin a v2 variant file, copied from the index
-	// on load. Empty on v1, where the pin lives on the entry. yaml:"-" so a
-	// v1 document that does not have them stays strict; json omitempty so a
-	// v1 plan and a v1 API listing do not grow new keys. compose prefers
-	// these over the entry pin when they are set.
-	Digest  string `yaml:"-" json:"digest,omitempty"`
-	Version string `yaml:"-" json:"version,omitempty"`
-	Path    string `yaml:"-" json:"path,omitempty"`
-	// ServedName and Deprecated are a v2 variant file's own, where v1 has one
-	// servedName per entry and deprecates whole models.
-	ServedName string `yaml:"-" json:"servedName,omitempty"`
-	Deprecated any    `yaml:"-" json:"deprecated,omitempty"`
 }
 
 // Chart carries a name and a version, never a repository: a public catalog
@@ -174,24 +145,12 @@ func (e Entry) ServedModelName() string {
 	return e.Name
 }
 
-// ServedNameOf is what variant v advertises: its own servedName on v2, else the
-// entry's.
-func (e Entry) ServedNameOf(v Variant) string {
-	if v.ServedName != "" {
-		return v.ServedName
-	}
-	return e.ServedModelName()
-}
-
 // Variant looks up a variant by id.
 func (e Entry) Variant(id string) (Variant, error) {
 	for _, v := range e.Variants {
 		if v.ID == id {
 			return v, nil
 		}
-	}
-	if why, ok := e.Unavailable[id]; ok {
-		return Variant{}, fmt.Errorf("model %q variant %q is unavailable: %s", e.Name, id, why)
 	}
 	var ids []string
 	for _, v := range e.Variants {
@@ -203,9 +162,6 @@ func (e Entry) Variant(id string) (Variant, error) {
 // DefaultVariant is the one marked default, else the first. Entries are
 // validated to carry at most one default.
 func (e Entry) DefaultVariant() (Variant, error) {
-	if why, ok := e.Unavailable[e.defaultID]; ok {
-		return Variant{}, fmt.Errorf("model %q default variant %q is unavailable: %s", e.Name, e.defaultID, why)
-	}
 	if len(e.Variants) == 0 {
 		return Variant{}, fmt.Errorf("model %q has no variants", e.Name)
 	}

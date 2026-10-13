@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -10,161 +11,91 @@ import (
 	"github.com/modelsphere/swiss/internal/plan"
 )
 
-// Multi-variant v2 projects every latest variant under one IndexVersion whose
-// Digest is the default (or first) variant's. Compose pins the chosen
-// variant's digest. digestDrift must compare against that variant pin, or a
-// non-default deploy looks permanently drifted.
-func TestDigestDriftV2MultiVariant(t *testing.T) {
-	const (
-		defDigest = "sha256:defaultaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-		altDigest = "sha256:alternatebbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-		stale     = "sha256:stalecccccccccccccccccccccccccccccccccccccccccccccccccccc"
-	)
-	idx := &catalog.Index{
-		APIVersion: catalog.APIVersionV2,
-		Models: []catalog.IndexModel{{
-			Name:   "m",
-			Latest: "1.0.0",
-			Versions: []catalog.IndexVersion{{
-				Version: "1.0.0",
-				Path:    "models/m/default.yaml",
-				Digest:  defDigest,
-				Variants: []catalog.IndexVariant{
-					{ID: "default", Default: true, Path: "models/m/default.yaml", Digest: defDigest, Version: "1.0.0"},
-					{ID: "alt", Path: "models/m/alt.yaml", Digest: altDigest, Version: "1.0.0"},
-				},
-			}},
-		}},
-	}
+// indexOnly serves an index and no documents: drift reads the index alone.
+type indexOnly struct{ raw string }
 
-	if got := digestDrift(idx, "m", "1.0.0", "alt", altDigest); got != "" {
-		t.Fatalf("unchanged non-default variant: got %q, want none", got)
-	}
-	if got := digestDrift(idx, "m", "1.0.0", "default", defDigest); got != "" {
-		t.Fatalf("unchanged default variant: got %q, want none", got)
-	}
-
-	want := "version 1.0.0 variant alt: upstream digest changed since this was deployed"
-	if got := digestDrift(idx, "m", "1.0.0", "alt", stale); got != want {
-		t.Fatalf("rewritten non-default: got %q, want %q", got, want)
-	}
-	wantDef := "version 1.0.0 variant default: upstream digest changed since this was deployed"
-	if got := digestDrift(idx, "m", "1.0.0", "default", stale); got != wantDef {
-		t.Fatalf("rewritten default: got %q, want %q", got, wantDef)
-	}
+func (f indexOnly) Index(context.Context) ([]byte, error) { return []byte(f.raw), nil }
+func (indexOnly) Schema() string                          { return "" }
+func (indexOnly) String() string                          { return "mem" }
+func (indexOnly) Fetch(_ context.Context, rel string) ([]byte, error) {
+	return nil, fmt.Errorf("%s: not served", rel)
 }
 
-// v1 variants have no IndexVariant.Digest; drift still uses IndexVersion.Digest.
-func TestDigestDriftV1UsesEntryDigest(t *testing.T) {
-	const (
-		entry = "sha256:entrydddddddddddddddddddddddddddddddddddddddddddddddddddd"
-		stale = "sha256:staleeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-	)
-	idx := &catalog.Index{
-		APIVersion: catalog.APIVersion,
-		Models: []catalog.IndexModel{{
-			Name:   "m",
-			Latest: "1.0.0",
-			Versions: []catalog.IndexVersion{{
-				Version: "1.0.0",
-				Path:    "models/m/1.0.0.yaml",
-				Digest:  entry,
-				Variants: []catalog.IndexVariant{
-					{ID: "v"},
-				},
-			}},
-		}},
+func openIndex(t *testing.T, raw string) catalog.Catalog {
+	t.Helper()
+	c, err := catalog.OpenFetcher(context.Background(), indexOnly{raw})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := digestDrift(idx, "m", "1.0.0", "v", entry); got != "" {
+	return c
+}
+
+const (
+	defDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	altDigest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	stale     = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+)
+
+func changed(version, variant string) string {
+	return "version " + version + " variant " + variant + ": upstream digest changed since this was deployed"
+}
+
+// v1 pins the version's entry file, which every variant of it shares.
+func TestDigestDriftV1UsesEntryDigest(t *testing.T) {
+	c := openIndex(t, `{"apiVersion":"catalog.swiss/v1","count":1,"models":[{"name":"m","source":{"hf":"org/m"},"latest":"1.0.0",
+		"versions":[{"version":"1.0.0","path":"models/m/1.0.0.yaml","digest":"`+defDigest+`",
+		"variants":[{"id":"v","engine":"sglang","chart":{"name":"sglang","version":"0.8.0"},"requires":{"gpus":1}}]}]}]}`)
+	if got := digestDrift(c, "m", "1.0.0", "v", defDigest); got != "" {
 		t.Fatalf("unchanged v1: got %q, want none", got)
 	}
-	want := "version 1.0.0 variant v: upstream digest changed since this was deployed"
-	if got := digestDrift(idx, "m", "1.0.0", "v", stale); got != want {
-		t.Fatalf("rewritten v1: got %q, want %q", got, want)
+	if got := digestDrift(c, "m", "1.0.0", "v", stale); got != changed("1.0.0", "v") {
+		t.Fatalf("rewritten v1: got %q", got)
 	}
 }
 
-// Loads the multi-variant v2 golden and checks a non-default pin against the
-// projected index the way status does after OpenWithSchema.
+// v2 pins each variant file on its own version and lists only the current
+// one. A variant that moved on is a new version, not a rewrite; a rewrite at
+// the version a release is on is caught whatever the default variant is at.
+func TestDigestDriftV2PerVariant(t *testing.T) {
+	c := openIndex(t, `{"apiVersion":"catalog.swiss/v2","count":1,"models":[{"name":"m","source":{"hf":"org/m"},"defaultVariant":"default",
+		"variants":[
+		 {"id":"default","version":"1.1.0","path":"models/m/default.yaml","digest":"`+defDigest+`","engine":"sglang","chart":{"name":"sglang","version":"0.8.0"},"requires":{"gpus":1}},
+		 {"id":"alt","version":"1.0.1","path":"models/m/alt.yaml","digest":"`+altDigest+`","engine":"sglang","chart":{"name":"sglang","version":"0.8.0"},"requires":{"gpus":1}}]}]}`)
+	for _, tc := range []struct {
+		name, version, variant, pinned, want string
+	}{
+		{"default unchanged", "1.1.0", "default", defDigest, ""},
+		{"alt unchanged", "1.0.1", "alt", altDigest, ""},
+		{"alt moved on since", "1.0.0", "alt", stale, ""},
+		{"alt rewritten in place", "1.0.1", "alt", stale, changed("1.0.1", "alt")},
+		{"default rewritten in place", "1.1.0", "default", stale, changed("1.1.0", "default")},
+	} {
+		if got := digestDrift(c, "m", tc.version, tc.variant, tc.pinned); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// The checked-in v2 fixture, through a real open: a non-default variant's own
+// pin is not drift.
 func TestDigestDriftV2FixtureNonDefaultPin(t *testing.T) {
 	root := filepath.Join("..", "..", "testdata", "catalog-v2")
 	c, err := catalog.OpenWithSchema(context.Background(), root, catalog.SchemaV2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	e, err := c.Entry(context.Background(), "qwen3-8b", "")
+	r, err := c.Resolve(context.Background(), "qwen3-8b", "vllm-tp2-910b", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var alt catalog.Variant
-	for _, v := range e.Variants {
-		if v.ID == "vllm-tp2-910b" {
-			alt = v
-			break
-		}
+	if got := digestDrift(c, "qwen3-8b", r.Version, r.Variant.ID, r.Digest); got != "" {
+		t.Fatalf("unchanged non-default pin: got %q", got)
 	}
-	if alt.ID == "" || alt.Digest == "" {
-		t.Fatalf("missing alt variant pin: %+v", e.Variants)
-	}
-	m, ok := c.Index.Model("qwen3-8b")
-	if !ok {
-		t.Fatal("missing model")
-	}
-	ver, err := m.Version(alt.Version)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ver.Digest == alt.Digest {
-		t.Fatal("fixture setup: default version digest must differ from non-default variant digest")
-	}
-	if got := digestDrift(c.Index, "qwen3-8b", alt.Version, alt.ID, alt.Digest); got != "" {
-		t.Fatalf("unchanged non-default fixture pin: got %q", got)
-	}
-	stale := "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-	want := "version " + alt.Version + " variant vllm-tp2-910b: upstream digest changed since this was deployed"
-	if got := digestDrift(c.Index, "qwen3-8b", alt.Version, alt.ID, stale); got != want {
-		t.Fatalf("rewritten non-default fixture: got %q, want %q", got, want)
+	if got := digestDrift(c, "qwen3-8b", r.Version, r.Variant.ID, stale); got != changed(r.Version, r.Variant.ID) {
+		t.Fatalf("rewritten non-default: got %q", got)
 	}
 }
 
-// Each v2 variant is versioned on its own and the index lists the current one
-// only. A variant that moved on is a new version, not a rewrite; a rewrite at
-// the version a release is on is caught whatever the default variant is at.
-func TestDigestDriftV2PerVariantVersions(t *testing.T) {
-	const (
-		defDigest = "sha256:defaultaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-		altDigest = "sha256:alternatebbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-		stale     = "sha256:stalecccccccccccccccccccccccccccccccccccccccccccccccccccc"
-	)
-	idx := &catalog.Index{
-		APIVersion: catalog.APIVersionV2,
-		Models: []catalog.IndexModel{{
-			Name:   "m",
-			Latest: "1.1.0",
-			Versions: []catalog.IndexVersion{{
-				Version: "1.1.0", Path: "models/m/default.yaml", Digest: defDigest,
-				Variants: []catalog.IndexVariant{
-					{ID: "default", Default: true, Path: "models/m/default.yaml", Digest: defDigest, Version: "1.1.0"},
-					{ID: "alt", Path: "models/m/alt.yaml", Digest: altDigest, Version: "1.0.1"},
-				},
-			}},
-		}},
-	}
-	if got := digestDrift(idx, "m", "1.0.0", "alt", stale); got != "" {
-		t.Errorf("alt deployed at 1.0.0 and since bumped: got %q, want none", got)
-	}
-	if got := digestDrift(idx, "m", "1.0.1", "alt", altDigest); got != "" {
-		t.Errorf("alt unchanged at 1.0.1: got %q", got)
-	}
-	want := "version 1.0.1 variant alt: upstream digest changed since this was deployed"
-	if got := digestDrift(idx, "m", "1.0.1", "alt", stale); got != want {
-		t.Errorf("alt rewritten at 1.0.1: got %q, want %q", got, want)
-	}
-}
-
-// A site switching a catalog to v2 compares no v1 release's pin against a v2
-// variant file, however the versions line up: the fixture's variants are at
-// 1.0.0, as a v1 release of the model might well be.
 func TestDriftIgnoresAPlanFromTheOtherSchema(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", "..", "testdata", "catalog-v2"))
 	if err != nil {

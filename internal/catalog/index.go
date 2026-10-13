@@ -25,19 +25,16 @@ type Index struct {
 // no variant `values`, so nothing can accidentally compose from a listing and
 // render a model with half its flags missing.
 type IndexModel struct {
-	Name        string        `json:"name"`
-	DisplayName string        `json:"displayName,omitempty"`
-	Description string        `json:"description,omitempty"`
-	Family      string        `json:"family,omitempty"`
-	Tags        []string      `json:"tags,omitempty"`
-	Deprecated  any           `json:"deprecated,omitempty"`
-	Tuning      []IndexTuning `json:"tuning,omitempty"`
-	// Reports are linkable files at <site>models/<name>/<report>. Schema v2
-	// only; a v1 index naming them is refused like any unknown key.
-	Reports  []string       `json:"reports,omitempty"`
-	Source   IndexSource    `json:"source"`
-	Latest   string         `json:"latest"`
-	Versions []IndexVersion `json:"versions"`
+	Name        string         `json:"name"`
+	DisplayName string         `json:"displayName,omitempty"`
+	Description string         `json:"description,omitempty"`
+	Family      string         `json:"family,omitempty"`
+	Tags        []string       `json:"tags,omitempty"`
+	Deprecated  any            `json:"deprecated,omitempty"`
+	Tuning      []IndexTuning  `json:"tuning,omitempty"`
+	Source      IndexSource    `json:"source"`
+	Latest      string         `json:"latest"`
+	Versions    []IndexVersion `json:"versions"`
 }
 
 // IndexTuning is a measured result: a tuned variant against a baseline, in one
@@ -71,11 +68,6 @@ type IndexWorkload struct {
 // IndexVersion is one published version of a model. Digest is a sha256 of the
 // entry file: a deploy records it, and a later fetch that does not match is
 // refused rather than used.
-//
-// A v2 model is projected as a single version holding every current variant,
-// labelled with the default variant's version. Path and Digest on it are the
-// default variant's; each variant's own pin is IndexVariant.Path, Digest and
-// Version, which is what PublishedDigest reads.
 type IndexVersion struct {
 	Version  string         `json:"version"`
 	Path     string         `json:"path"`
@@ -97,26 +89,6 @@ type IndexVariant struct {
 	Link        string   `json:"link,omitempty"`
 	Chart       Chart    `json:"chart"`
 	Requires    Requires `json:"requires"`
-	// Path, Digest and Version pin one v2 variant file. Empty on v1, which
-	// pins the whole entry on IndexVersion; omitempty keeps a v1 listing's
-	// JSON the same, and parseIndex refuses them on v1.
-	Path    string `json:"path,omitempty"`
-	Digest  string `json:"digest,omitempty"`
-	Version string `json:"version,omitempty"`
-}
-
-// v2Field names the first schema-v2-only field a v1 variant carries. They
-// share IndexVariant, so DisallowUnknownFields alone no longer catches them.
-func (v IndexVariant) v2Field() string {
-	switch {
-	case v.Path != "":
-		return "path"
-	case v.Digest != "":
-		return "digest"
-	case v.Version != "":
-		return "version"
-	}
-	return ""
 }
 
 func parseIndex(b []byte) (*Index, error) {
@@ -140,9 +112,6 @@ func parseIndex(b []byte) (*Index, error) {
 			return nil, fmt.Errorf("index.json: model %q listed twice", m.Name)
 		}
 		seen[m.Name] = true
-		if len(m.Reports) > 0 {
-			return nil, fmt.Errorf("index.json: model %q: unknown field \"reports\" (schema v2 only)", m.Name)
-		}
 
 		versions := map[string]bool{}
 		for _, v := range m.Versions {
@@ -158,11 +127,6 @@ func parseIndex(b []byte) (*Index, error) {
 			}
 			if err := safeRel(v.Path); err != nil {
 				return nil, fmt.Errorf("index.json: %s %s: %w", m.Name, v.Version, err)
-			}
-			for _, vv := range v.Variants {
-				if f := vv.v2Field(); f != "" {
-					return nil, fmt.Errorf("index.json: %s %s variant %s: unknown field %q (schema v2 only)", m.Name, v.Version, vv.ID, f)
-				}
 			}
 			versions[v.Version] = true
 		}
@@ -203,36 +167,4 @@ func (m IndexModel) Version(want string) (IndexVersion, error) {
 		have = append(have, v.Version)
 	}
 	return IndexVersion{}, fmt.Errorf("model %q has no version %q (have: %v)", m.Name, want, have)
-}
-
-// PublishedDigest is the digest this index publishes now for one model's
-// variant at version, and whether it publishes that pair at all. v1 pins the
-// version's entry file. v2 pins each variant file on its own version and lists
-// only the current one, so a variant that has moved on is not published at the
-// old version any more -- that is a new version, not a rewrite.
-func (i *Index) PublishedDigest(model, version, variant string) (string, bool) {
-	m, ok := i.Model(model)
-	if !ok {
-		return "", false
-	}
-	if i.APIVersion == APIVersionV2 {
-		for _, iv := range m.Versions {
-			for _, v := range iv.Variants {
-				if v.ID == variant && v.Version == version {
-					return v.Digest, true
-				}
-			}
-		}
-		return "", false
-	}
-	iv, err := m.Version(version)
-	if err != nil {
-		return "", false
-	}
-	for _, v := range iv.Variants {
-		if v.ID == variant {
-			return iv.Digest, true
-		}
-	}
-	return "", false
 }

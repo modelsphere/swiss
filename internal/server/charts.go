@@ -60,21 +60,12 @@ func (s *Server) handleChartVersions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	e, err := c.Entry(ctx, r.PathValue("model"), q.Get("version"))
+	resolved, err := c.Resolve(ctx, r.PathValue("model"), q.Get("variant"), q.Get("version"))
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	var v catalog.Variant
-	if id := q.Get("variant"); id != "" {
-		v, err = e.Variant(id)
-	} else {
-		v, err = e.DefaultVariant()
-	}
-	if err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
-		return
-	}
+	v := resolved.Variant
 	spec, err := chart.ParseSpec(v.Chart.Version)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())

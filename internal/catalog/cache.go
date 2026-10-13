@@ -62,8 +62,8 @@ func (c *Cache) file(key string) string {
 // Save records the index a catalog was opened from, under the location and
 // schemaVersion it was configured with. Best effort by contract: a cache that
 // cannot be written is a warning, never a failed request.
-func (c *Cache) Save(loc, schema string, cat *Catalog) error {
-	if c == nil || cat == nil || len(cat.raw) == 0 {
+func (c *Cache) Save(loc, schema string, cat Catalog) error {
+	if c == nil || cat == nil || len(cat.indexBytes()) == 0 {
 		return nil
 	}
 	if err := os.MkdirAll(c.dir, 0o700); err != nil {
@@ -76,7 +76,7 @@ func (c *Cache) Save(loc, schema string, cat *Catalog) error {
 		return err
 	}
 	defer os.Remove(tmp.Name())
-	if _, err := tmp.Write(cat.raw); err != nil {
+	if _, err := tmp.Write(cat.indexBytes()); err != nil {
 		tmp.Close()
 		return err
 	}
@@ -145,20 +145,16 @@ func (c *Cache) prune(keep string) {
 // the time it was written. The bytes are parsed and validated exactly as a
 // fetched index is: having been in a cache is not a reason to trust what is in
 // it.
-func (c *Cache) Open(f Fetcher, loc, schema string) (*Catalog, time.Time, error) {
+func (c *Cache) Open(f Fetcher, loc, schema string) (Catalog, time.Time, error) {
 	if c == nil {
 		return nil, time.Time{}, fmt.Errorf("no catalog cache configured")
-	}
-	schema, err := NormalizeSchema(schema)
-	if err != nil {
-		return nil, time.Time{}, err
 	}
 	name := c.file(CacheKey(loc, schema))
 	raw, err := os.ReadFile(name)
 	if err != nil {
 		return nil, time.Time{}, err
 	}
-	idx, err := parseIndexForSchema(raw, schema)
+	cat, err := open(f, raw)
 	if err != nil {
 		return nil, time.Time{}, fmt.Errorf("cached index %s: %w", name, err)
 	}
@@ -166,9 +162,5 @@ func (c *Cache) Open(f Fetcher, loc, schema string) (*Catalog, time.Time, error)
 	if fi, err := os.Stat(name); err == nil {
 		at = fi.ModTime()
 	}
-	return &Catalog{
-		Fetcher: f, Index: idx, SchemaVersion: schemaOf(idx),
-		Ref: contentRef(raw), raw: raw,
-		entries: map[string]Entry{},
-	}, at, nil
+	return cat, at, nil
 }

@@ -13,20 +13,20 @@ func testInput() Input {
 	return Input{
 		Catalog: "https://example.invalid/swiss-catalog",
 		Ref:     "0000000000000000000000000000000000000000",
-		Entry: catalog.Entry{
-			APIVersion: catalog.APIVersion,
-			Name:       "glm-5.3",
+		Resolved: catalog.Resolved{
+			Model:      "glm-5.3",
 			Source:     catalog.Source{HF: "zai-org/GLM-5.3"},
-		},
-		Variant: catalog.Variant{
-			ID:       "sglang-tp8-b300",
-			Engine:   "sglang",
-			Chart:    catalog.Chart{Name: "sglang", Version: "0.8.0"},
-			Image:    &catalog.Image{Repository: "lmsysorg/sglang", Tag: "v0.5.19"},
-			Requires: catalog.Requires{GPUs: 8},
-			Values: values.Tree{
-				"extraArgs": []any{"--tp-size=8"},
-				"model":     map[string]any{"mountPath": "/model"},
+			ServedName: "glm-5.3",
+			Variant: catalog.Variant{
+				ID:       "sglang-tp8-b300",
+				Engine:   "sglang",
+				Chart:    catalog.Chart{Name: "sglang", Version: "0.8.0"},
+				Image:    &catalog.Image{Repository: "lmsysorg/sglang", Tag: "v0.5.19"},
+				Requires: catalog.Requires{GPUs: 8},
+				Values: values.Tree{
+					"extraArgs": []any{"--tp-size=8"},
+					"model":     map[string]any{"mountPath": "/model"},
+				},
 			},
 		},
 		Profile: site.Profile{
@@ -125,7 +125,7 @@ func TestMirrorShadowsTheCatalogRepository(t *testing.T) {
 func TestDerivedMaxSlotsFollowsTheChartsRule(t *testing.T) {
 	for gpus, want := range map[int]int{8: 1, 2: 4, 1: 8} {
 		in := testInput()
-		in.Variant.Requires.GPUs = gpus
+		in.Resolved.Variant.Requires.GPUs = gpus
 		p, err := Compose(in)
 		if err != nil {
 			t.Fatal(err)

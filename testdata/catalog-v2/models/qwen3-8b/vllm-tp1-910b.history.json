@@ -1,0 +1,14 @@
+{
+  "model": "qwen3-8b",
+  "id": "vllm-tp1-910b",
+  "path": "models/qwen3-8b/vllm-tp1-910b.yaml",
+  "revisions": [
+    {
+      "version": "1.0.0",
+      "releaseDate": "2026-10-12",
+      "commit": "2c4b33de827e2ee18f1581a692c390645dbfc1ef",
+      "digest": "sha256:4d70fe9d18f86b722d6fe287f46b597ca063952a7bfb572fc29c0248a8a36034",
+      "subject": "feat: schema v2 models  (#41)"
+    }
+  ]
+}

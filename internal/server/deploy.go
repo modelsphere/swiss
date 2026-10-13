@@ -138,21 +138,13 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 	if err != nil {
 		return nil, err
 	}
-	entry, err := cat.Entry(ctx, req.Model, req.Version)
+	resolved, err := cat.Resolve(ctx, req.Model, req.Variant, req.Version)
 	if err != nil {
 		return nil, err
 	}
-	var v catalog.Variant
-	if req.Variant == "" {
-		v, err = entry.DefaultVariant()
-	} else {
-		v, err = entry.Variant(req.Variant)
-	}
-	if err != nil {
-		return nil, err
-	}
+	v := resolved.Variant
 	if req.movedFrom != nil {
-		if err := s.checkMove(ctx, req.movedFrom, repo.Name, entry, v); err != nil {
+		if err := s.checkMove(ctx, req.movedFrom, repo.Name, resolved); err != nil {
 			return nil, err
 		}
 	}
@@ -176,7 +168,7 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 		release = req.ServiceID
 	}
 	if release == "" {
-		release = entry.Name
+		release = resolved.Model
 	}
 
 	overrides := values.Tree{}
@@ -235,12 +227,11 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 	}
 
 	p, err := compose.Compose(compose.Input{
-		Catalog:         cat.Fetcher.String(),
+		Catalog:         cat.Source(),
 		CatalogName:     repo.Name,
-		Ref:             cat.Ref,
-		Schema:          cat.SchemaVersion,
-		Entry:           entry,
-		Variant:         v,
+		Ref:             cat.Ref(),
+		Schema:          cat.Schema(),
+		Resolved:        resolved,
 		ChartVersion:    chartVersion,
 		Profile:         *prof,
 		Release:         release,
@@ -336,7 +327,7 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 // checkMove refuses a cross-catalog upgrade that would put another model, or the
 // same one on another engine, behind the release's existing serviceId and route.
 // Model ids are only unique within a catalog; HF is the identity across them.
-func (s *Server) checkMove(ctx context.Context, prev *plan.Plan, to string, entry catalog.Entry, v catalog.Variant) error {
+func (s *Server) checkMove(ctx context.Context, prev *plan.Plan, to string, r catalog.Resolved) error {
 	refuse := func(format string, args ...any) error {
 		return fmt.Errorf("cannot move %s to catalog %q: %s -- deploy a new release instead", prev.Release.Name, to, fmt.Sprintf(format, args...))
 	}
@@ -347,11 +338,11 @@ func (s *Server) checkMove(ctx context.Context, prev *plan.Plan, to string, entr
 			return refuse("its plan predates recording the model's HF repo, and its own catalog could not supply it (%v)", err)
 		}
 	}
-	if entry.Source.HF != hf {
-		return refuse("%s there is %s, not %s, so it is a different model", entry.Name, entry.Source.HF, hf)
+	if r.Source.HF != hf {
+		return refuse("%s there is %s, not %s, so it is a different model", r.Model, r.Source.HF, hf)
 	}
-	if v.Engine != prev.Engine {
-		return refuse("variant %s runs on %s there, not %s", v.ID, v.Engine, prev.Engine)
+	if r.Variant.Engine != prev.Engine {
+		return refuse("variant %s runs on %s there, not %s", r.Variant.ID, r.Variant.Engine, prev.Engine)
 	}
 	return nil
 }
@@ -449,7 +440,7 @@ func (s *Server) recordedHF(ctx context.Context, prev *plan.Plan) (string, error
 	if err != nil {
 		return "", err
 	}
-	m, ok := cat.Index.Model(prev.Source.Model)
+	m, ok := cat.Model(prev.Source.Model)
 	if !ok || m.Source.HF == "" {
 		return "", fmt.Errorf("catalog %q has no %s", name, prev.Source.Model)
 	}

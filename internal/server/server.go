@@ -60,7 +60,7 @@ type Server struct {
 }
 
 type openCatalog struct {
-	cat *catalog.Catalog
+	cat catalog.Catalog
 	at  time.Time
 }
 
@@ -84,7 +84,7 @@ func (s *Server) cached() ([]string, *site.Profile) {
 	defer s.mu.Unlock()
 	refs := make([]string, 0, len(s.cats))
 	for _, oc := range s.cats {
-		refs = append(refs, oc.cat.Ref)
+		refs = append(refs, oc.cat.Ref())
 	}
 	sort.Strings(refs)
 	return refs, s.profile
@@ -104,7 +104,7 @@ func (s *Server) SetWriter(w cluster.Writer) { s.writer = w }
 func (s *Server) SetCredentials(f func() (auth.Credentials, error)) { s.creds = f }
 
 // Catalog opens a catalog by name; see CatalogRepo for what an empty name means.
-func (s *Server) Catalog(ctx context.Context, name string) (*catalog.Catalog, site.CatalogRepo, error) {
+func (s *Server) Catalog(ctx context.Context, name string) (catalog.Catalog, site.CatalogRepo, error) {
 	repo, err := s.CatalogRepo(ctx, name)
 	if err != nil {
 		return nil, repo, err
@@ -121,7 +121,7 @@ func (s *Server) Catalog(ctx context.Context, name string) (*catalog.Catalog, si
 // it per request rather than about the fetch being expensive. On failure the
 // previous catalog is kept and served: a published catalog going briefly
 // unreachable should not empty the marketplace.
-func (s *Server) openCatalog(ctx context.Context, loc, schema string) (*catalog.Catalog, error) {
+func (s *Server) openCatalog(ctx context.Context, loc, schema string) (catalog.Catalog, error) {
 	schema, err := catalog.NormalizeSchema(schema)
 	if err != nil {
 		return nil, err
@@ -141,7 +141,7 @@ func (s *Server) openCatalog(ctx context.Context, loc, schema string) (*catalog.
 	c, err := catalog.OpenFetcher(ctx, f)
 	if err != nil {
 		if have {
-			s.log.WarnContext(ctx, "catalog refresh failed, serving previous", "err", err, "ref", cached.cat.Ref, "catalog", loc, "schema", schema)
+			s.log.WarnContext(ctx, "catalog refresh failed, serving previous", "err", err, "ref", cached.cat.Ref(), "catalog", loc, "schema", schema)
 			return cached.cat, nil
 		}
 		// Nothing in memory for this location: this process may have just
@@ -149,7 +149,7 @@ func (s *Server) openCatalog(ctx context.Context, loc, schema string) (*catalog.
 		// mean an empty marketplace.
 		if disk, wrote, derr := s.catCache.Open(f, loc, schema); derr == nil {
 			s.log.WarnContext(ctx, "catalog unreachable, serving the cached index",
-				"err", err, "cachedAt", wrote, "ref", disk.Ref, "catalog", loc, "schema", schema)
+				"err", err, "cachedAt", wrote, "ref", disk.Ref(), "catalog", loc, "schema", schema)
 			s.keepCatalog(disk, key)
 			return disk, nil
 		}
@@ -162,7 +162,7 @@ func (s *Server) openCatalog(ctx context.Context, loc, schema string) (*catalog.
 	return c, nil
 }
 
-func (s *Server) keepCatalog(c *catalog.Catalog, key string) {
+func (s *Server) keepCatalog(c catalog.Catalog, key string) {
 	s.mu.Lock()
 	s.cats[key] = openCatalog{cat: c, at: time.Now()}
 	s.mu.Unlock()
@@ -341,6 +341,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/catalog", s.handleCatalog)
 	mux.HandleFunc("GET /api/catalog/{model}", s.handleCatalogModel)
 	mux.HandleFunc("GET /api/catalog/{model}/chart-versions", s.handleChartVersions)
+	mux.HandleFunc("GET /api/catalog/{model}/history", s.handleCatalogHistory)
 	mux.HandleFunc("GET /api/deployments", s.handleDeployments)
 	mux.HandleFunc("GET /api/nodes", s.handleNodes)
 	mux.HandleFunc("GET /api/profile", s.handleProfile)

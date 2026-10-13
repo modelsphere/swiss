@@ -23,9 +23,8 @@ type Input struct {
 	// CatalogName is the site's name for that catalog, recorded beside it.
 	// Empty from the CLI, which has no names.
 	CatalogName string
-	Ref         string // catalog commit sha
-	Entry       catalog.Entry
-	Variant     catalog.Variant
+	Ref         string           // catalog commit sha
+	Resolved    catalog.Resolved // the variant at the version being deployed, and its pin
 	Profile     site.Profile
 	Release     string
 	Namespace   string
@@ -65,7 +64,7 @@ func Compose(in Input) (*plan.Plan, error) {
 
 	chartVersion := in.ChartVersion
 	if chartVersion == "" {
-		spec, err := chart.ParseSpec(in.Variant.Chart.Version)
+		spec, err := chart.ParseSpec(in.Resolved.Variant.Chart.Version)
 		if err != nil {
 			return nil, err
 		}
@@ -74,11 +73,11 @@ func Compose(in Input) (*plan.Plan, error) {
 		}
 	}
 
-	catalogVals, err := catalogLayer(in.Entry, in.Variant)
+	catalogVals, err := catalogLayer(in.Resolved)
 	if err != nil {
 		return nil, fmt.Errorf("catalog layer: %w", err)
 	}
-	siteVals, err := siteLayer(in.Profile, in.Entry, in.Variant)
+	siteVals, err := siteLayer(in.Profile, in.Resolved.Variant)
 	if err != nil {
 		return nil, fmt.Errorf("site layer: %w", err)
 	}
@@ -115,22 +114,20 @@ func Compose(in Input) (*plan.Plan, error) {
 			Catalog:     in.Catalog,
 			CatalogName: in.CatalogName,
 			Ref:         in.Ref,
-			Model:       in.Entry.Name,
-			HF:          in.Entry.Source.HF,
-			// A v2 variant carries its own pin; v1 leaves these empty and the
-			// entry (version file) pin is what was recorded before.
-			Version: pinVersion(in.Entry, in.Variant),
-			Digest:  pinDigest(in.Entry, in.Variant),
-			Variant: in.Variant.ID,
-			Schema:  v2Only(in.Schema),
+			Model:       in.Resolved.Model,
+			HF:          in.Resolved.Source.HF,
+			Version:     in.Resolved.Version,
+			Digest:      in.Resolved.Digest,
+			Variant:     in.Resolved.Variant.ID,
+			Schema:      v2Only(in.Schema),
 		},
 		Chart: plan.ChartRef{
-			Name:    in.Variant.Chart.Name,
+			Name:    in.Resolved.Variant.Chart.Name,
 			Version: chartVersion,
 			Repo:    in.Profile.ChartRepo,
 			Path:    in.Profile.ChartPath,
 		},
-		Engine:          in.Variant.Engine,
+		Engine:          in.Resolved.Variant.Engine,
 		Profile:         in.Profile.Name,
 		CreateNamespace: in.CreateNamespace,
 		Layers:          layers,
@@ -158,11 +155,12 @@ func Compose(in Input) (*plan.Plan, error) {
 // from requires.gpus, and the image from the variant image. The projection is
 // applied after the merge and so wins over the same key in values, which is
 // what stops two spellings of one fact from drifting.
-func catalogLayer(e catalog.Entry, v catalog.Variant) (values.Tree, error) {
+func catalogLayer(r catalog.Resolved) (values.Tree, error) {
+	v := r.Variant
 	out := values.Tree{}
 	values.Merge(out, v.Values, values.LayerCatalog, nil)
 
-	if err := values.Set(out, "model.name", e.ServedNameOf(v)); err != nil {
+	if err := values.Set(out, "model.name", r.ServedName); err != nil {
 		return nil, err
 	}
 	if err := values.Set(out, "model.gpus", fmt.Sprintf("%d", v.Requires.GPUs)); err != nil {
@@ -185,7 +183,7 @@ func catalogLayer(e catalog.Entry, v catalog.Variant) (values.Tree, error) {
 }
 
 // siteLayer renders the profile into chart values for this model.
-func siteLayer(p site.Profile, e catalog.Entry, v catalog.Variant) (values.Tree, error) {
+func siteLayer(p site.Profile, v catalog.Variant) (values.Tree, error) {
 	out := values.Tree{}
 
 	// Only when there is a rewrite: restating the catalog's own repository as a
@@ -246,7 +244,7 @@ func siteLayer(p site.Profile, e catalog.Entry, v catalog.Variant) (values.Tree,
 func applyDefaults(site, derived, base values.Tree, in Input) error {
 	// model.localPath from the site's path template. Owned by the form because
 	// weights move and a deploy has to be able to say so.
-	localPath, err := in.Profile.LocalPath(in.Entry.Source.HF, in.Entry.Name)
+	localPath, err := in.Profile.LocalPath(in.Resolved.Source.HF, in.Resolved.Model)
 	if err != nil {
 		return err
 	}
@@ -305,9 +303,9 @@ func applyDefaults(site, derived, base values.Tree, in Input) error {
 	// under cache: -- the key does not exist in every chart version, and a values
 	// file carrying a section the chart has never heard of is rejected by its
 	// schema rather than ignored.
-	if in.Profile.Cache.Enabled && in.Profile.Nodes.GPUsPerNode > 0 && in.Variant.Requires.GPUs > 0 {
+	if in.Profile.Cache.Enabled && in.Profile.Nodes.GPUsPerNode > 0 && in.Resolved.Variant.Requires.GPUs > 0 {
 		if _, set := values.Get(base, "cache.maxSlotsPerNode"); !set {
-			slots := max(in.Profile.Nodes.GPUsPerNode/in.Variant.Requires.GPUs, 1)
+			slots := max(in.Profile.Nodes.GPUsPerNode/in.Resolved.Variant.Requires.GPUs, 1)
 			if err := values.Set(derived, "cache.maxSlotsPerNode", slots); err != nil {
 				return err
 			}
@@ -340,22 +338,4 @@ func v2Only(schema string) string {
 		return schema
 	}
 	return ""
-}
-
-// pinVersion is the version recorded on a plan: the v2 variant pin when set,
-// otherwise the entry (v1 version-file) version.
-func pinVersion(e catalog.Entry, v catalog.Variant) string {
-	if v.Version != "" {
-		return v.Version
-	}
-	return e.Version
-}
-
-// pinDigest is the digest recorded on a plan: the v2 variant file when set,
-// otherwise the entry digest.
-func pinDigest(e catalog.Entry, v catalog.Variant) string {
-	if v.Digest != "" {
-		return v.Digest
-	}
-	return e.Digest
 }

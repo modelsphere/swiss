@@ -143,20 +143,11 @@ func buildPlan(ctx context.Context, in planInput) (*plan.Plan, error) {
 	if err != nil {
 		return nil, err
 	}
-	entry, err := cat.Entry(ctx, in.model, in.modelVersion)
+	resolved, err := cat.Resolve(ctx, in.model, in.variant, in.modelVersion)
 	if err != nil {
 		return nil, err
 	}
-
-	var v catalog.Variant
-	if in.variant == "" {
-		v, err = entry.DefaultVariant()
-	} else {
-		v, err = entry.Variant(in.variant)
-	}
-	if err != nil {
-		return nil, err
-	}
+	v := resolved.Variant
 
 	spec, err := chart.ParseSpec(v.Chart.Version)
 	if err != nil {
@@ -183,14 +174,13 @@ func buildPlan(ctx context.Context, in planInput) (*plan.Plan, error) {
 
 	release := in.release
 	if release == "" {
-		release = entry.Name
+		release = resolved.Model
 	}
 	return compose.Compose(compose.Input{
-		Catalog:         cat.Fetcher.String(),
-		Ref:             cat.Ref,
-		Schema:          cat.SchemaVersion,
-		Entry:           entry,
-		Variant:         v,
+		Catalog:         cat.Source(),
+		Ref:             cat.Ref(),
+		Schema:          cat.Schema(),
+		Resolved:        resolved,
 		ChartVersion:    chartVersion,
 		Profile:         *prof,
 		Release:         release,

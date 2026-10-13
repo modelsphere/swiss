@@ -3,75 +3,164 @@ package catalog
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
-	"strings"
+	"sort"
 	"sync"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/modelsphere/swiss/internal/chart"
 	"github.com/modelsphere/swiss/internal/values"
 	"gopkg.in/yaml.v3"
 )
 
-// Catalog is an opened catalog: its index, and entries fetched on demand.
+// V1 is a schema v1 catalog: index.json, and entries fetched on demand. A model
+// version pins one entry file holding every variant at that version.
 //
 // Opening reads index.json only. An entry is fetched when a model is actually
 // opened, which is what keeps a marketplace listing one request rather than one
 // per model.
-type Catalog struct {
-	Fetcher Fetcher
+type V1 struct {
 	Index   *Index
-	// SchemaVersion is SchemaV1 or SchemaV2: which published index this catalog
-	// was opened from. Entry loading branches on it; compose does not.
-	SchemaVersion string
-	// Ref identifies the catalog state a plan was composed against: a digest of
+	fetcher Fetcher
+	// ref identifies the catalog state a plan was composed against: a digest of
 	// the index bytes. Recorded in every plan, so a deploy can be traced back.
-	Ref string
+	ref string
 
 	// raw is the index as published, kept so a Cache writes back the exact
-	// bytes Ref was computed over rather than a re-marshalling of them.
+	// bytes ref was computed over rather than a re-marshalling of them.
 	raw []byte
 
 	mu      sync.Mutex
 	entries map[string]Entry
 }
 
-// Open fetches and validates the index at loc with schemaVersion unset: a base
-// location reads index.json as before, and a location naming its .json is read
-// by that document's apiVersion.
-func Open(ctx context.Context, loc string) (*Catalog, error) {
-	return OpenWithSchema(ctx, loc, "")
+func (c *V1) Schema() string     { return SchemaV1 }
+func (c *V1) Ref() string        { return c.ref }
+func (c *V1) Source() string     { return c.fetcher.String() }
+func (c *V1) indexBytes() []byte { return c.raw }
+
+// Models lists each model's latest version, every variant at it.
+func (c *V1) Models() []Model {
+	out := make([]Model, 0, len(c.Index.Models))
+	for _, m := range c.Index.Models {
+		out = append(out, v1Model(m))
+	}
+	return out
 }
 
-// OpenWithSchema opens a catalog at loc for a site profile's schemaVersion.
-func OpenWithSchema(ctx context.Context, loc, schema string) (*Catalog, error) {
-	f, err := NewFetcherWithSchema(loc, schema)
-	if err != nil {
-		return nil, err
+func (c *V1) Model(name string) (Model, bool) {
+	m, ok := c.Index.Model(name)
+	if !ok {
+		return Model{}, false
 	}
-	return OpenFetcher(ctx, f)
+	return v1Model(m), true
 }
 
-// OpenFetcher is Open against an already-built Fetcher, for tests and for
-// callers holding a configured HTTP client.
-func OpenFetcher(ctx context.Context, f Fetcher) (*Catalog, error) {
-	idx, raw, err := f.Index(ctx)
-	if err != nil {
-		return nil, err
+func v1Model(m IndexModel) Model {
+	out := Model{
+		Name: m.Name, DisplayName: m.DisplayName, Description: m.Description,
+		Family: m.Family, Tags: m.Tags, Deprecated: m.Deprecated, Source: m.Source,
 	}
-	return &Catalog{
-		Fetcher: f, Index: idx, SchemaVersion: schemaOf(idx),
-		Ref: contentRef(raw), raw: raw, entries: map[string]Entry{},
+	latest, _ := m.Version("") // parseIndex refuses an unpublished latest
+	for _, v := range latest.Variants {
+		out.Variants = append(out.Variants, ModelVariant{
+			ID: v.ID, Version: latest.Version, Digest: latest.Digest,
+			Engine: v.Engine, Default: v.Default, Description: v.Description, Link: v.Link,
+			Chart: v.Chart, Requires: v.Requires,
+		})
+		if v.Default {
+			out.DefaultVariant = v.ID
+		}
+	}
+	if out.DefaultVariant == "" && len(out.Variants) > 0 {
+		out.DefaultVariant = out.Variants[0].ID
+	}
+	for _, t := range m.Tuning {
+		out.Tuning = append(out.Tuning, Tuning{
+			Baseline:  VariantRef{ID: t.Baseline, Version: t.Version},
+			Optimized: VariantRef{ID: t.Optimized, Version: t.Version},
+			Uplift:    t.Uplift, Workloads: t.Workloads, Report: t.Report,
+		})
+	}
+	return out
+}
+
+// History is every published version that carries the variant, newest first,
+// each pinned by its entry file. The index lists them all, so nothing is
+// fetched.
+func (c *V1) History(_ context.Context, model, variant string) ([]Revision, error) {
+	m, ok := c.Index.Model(model)
+	if !ok {
+		return nil, notFound("no model %q in catalog %s", model, c.fetcher)
+	}
+	if variant == "" {
+		variant = v1Model(m).DefaultVariant
+	}
+	var out []Revision
+	for _, iv := range m.Versions {
+		for _, v := range iv.Variants {
+			if v.ID == variant {
+				out = append(out, Revision{Version: iv.Version, Digest: iv.Digest, Current: iv.Version == m.Latest})
+				break
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil, notFound("model %q has no variant %q in any version", model, variant)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return newer(out[i].Version, out[j].Version) })
+	return out, nil
+}
+
+// newer orders semver versions, falling back to the strings for one that is
+// not.
+func newer(a, b string) bool {
+	va, errA := semver.NewVersion(a)
+	vb, errB := semver.NewVersion(b)
+	if errA != nil || errB != nil {
+		return a > b
+	}
+	return va.GreaterThan(vb)
+}
+
+// Resolve is Entry at version, and the variant in it.
+func (c *V1) Resolve(ctx context.Context, model, variant, version string) (Resolved, error) {
+	e, err := c.Entry(ctx, model, version)
+	if err != nil {
+		return Resolved{}, err
+	}
+	var v Variant
+	if variant == "" {
+		v, err = e.DefaultVariant()
+	} else {
+		v, err = e.Variant(variant)
+	}
+	if err != nil {
+		return Resolved{}, err
+	}
+	return Resolved{
+		Model: e.Name, Source: e.Source, ServedName: e.ServedModelName(),
+		Version: e.Version, Digest: e.Digest, Variant: v,
 	}, nil
 }
 
-// schemaOf is the schema an index was parsed as, read off the index itself so
-// any Fetcher gets it right.
-func schemaOf(idx *Index) string {
-	if idx != nil && idx.APIVersion == APIVersionV2 {
-		return SchemaV2
+// Published is the entry digest of that version, when the version still lists
+// the variant.
+func (c *V1) Published(model, variant, version string) (string, bool) {
+	m, ok := c.Index.Model(model)
+	if !ok {
+		return "", false
 	}
-	return SchemaV1
+	iv, err := m.Version(version)
+	if err != nil {
+		return "", false
+	}
+	for _, v := range iv.Variants {
+		if v.ID == variant {
+			return iv.Digest, true
+		}
+	}
+	return "", false
 }
 
 // Entry fetches and validates one model at one version, memoised. An empty
@@ -81,17 +170,10 @@ func schemaOf(idx *Index) string {
 // fetched over a network from a repo this cluster does not control, so it is
 // untrusted input at the point of use; trusting it because some CI somewhere was
 // supposed to have run is hoping, not validating.
-func (c *Catalog) Entry(ctx context.Context, name, wantVersion string) (Entry, error) {
-	if c.SchemaVersion == SchemaV2 {
-		return c.entryV2(ctx, name, wantVersion)
-	}
-	return c.entryV1(ctx, name, wantVersion)
-}
-
-func (c *Catalog) entryV1(ctx context.Context, name, wantVersion string) (Entry, error) {
+func (c *V1) Entry(ctx context.Context, name, wantVersion string) (Entry, error) {
 	m, ok := c.Index.Model(name)
 	if !ok {
-		return Entry{}, fmt.Errorf("no model %q in catalog %s", name, c.Fetcher)
+		return Entry{}, fmt.Errorf("no model %q in catalog %s", name, c.fetcher)
 	}
 	iv, err := m.Version(wantVersion)
 	if err != nil {
@@ -106,7 +188,7 @@ func (c *Catalog) entryV1(ctx context.Context, name, wantVersion string) (Entry,
 	}
 	c.mu.Unlock()
 
-	raw, err := c.Fetcher.Fetch(ctx, iv.Path)
+	raw, err := c.fetcher.Fetch(ctx, iv.Path)
 	if err != nil {
 		return Entry{}, fmt.Errorf("%s %s (%s): %w", name, iv.Version, iv.Path, err)
 	}
@@ -135,137 +217,6 @@ func (c *Catalog) entryV1(ctx context.Context, name, wantVersion string) (Entry,
 	return *e, nil
 }
 
-// entryV2 assembles one Entry from a model's current variant files. A v2 index
-// lists each variant at its own version, under one label (m.Latest, the default
-// variant's): wantVersion "" or the label is every variant, and any other
-// version keeps the variants currently at it. Older revisions are not served.
-//
-// Each file is fetched, verified and validated on its own, in parallel. One
-// that fails is recorded in Unavailable instead of failing its siblings, and an
-// Entry with any is not memoised, so a transient failure is retried.
-func (c *Catalog) entryV2(ctx context.Context, name, wantVersion string) (Entry, error) {
-	m, ok := c.Index.Model(name)
-	if !ok {
-		return Entry{}, fmt.Errorf("no model %q in catalog %s", name, c.Fetcher)
-	}
-	if len(m.Versions) == 0 || len(m.Versions[0].Variants) == 0 {
-		return Entry{}, fmt.Errorf("model %q has no variants in catalog %s", name, c.Fetcher)
-	}
-	pins := m.Versions[0].Variants
-	version := m.Latest
-	if wantVersion != "" && wantVersion != m.Latest {
-		var at, have []IndexVariant
-		for _, p := range pins {
-			if p.Version == wantVersion {
-				at = append(at, p)
-			}
-			have = append(have, p)
-		}
-		if len(at) == 0 {
-			return Entry{}, fmt.Errorf("model %q has no variant at version %q -- a v2 catalog serves each variant's current version (have: %s)", name, wantVersion, pinList(have))
-		}
-		pins, version = at, wantVersion
-	}
-
-	key := name + "@" + version
-	c.mu.Lock()
-	if e, ok := c.entries[key]; ok {
-		c.mu.Unlock()
-		return e, nil
-	}
-	c.mu.Unlock()
-
-	loaded := make([]Variant, len(pins))
-	errs := make([]error, len(pins))
-	var wg sync.WaitGroup
-	for i, pin := range pins {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			loaded[i], errs[i] = c.variantV2(ctx, m, pin)
-		}()
-	}
-	wg.Wait()
-
-	e := Entry{APIVersion: APIVersion, Name: name, Version: version}
-	var failed []error
-	for i, pin := range pins {
-		if pin.Default {
-			e.defaultID = pin.ID
-		}
-		if errs[i] != nil {
-			if e.Unavailable == nil {
-				e.Unavailable = map[string]string{}
-			}
-			e.Unavailable[pin.ID] = errs[i].Error()
-			failed = append(failed, fmt.Errorf("%s %s: %w", name, pin.ID, errs[i]))
-			continue
-		}
-		e.Variants = append(e.Variants, loaded[i])
-	}
-	if len(e.Variants) == 0 {
-		return Entry{}, errors.Join(failed...)
-	}
-	// v1 has one servedName per entry; here it is that only when every
-	// variant agrees, and compose reads each variant's own (ServedNameOf).
-	for i, v := range e.Variants {
-		if i == 0 {
-			e.ServedName = v.ServedName
-		} else if v.ServedName != e.ServedName {
-			e.ServedName = ""
-			break
-		}
-	}
-	e.applyMetadata(m)
-	if err := e.Validate(); err != nil {
-		return Entry{}, fmt.Errorf("%s (%s): %w", name, c.Fetcher, err)
-	}
-
-	if len(e.Unavailable) == 0 {
-		c.mu.Lock()
-		c.entries[key] = e
-		c.mu.Unlock()
-	}
-	return e, nil
-}
-
-// variantV2 fetches one variant file and checks it against its pin: the digest
-// is the lock, and the document must be the model, id and version the index
-// says it is.
-func (c *Catalog) variantV2(ctx context.Context, m IndexModel, pin IndexVariant) (Variant, error) {
-	raw, err := c.Fetcher.Fetch(ctx, pin.Path)
-	if err != nil {
-		return Variant{}, fmt.Errorf("%s: %w", pin.Path, err)
-	}
-	if got := contentRef(raw); got != pin.Digest {
-		return Variant{}, fmt.Errorf("%s: digest %s does not match the index (%s) -- the published variant was rewritten", pin.Path, got, pin.Digest)
-	}
-	doc, err := ParseVariantDoc(raw)
-	if err != nil {
-		return Variant{}, fmt.Errorf("%s: %w", pin.Path, err)
-	}
-	if doc.Model != m.Name || doc.ID != pin.ID || doc.Version != pin.Version {
-		return Variant{}, fmt.Errorf("%s: document says %s/%s %s, the index %s/%s %s -- index is stale", pin.Path, doc.Model, doc.ID, doc.Version, m.Name, pin.ID, pin.Version)
-	}
-	v := doc.toVariant(pin)
-	// The per-variant rules, judged on this variant alone so a bad one does not
-	// take its siblings down; the cross-variant rules run on the whole Entry.
-	one := Entry{APIVersion: APIVersion, Name: m.Name, Version: pin.Version, Variants: []Variant{v}}
-	one.applyMetadata(m)
-	if err := one.Validate(); err != nil {
-		return Variant{}, fmt.Errorf("%s: %w", pin.Path, err)
-	}
-	return v, nil
-}
-
-func pinList(pins []IndexVariant) string {
-	out := make([]string, 0, len(pins))
-	for _, p := range pins {
-		out = append(out, p.ID+"@"+p.Version)
-	}
-	return strings.Join(out, ", ")
-}
-
 // applyMetadata fills the cosmetic half from the index, which build-index.sh
 // inlined from metadata.yaml. A version file carries none of it, so that a
 // description can be fixed without republishing a version somebody has pinned.
@@ -280,7 +231,7 @@ func (e *Entry) applyMetadata(m IndexModel) {
 
 // All fetches every entry. Used by validation and by anything that genuinely
 // needs the full set; ordinary listing should use the index.
-func (c *Catalog) All(ctx context.Context) ([]Entry, error) {
+func (c *V1) All(ctx context.Context) ([]Entry, error) {
 	out := make([]Entry, 0, len(c.Index.Models))
 	for _, m := range c.Index.Models {
 		e, err := c.Entry(ctx, m.Name, "")
@@ -333,53 +284,62 @@ func (e Entry) Validate() error {
 		if v.ID == "" {
 			return fmt.Errorf("%s: id is required", where)
 		}
-		where = "variant " + v.ID
 		if ids[v.ID] {
-			return fmt.Errorf("%s: duplicate id", where)
+			return fmt.Errorf("variant %s: duplicate id", v.ID)
 		}
 		ids[v.ID] = true
 		if v.Default {
 			defaults++
 		}
-		switch v.Engine {
-		case "sglang", "vllm":
-		default:
-			return fmt.Errorf("%s: engine %q is not sglang or vllm", where, v.Engine)
-		}
-		if v.Chart.Name != v.Engine {
-			return fmt.Errorf("%s: chart %q does not match engine %q", where, v.Chart.Name, v.Engine)
-		}
-		if v.Chart.Version == "" {
-			return fmt.Errorf("%s: chart.version is required -- an unpinned chart is not a reproducible deploy", where)
-		}
-		// A range is fine: the plan records the one version it resolved to.
-		if _, err := chart.ParseSpec(v.Chart.Version); err != nil {
-			return fmt.Errorf("%s: %w", where, err)
-		}
-		if v.Requires.GPUs < 1 {
-			return fmt.Errorf("%s: requires.gpus must be at least 1", where)
-		}
-		// An unknown vendor would render a pod requesting an empty resource
-		// name, which schedules and then runs on no accelerator at all.
-		if _, ok := accelerators[v.Requires.VendorOrDefault()]; !ok {
-			return fmt.Errorf("%s: requires.vendor %q is not a known accelerator", where, v.Requires.Vendor)
-		}
-
-		// lws.size and requires.nodes describe one group. A disagreement does
-		// not fail -- the group hangs at rendezvous waiting for a peer that was
-		// never scheduled -- so it has to be caught before it is rendered.
-		if v.Requires.TopologyOrDefault() == TopologyLWS {
-			size, ok := values.Get(v.Values, "lws.size")
-			if !ok {
-				return fmt.Errorf("%s: topology is lws but values.lws.size is unset", where)
-			}
-			if n, _ := size.(int); n != v.Requires.NodesOrDefault() {
-				return fmt.Errorf("%s: values.lws.size (%v) != requires.nodes (%d)", where, size, v.Requires.NodesOrDefault())
-			}
+		if err := v.validate(); err != nil {
+			return err
 		}
 	}
 	if defaults > 1 {
 		return fmt.Errorf("%d variants marked default, at most one allowed", defaults)
+	}
+	return nil
+}
+
+// validate is the rules one variant is judged on alone, the same in a v1 entry
+// and a v2 variant file.
+func (v Variant) validate() error {
+	where := "variant " + v.ID
+	switch v.Engine {
+	case "sglang", "vllm":
+	default:
+		return fmt.Errorf("%s: engine %q is not sglang or vllm", where, v.Engine)
+	}
+	if v.Chart.Name != v.Engine {
+		return fmt.Errorf("%s: chart %q does not match engine %q", where, v.Chart.Name, v.Engine)
+	}
+	if v.Chart.Version == "" {
+		return fmt.Errorf("%s: chart.version is required -- an unpinned chart is not a reproducible deploy", where)
+	}
+	// A range is fine: the plan records the one version it resolved to.
+	if _, err := chart.ParseSpec(v.Chart.Version); err != nil {
+		return fmt.Errorf("%s: %w", where, err)
+	}
+	if v.Requires.GPUs < 1 {
+		return fmt.Errorf("%s: requires.gpus must be at least 1", where)
+	}
+	// An unknown vendor would render a pod requesting an empty resource
+	// name, which schedules and then runs on no accelerator at all.
+	if _, ok := accelerators[v.Requires.VendorOrDefault()]; !ok {
+		return fmt.Errorf("%s: requires.vendor %q is not a known accelerator", where, v.Requires.Vendor)
+	}
+
+	// lws.size and requires.nodes describe one group. A disagreement does
+	// not fail -- the group hangs at rendezvous waiting for a peer that was
+	// never scheduled -- so it has to be caught before it is rendered.
+	if v.Requires.TopologyOrDefault() == TopologyLWS {
+		size, ok := values.Get(v.Values, "lws.size")
+		if !ok {
+			return fmt.Errorf("%s: topology is lws but values.lws.size is unset", where)
+		}
+		if n, _ := size.(int); n != v.Requires.NodesOrDefault() {
+			return fmt.Errorf("%s: values.lws.size (%v) != requires.nodes (%d)", where, size, v.Requires.NodesOrDefault())
+		}
 	}
 	return nil
 }

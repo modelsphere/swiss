@@ -1,0 +1,14 @@
+{
+  "model": "kimi-k2.5",
+  "id": "sglang-pp2-lws",
+  "path": "models/kimi-k2.5/sglang-pp2-lws.yaml",
+  "revisions": [
+    {
+      "version": "1.0.0",
+      "releaseDate": "2026-10-12",
+      "commit": "2c4b33de827e2ee18f1581a692c390645dbfc1ef",
+      "digest": "sha256:b545702a54d50dcc203014feb4657d1e19dda89694c2f85d64c1924c515442d4",
+      "subject": "feat: schema v2 models  (#41)"
+    }
+  ]
+}

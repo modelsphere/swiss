@@ -117,10 +117,10 @@ func (s *Server) releaseDigestDrift(ctx context.Context, p *plan.Plan) string {
 	// file or a variant file -- so its digest says nothing about this catalog's,
 	// however its version and variant line up. A site switching a catalog to v2
 	// is a migration, not a rewrite.
-	if planSchema(p) != cat.SchemaVersion {
+	if planSchema(p) != cat.Schema() {
 		return ""
 	}
-	return digestDrift(cat.Index, p.Source.Model, p.Source.Version, p.Source.Variant, p.Source.Digest)
+	return digestDrift(cat, p.Source.Model, p.Source.Version, p.Source.Variant, p.Source.Digest)
 }
 
 func planSchema(p *plan.Plan) string {
