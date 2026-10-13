@@ -629,9 +629,15 @@ func (s *Server) deploymentRow(ctx context.Context, rel cluster.Release) *deploy
 }
 
 // digestDrift is the warning for a version that was rewritten in place: the
-// catalog still lists that version and variant, under a different entry digest
-// than the one this release was composed from. Empty when there is nothing to
-// say, including a plan that predates recording a digest.
+// catalog still lists that version and variant, under a different digest than
+// the one this release was composed from. Empty when there is nothing to say,
+// including a plan that predates recording a digest.
+//
+// Compare against the variant pin when the index carries one (schema v2);
+// otherwise the entry digest on IndexVersion (schema v1). Using only
+// IndexVersion.Digest falsely flags every non-default v2 variant, because
+// compose pins the variant file digest while the projected version digest is
+// the default (or first) variant's.
 func digestDrift(idx *catalog.Index, model, version, variant, pinned string) string {
 	if idx == nil || model == "" || version == "" || variant == "" || pinned == "" {
 		return ""
@@ -641,13 +647,21 @@ func digestDrift(idx *catalog.Index, model, version, variant, pinned string) str
 		return ""
 	}
 	iv, err := m.Version(version)
-	if err != nil || iv.Digest == "" || iv.Digest == pinned {
+	if err != nil {
 		return ""
 	}
 	for _, v := range iv.Variants {
-		if v.ID == variant {
-			return fmt.Sprintf("version %s variant %s: upstream digest changed since this was deployed", version, variant)
+		if v.ID != variant {
+			continue
 		}
+		current := iv.Digest
+		if v.Digest != "" {
+			current = v.Digest
+		}
+		if current == "" || current == pinned {
+			return ""
+		}
+		return fmt.Sprintf("version %s variant %s: upstream digest changed since this was deployed", version, variant)
 	}
 	return ""
 }

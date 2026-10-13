@@ -1,0 +1,98 @@
+# Serving configs measured, and where marked tuned, by LLM AutoTune.
+apiVersion: catalog.swiss/v2
+kind: Variant
+model: qwen3-8b
+id: vllm-tp2-910b
+version: 1.0.0
+servedName: Qwen3-8B
+description: 'Two Ascend 910B cards (TP2). Fixture-only second variant for multi-variant digest drift tests.'
+engine: vllm
+chart:
+  name: vllm
+  version: ">=0.7.6"
+image:
+  # Upstream vllm-ascend. Multi-arch, and arm64 is the one that matters:
+  # Atlas 800T A2 is aarch64. The digest is the index, not a platform
+  # manifest, so a pull still picks the right architecture.
+  repository: quay.io/ascend/vllm-ascend
+  tag: v0.23.0.post1
+  digest: sha256:ffe9306186781ddb80812eda574134e601ee8499693ea36e4a97173111ddf7e7
+requires:
+  gpus: 2
+  topology: single-node
+  # Decides the extended resource and the product label; the mapping to
+  # huawei.com/Ascend910 lives in swiss, not in this file.
+  vendor: ascend
+  # The catalog's name for the card; swiss maps it to the labels this
+  # cluster's Ascend install publishes.
+  gpuProduct:
+    - Ascend-910B3
+values:
+  model:
+    hostPathType: Directory
+    contextLength: ''
+  modelCheck:
+    enabled: true
+    requiredGlobs:
+      - config.json
+      - '*.safetensors'
+  extraArgs:
+    # Deliberately minimal. Everything here is either measured elsewhere or
+    # the convention in this catalog; nothing is guessed.
+    #
+    # No --reasoning-parser / --tool-call-parser: the parser names cannot be
+    # confirmed for the vLLM this image carries (v0.23's vllm/parser holds
+    # only abstract_parser and parser_manager -- the per-model parsers and
+    # their registered names arrived in a later refactor), and a wrong name
+    # fails at startup. They belong here once someone has run the image.
+    #
+    # No --max-model-len either: no other variant sets it, and Qwen3-8B's
+    # config.json already declares 32768.
+    - --enable-prompt-tokens-details
+    - --gpu-memory-utilization=0.9
+  env:
+    # No NVIDIA_DISABLE_REQUIRE and no PYTORCH_ALLOC_CONF here: the first is
+    # a CUDA-image concern, the second configures the CUDA caching allocator,
+    # which torch_npu does not use.
+    - name: VLLM_USE_V1
+      value: '1'
+  volumes:
+    - name: dot-cache
+      emptyDir:
+        sizeLimit: 10Gi
+    - name: dshm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 16Gi
+  volumeMounts:
+    - name: dot-cache
+      mountPath: /root/.cache
+    - name: dshm
+      mountPath: /dev/shm
+  resources:
+    requests:
+      ephemeral-storage: 16Gi
+    limits:
+      ephemeral-storage: 16Gi
+  progressDeadlineSeconds: 7200
+  startupProbe:
+    httpGet:
+      path: /health
+      port: http
+    periodSeconds: 30
+    timeoutSeconds: 10
+    failureThreshold: 180
+  terminationGracePeriodSeconds: 1200
+  lifecycle:
+    # vllm's lifecycle keys, not sglang's: there is no forceShutdown here,
+    # and draining in-flight requests on SIGTERM is what shutdownTimeout
+    # does -- vLLM aborts them outright when it is 0.
+    preStop:
+      enabled: true
+      drainSeconds: 600
+      endpointSyncSeconds: 10
+      pollIntervalSeconds: 5
+    shutdownTimeout: 120
+    preStopKill: true
+  hangWatcher:
+    enabled: true

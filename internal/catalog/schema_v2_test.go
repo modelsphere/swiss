@@ -98,10 +98,19 @@ func TestOpenV2LoadsVariants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(e.Variants) != 1 || e.Variants[0].ID != "vllm-tp1-910b" {
-		t.Fatalf("variants = %+v", e.Variants)
+	if len(e.Variants) < 2 {
+		t.Fatalf("want multi-variant fixture, got %+v", e.Variants)
 	}
-	v := e.Variants[0]
+	var v Variant
+	for _, cand := range e.Variants {
+		if cand.ID == "vllm-tp1-910b" {
+			v = cand
+			break
+		}
+	}
+	if v.ID != "vllm-tp1-910b" {
+		t.Fatalf("missing default variant in %+v", e.Variants)
+	}
 	if v.Digest == "" || v.Version == "" || v.Path == "" {
 		t.Fatalf("variant pin missing: %+v", v)
 	}

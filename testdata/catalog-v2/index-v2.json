@@ -99,6 +99,35 @@
               "Ascend-910B3"
             ]
           }
+        },
+        {
+          "id": "vllm-tp2-910b",
+          "version": "1.0.0",
+          "releaseDate": "2026-10-12",
+          "commit": "2c4b33de827e2ee18f1581a692c390645dbfc1ef",
+          "path": "models/qwen3-8b/vllm-tp2-910b.yaml",
+          "digest": "sha256:ed023547cd79ec5725d61716559a70c9e692dc9ece7bbbadb1f8a729c63961fb",
+          "history": "models/qwen3-8b/vllm-tp2-910b.history.json",
+          "servedName": "Qwen3-8B",
+          "engine": "vllm",
+          "description": "Two Ascend 910B cards (TP2). Fixture-only second variant for multi-variant digest drift tests.",
+          "chart": {
+            "name": "vllm",
+            "version": ">=0.7.6"
+          },
+          "image": {
+            "repository": "quay.io/ascend/vllm-ascend",
+            "tag": "v0.23.0.post1",
+            "digest": "sha256:ffe9306186781ddb80812eda574134e601ee8499693ea36e4a97173111ddf7e7"
+          },
+          "requires": {
+            "gpus": 2,
+            "topology": "single-node",
+            "vendor": "ascend",
+            "gpuProduct": [
+              "Ascend-910B3"
+            ]
+          }
         }
       ]
     }
