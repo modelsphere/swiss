@@ -83,6 +83,10 @@ type SourceRef struct {
 	Version string `json:"version,omitempty"`
 	Digest  string `json:"digest,omitempty"`
 	Variant string `json:"variant"`
+	// Schema is "v2" when this was composed from a schema v2 catalog, whose
+	// Version and Digest pin one variant file rather than a version file.
+	// Absent on v1, which is every plan written before v2.
+	Schema string `json:"schema,omitempty"`
 }
 
 type ChartRef struct {
@@ -100,9 +104,10 @@ func (p *Plan) ComputeHash() error {
 	// hashed; nothing rendered depends on it. And a swissd older than the field
 	// drops it when reading the plan back, so hashing it would have that swissd
 	// refuse, as edited, every plan a newer one wrote. HF likewise: model.localPath
-	// is what renders from it, and that is in the values.
+	// is what renders from it, and that is in the values. Schema likewise:
+	// it says which file Digest is of, which renders nothing.
 	src := p.Source
-	src.CatalogName, src.HF = "", ""
+	src.CatalogName, src.HF, src.Schema = "", "", ""
 	payload := struct {
 		Release Release     `json:"release"`
 		Source  SourceRef   `json:"source"`

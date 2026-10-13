@@ -188,6 +188,7 @@ func buildPlan(ctx context.Context, in planInput) (*plan.Plan, error) {
 	return compose.Compose(compose.Input{
 		Catalog:         cat.Fetcher.String(),
 		Ref:             cat.Ref,
+		Schema:          cat.SchemaVersion,
 		Entry:           entry,
 		Variant:         v,
 		ChartVersion:    chartVersion,

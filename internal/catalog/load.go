@@ -3,7 +3,9 @@ package catalog
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/modelsphere/swiss/internal/chart"
@@ -34,13 +36,14 @@ type Catalog struct {
 	entries map[string]Entry
 }
 
-// Open fetches and validates the v1 index (index.json). Use OpenWithSchema for v2.
+// Open fetches and validates the index at loc with schemaVersion unset: a base
+// location reads index.json as before, and a location naming its .json is read
+// by that document's apiVersion.
 func Open(ctx context.Context, loc string) (*Catalog, error) {
-	return OpenWithSchema(ctx, loc, SchemaV1)
+	return OpenWithSchema(ctx, loc, "")
 }
 
-// OpenWithSchema opens a catalog at loc using schema "v1" or "v2" (empty → v1).
-// v1 resolves to index.json; v2 to index-v2.json, unless loc already names a .json file.
+// OpenWithSchema opens a catalog at loc for a site profile's schemaVersion.
 func OpenWithSchema(ctx context.Context, loc, schema string) (*Catalog, error) {
 	f, err := NewFetcherWithSchema(loc, schema)
 	if err != nil {
@@ -50,31 +53,25 @@ func OpenWithSchema(ctx context.Context, loc, schema string) (*Catalog, error) {
 }
 
 // OpenFetcher is Open against an already-built Fetcher, for tests and for
-// callers holding a configured HTTP client. SchemaVersion is taken from the
-// fetcher when it carries one (fileSource / httpSource).
+// callers holding a configured HTTP client.
 func OpenFetcher(ctx context.Context, f Fetcher) (*Catalog, error) {
 	idx, raw, err := f.Index(ctx)
 	if err != nil {
 		return nil, err
 	}
-	schema := SchemaV1
-	switch s := f.(type) {
-	case *fileSource:
-		if s.schema != "" {
-			schema = s.schema
-		}
-	case *httpSource:
-		if s.schema != "" {
-			schema = s.schema
-		}
-	}
-	if idx != nil && idx.APIVersion == APIVersionV2 {
-		schema = SchemaV2
-	}
 	return &Catalog{
-		Fetcher: f, Index: idx, SchemaVersion: schema,
+		Fetcher: f, Index: idx, SchemaVersion: schemaOf(idx),
 		Ref: contentRef(raw), raw: raw, entries: map[string]Entry{},
 	}, nil
+}
+
+// schemaOf is the schema an index was parsed as, read off the index itself so
+// any Fetcher gets it right.
+func schemaOf(idx *Index) string {
+	if idx != nil && idx.APIVersion == APIVersionV2 {
+		return SchemaV2
+	}
+	return SchemaV1
 }
 
 // Entry fetches and validates one model at one version, memoised. An empty
@@ -138,10 +135,14 @@ func (c *Catalog) entryV1(ctx context.Context, name, wantVersion string) (Entry,
 	return *e, nil
 }
 
-// entryV2 loads each latest variant file listed on the model and assembles one
-// Entry. wantVersion, when set, keeps only variants whose pin version matches.
-// The Entry is normalized to APIVersion (v1 constant) so Validate and compose
-// stay schema-agnostic; each Variant carries the v2 file pin.
+// entryV2 assembles one Entry from a model's current variant files. A v2 index
+// lists each variant at its own version, under one label (m.Latest, the default
+// variant's): wantVersion "" or the label is every variant, and any other
+// version keeps the variants currently at it. Older revisions are not served.
+//
+// Each file is fetched, verified and validated on its own, in parallel. One
+// that fails is recorded in Unavailable instead of failing its siblings, and an
+// Entry with any is not memoised, so a transient failure is retried.
 func (c *Catalog) entryV2(ctx context.Context, name, wantVersion string) (Entry, error) {
 	m, ok := c.Index.Model(name)
 	if !ok {
@@ -151,23 +152,22 @@ func (c *Catalog) entryV2(ctx context.Context, name, wantVersion string) (Entry,
 		return Entry{}, fmt.Errorf("model %q has no variants in catalog %s", name, c.Fetcher)
 	}
 	pins := m.Versions[0].Variants
-	if wantVersion != "" {
-		filtered := make([]IndexVariant, 0, len(pins))
+	version := m.Latest
+	if wantVersion != "" && wantVersion != m.Latest {
+		var at, have []IndexVariant
 		for _, p := range pins {
 			if p.Version == wantVersion {
-				filtered = append(filtered, p)
+				at = append(at, p)
 			}
+			have = append(have, p)
 		}
-		if len(filtered) == 0 {
-			return Entry{}, fmt.Errorf("model %q has no variant at version %q", name, wantVersion)
+		if len(at) == 0 {
+			return Entry{}, fmt.Errorf("model %q has no variant at version %q -- a v2 catalog serves each variant's current version (have: %s)", name, wantVersion, pinList(have))
 		}
-		pins = filtered
+		pins, version = at, wantVersion
 	}
 
-	key := name + "@" + wantVersion
-	if wantVersion == "" {
-		key = name + "@" + m.Latest
-	}
+	key := name + "@" + version
 	c.mu.Lock()
 	if e, ok := c.entries[key]; ok {
 		c.mu.Unlock()
@@ -175,55 +175,95 @@ func (c *Catalog) entryV2(ctx context.Context, name, wantVersion string) (Entry,
 	}
 	c.mu.Unlock()
 
-	vars := make([]Variant, 0, len(pins))
-	var served string
-	var entryDigest string
-	for _, pin := range pins {
-		raw, err := c.Fetcher.Fetch(ctx, pin.Path)
-		if err != nil {
-			return Entry{}, fmt.Errorf("%s %s (%s): %w", name, pin.ID, pin.Path, err)
-		}
-		if got := contentRef(raw); got != pin.Digest {
-			return Entry{}, fmt.Errorf("%s %s: digest %s does not match the index (%s) -- the published variant was rewritten", name, pin.ID, got, pin.Digest)
-		}
-		doc, err := ParseVariantDoc(raw)
-		if err != nil {
-			return Entry{}, fmt.Errorf("%s %s (%s): %w", name, pin.ID, pin.Path, err)
-		}
-		if doc.Model != name || doc.ID != pin.ID {
-			return Entry{}, fmt.Errorf("%s %s (%s): document says %s/%s -- index is stale", name, pin.ID, pin.Path, doc.Model, doc.ID)
-		}
-		v := doc.toVariant(pin)
-		vars = append(vars, v)
-		if pin.Default || served == "" {
-			served = doc.ServedName
-		}
-		if pin.Default || entryDigest == "" {
-			entryDigest = pin.Digest
-		}
+	loaded := make([]Variant, len(pins))
+	errs := make([]error, len(pins))
+	var wg sync.WaitGroup
+	for i, pin := range pins {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			loaded[i], errs[i] = c.variantV2(ctx, m, pin)
+		}()
 	}
+	wg.Wait()
 
-	version := m.Latest
-	if wantVersion != "" {
-		version = wantVersion
+	e := Entry{APIVersion: APIVersion, Name: name, Version: version}
+	var failed []error
+	for i, pin := range pins {
+		if pin.Default {
+			e.defaultID = pin.ID
+		}
+		if errs[i] != nil {
+			if e.Unavailable == nil {
+				e.Unavailable = map[string]string{}
+			}
+			e.Unavailable[pin.ID] = errs[i].Error()
+			failed = append(failed, fmt.Errorf("%s %s: %w", name, pin.ID, errs[i]))
+			continue
+		}
+		e.Variants = append(e.Variants, loaded[i])
 	}
-	e := Entry{
-		APIVersion: APIVersion, // normalized; wire was v2
-		Name:       name,
-		Version:    version,
-		ServedName: served,
-		Digest:     entryDigest,
-		Variants:   vars,
+	if len(e.Variants) == 0 {
+		return Entry{}, errors.Join(failed...)
+	}
+	// v1 has one servedName per entry; here it is that only when every
+	// variant agrees, and compose reads each variant's own (ServedNameOf).
+	for i, v := range e.Variants {
+		if i == 0 {
+			e.ServedName = v.ServedName
+		} else if v.ServedName != e.ServedName {
+			e.ServedName = ""
+			break
+		}
 	}
 	e.applyMetadata(m)
 	if err := e.Validate(); err != nil {
 		return Entry{}, fmt.Errorf("%s (%s): %w", name, c.Fetcher, err)
 	}
 
-	c.mu.Lock()
-	c.entries[key] = e
-	c.mu.Unlock()
+	if len(e.Unavailable) == 0 {
+		c.mu.Lock()
+		c.entries[key] = e
+		c.mu.Unlock()
+	}
 	return e, nil
+}
+
+// variantV2 fetches one variant file and checks it against its pin: the digest
+// is the lock, and the document must be the model, id and version the index
+// says it is.
+func (c *Catalog) variantV2(ctx context.Context, m IndexModel, pin IndexVariant) (Variant, error) {
+	raw, err := c.Fetcher.Fetch(ctx, pin.Path)
+	if err != nil {
+		return Variant{}, fmt.Errorf("%s: %w", pin.Path, err)
+	}
+	if got := contentRef(raw); got != pin.Digest {
+		return Variant{}, fmt.Errorf("%s: digest %s does not match the index (%s) -- the published variant was rewritten", pin.Path, got, pin.Digest)
+	}
+	doc, err := ParseVariantDoc(raw)
+	if err != nil {
+		return Variant{}, fmt.Errorf("%s: %w", pin.Path, err)
+	}
+	if doc.Model != m.Name || doc.ID != pin.ID || doc.Version != pin.Version {
+		return Variant{}, fmt.Errorf("%s: document says %s/%s %s, the index %s/%s %s -- index is stale", pin.Path, doc.Model, doc.ID, doc.Version, m.Name, pin.ID, pin.Version)
+	}
+	v := doc.toVariant(pin)
+	// The per-variant rules, judged on this variant alone so a bad one does not
+	// take its siblings down; the cross-variant rules run on the whole Entry.
+	one := Entry{APIVersion: APIVersion, Name: m.Name, Version: pin.Version, Variants: []Variant{v}}
+	one.applyMetadata(m)
+	if err := one.Validate(); err != nil {
+		return Variant{}, fmt.Errorf("%s: %w", pin.Path, err)
+	}
+	return v, nil
+}
+
+func pinList(pins []IndexVariant) string {
+	out := make([]string, 0, len(pins))
+	for _, p := range pins {
+		out = append(out, p.ID+"@"+p.Version)
+	}
+	return strings.Join(out, ", ")
 }
 
 // applyMetadata fills the cosmetic half from the index, which build-index.sh

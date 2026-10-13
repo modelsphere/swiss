@@ -40,8 +40,13 @@ func catalogCmd() *cobra.Command {
 					if n := v.Requires.NodesOrDefault(); n > 1 {
 						gpus = fmt.Sprintf("%dx%d", n, v.Requires.GPUs)
 					}
+					// A v2 variant is versioned on its own.
+					version := latest.Version
+					if v.Version != "" {
+						version = v.Version
+					}
 					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s-%s\n",
-						e.Name, latest.Version, v.ID, v.Engine, gpus, v.Requires.TopologyOrDefault(), v.Chart.Name, v.Chart.Version)
+						e.Name, version, v.ID, v.Engine, gpus, v.Requires.TopologyOrDefault(), v.Chart.Name, v.Chart.Version)
 				}
 			}
 			if err := w.Flush(); err != nil {
@@ -106,6 +111,12 @@ func describe(e catalog.Entry) string {
 		}
 		if len(v.Requires.GPUProduct) > 0 {
 			fmt.Fprintf(&b, "  [%s]", strings.Join(v.Requires.GPUProduct, ", "))
+		}
+		if v.Version != "" {
+			fmt.Fprintf(&b, "  v%s", v.Version)
+		}
+		if n := e.ServedNameOf(v); n != e.ServedModelName() {
+			fmt.Fprintf(&b, "  served as %s", n)
 		}
 		b.WriteString("\n")
 		if v.Description != "" {

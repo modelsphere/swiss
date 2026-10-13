@@ -34,19 +34,22 @@ type Fetcher interface {
 }
 
 // SchemaV1 and SchemaV2 are the values CatalogRepo.SchemaVersion accepts.
+// Unset is a third answer, not a spelling of v1:
+//
+//	unset, base location     -> index.json, read as v1 (what every site did before v2)
+//	unset, explicit .json    -> read by the document's own apiVersion
+//	v1 / v2                  -> index.json / index-v2.json, and the document must be that schema
 const (
 	SchemaV1 = "v1"
 	SchemaV2 = "v2"
 )
 
-// NormalizeSchema returns SchemaV1 when s is empty or "v1", SchemaV2 for "v2",
-// and an error for anything else.
+// NormalizeSchema trims s and refuses anything but unset, v1 or v2. Unset stays
+// "" -- see the table above.
 func NormalizeSchema(s string) (string, error) {
-	switch strings.TrimSpace(s) {
-	case "", SchemaV1:
-		return SchemaV1, nil
-	case SchemaV2:
-		return SchemaV2, nil
+	switch s = strings.TrimSpace(s); s {
+	case "", SchemaV1, SchemaV2:
+		return s, nil
 	default:
 		return "", fmt.Errorf("catalog schemaVersion %q must be v1 or v2", s)
 	}
@@ -61,9 +64,14 @@ func indexFileName(schema string) string {
 	return "index.json"
 }
 
-// NewFetcher picks an implementation from a location, loading schema v1
-// (index.json). Prefer NewFetcherWithSchema when the site profile names a
-// schemaVersion.
+func namesJSON(loc string) bool {
+	if u, err := url.Parse(loc); err == nil && (u.Scheme == "http" || u.Scheme == "https") {
+		return strings.HasSuffix(u.Path, ".json")
+	}
+	return strings.HasSuffix(loc, ".json")
+}
+
+// NewFetcher picks an implementation from a location, with schemaVersion unset.
 //
 //	https://models.example.com/catalog/      -> https, index.json appended
 //	https://models.example.com/index.json    -> https
@@ -74,13 +82,11 @@ func indexFileName(schema string) string {
 // the documents it points at; making the consumer speak git would buy nothing a
 // static file server does not already give it.
 func NewFetcher(loc string) (Fetcher, error) {
-	return NewFetcherWithSchema(loc, SchemaV1)
+	return NewFetcherWithSchema(loc, "")
 }
 
-// NewFetcherWithSchema is NewFetcher for a specific catalog schema. schema is
-// "v1" or "v2" (empty means v1). When loc does not already name a .json file,
-// v1 appends index.json and v2 appends index-v2.json — the v1 URL shape is
-// unchanged.
+// NewFetcherWithSchema is NewFetcher for a site profile's schemaVersion: v2
+// appends index-v2.json where v1 and unset append index.json.
 func NewFetcherWithSchema(loc, schema string) (Fetcher, error) {
 	schema, err := NormalizeSchema(schema)
 	if err != nil {

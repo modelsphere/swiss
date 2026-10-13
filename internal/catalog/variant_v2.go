@@ -24,6 +24,9 @@ type variantDoc struct {
 	Image       *Image      `yaml:"image,omitempty"`
 	Requires    Requires    `yaml:"requires"`
 	Values      values.Tree `yaml:"values,omitempty"`
+	Deprecated  any         `yaml:"deprecated,omitempty"`
+	// Replaces is the catalog's record of a rename; nothing here acts on it.
+	Replaces string `yaml:"replaces,omitempty"`
 }
 
 // ParseVariantDoc decodes a v2 variant file. KnownFields stays strict: a typo
@@ -64,5 +67,7 @@ func (d *variantDoc) toVariant(pin IndexVariant) Variant {
 		Digest:      pin.Digest,
 		Version:     pin.Version,
 		Path:        pin.Path,
+		ServedName:  d.ServedName,
+		Deprecated:  d.Deprecated,
 	}
 }

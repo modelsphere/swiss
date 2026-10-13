@@ -43,6 +43,9 @@ type Input struct {
 	// ChartVersion is chart.version resolved by chart.Resolve. Empty works only
 	// for a pinned chart.version: Compose reads no registry.
 	ChartVersion string
+	// Schema is the catalog's SchemaVersion. Recorded on a v2 plan only, so a
+	// v1 plan stays byte for byte what it was.
+	Schema string
 }
 
 // Compose resolves an entry, a variant, a profile and a set of overrides into a
@@ -119,6 +122,7 @@ func Compose(in Input) (*plan.Plan, error) {
 			Version: pinVersion(in.Entry, in.Variant),
 			Digest:  pinDigest(in.Entry, in.Variant),
 			Variant: in.Variant.ID,
+			Schema:  v2Only(in.Schema),
 		},
 		Chart: plan.ChartRef{
 			Name:    in.Variant.Chart.Name,
@@ -158,7 +162,7 @@ func catalogLayer(e catalog.Entry, v catalog.Variant) (values.Tree, error) {
 	out := values.Tree{}
 	values.Merge(out, v.Values, values.LayerCatalog, nil)
 
-	if err := values.Set(out, "model.name", e.ServedModelName()); err != nil {
+	if err := values.Set(out, "model.name", e.ServedNameOf(v)); err != nil {
 		return nil, err
 	}
 	if err := values.Set(out, "model.gpus", fmt.Sprintf("%d", v.Requires.GPUs)); err != nil {
@@ -329,6 +333,13 @@ func toAnySlice(s []string) []any {
 		out[i] = v
 	}
 	return out
+}
+
+func v2Only(schema string) string {
+	if schema == catalog.SchemaV2 {
+		return schema
+	}
+	return ""
 }
 
 // pinVersion is the version recorded on a plan: the v2 variant pin when set,

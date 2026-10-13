@@ -38,7 +38,7 @@ func TestCacheRoundTripsTheIndexBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 	cache := NewCache(t.TempDir())
-	if err := cache.Save(dir, c); err != nil {
+	if err := cache.Save(dir, "", c); err != nil {
 		t.Fatal(err)
 	}
 
@@ -46,7 +46,7 @@ func TestCacheRoundTripsTheIndexBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, at, err := cache.Open(f, dir)
+	got, at, err := cache.Open(f, dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,14 +72,14 @@ func TestCacheKeysOnLocation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := cache.Save(a, ca); err != nil {
+	if err := cache.Save(a, "", ca); err != nil {
 		t.Fatal(err)
 	}
 	f, err := NewFetcher(b)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := cache.Open(f, b); err == nil {
+	if _, _, err := cache.Open(f, b, ""); err == nil {
 		t.Error("a location that was never saved must miss, not answer with another's index")
 	}
 }
@@ -93,17 +93,17 @@ func TestCacheRejectsCorruptedBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := cache.Save(dir, c); err != nil {
+	if err := cache.Save(dir, "", c); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(cache.file(CacheKey(dir, SchemaV1)), []byte("{ not json"), 0o600); err != nil {
+	if err := os.WriteFile(cache.file(dir), []byte("{ not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	f, err := NewFetcher(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := cache.Open(f, dir); err == nil {
+	if _, _, err := cache.Open(f, dir, ""); err == nil {
 		t.Error("a corrupted cache file must be an error, not a catalog")
 	}
 }
@@ -134,7 +134,7 @@ func TestCacheSweepsWhatIsNoLongerRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := cache.Save(dir, c); err != nil {
+	if err := cache.Save(dir, "", c); err != nil {
 		t.Fatal(err)
 	}
 
@@ -147,7 +147,7 @@ func TestCacheSweepsWhatIsNoLongerRead(t *testing.T) {
 	if _, err := os.Stat(recent); err != nil {
 		t.Errorf("a recent index must be kept -- a repoint may come straight back: %v", err)
 	}
-	if _, err := os.Stat(cache.file(CacheKey(dir, SchemaV1))); err != nil {
+	if _, err := os.Stat(cache.file(dir)); err != nil {
 		t.Errorf("the index just saved must survive its own sweep: %v", err)
 	}
 }
@@ -163,19 +163,19 @@ func TestCacheKeepsTheIndexInUseHoweverOld(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := cache.Save(dir, c); err != nil {
+	if err := cache.Save(dir, "", c); err != nil {
 		t.Fatal(err)
 	}
 	old := time.Now().Add(-90 * 24 * time.Hour)
-	if err := os.Chtimes(cache.file(CacheKey(dir, SchemaV1)), old, old); err != nil {
+	if err := os.Chtimes(cache.file(dir), old, old); err != nil {
 		t.Fatal(err)
 	}
 	// A second save for the same location: the sweep it triggers sees its own
 	// target, which must be exempt rather than aged out.
-	if err := cache.Save(dir, c); err != nil {
+	if err := cache.Save(dir, "", c); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := cache.Open(mustFetcher(t, dir), dir); err != nil {
+	if _, _, err := cache.Open(mustFetcher(t, dir), dir, ""); err != nil {
 		t.Errorf("the index in use was swept: %v", err)
 	}
 }
@@ -196,13 +196,13 @@ func TestNilCacheIsUsable(t *testing.T) {
 	if got := NewCache(""); got != nil {
 		t.Errorf("an empty dir must turn the cache off, got %#v", got)
 	}
-	if err := c.Save("loc", &Catalog{}); err != nil {
+	if err := c.Save("loc", "", &Catalog{}); err != nil {
 		t.Errorf("saving to a nil cache must be a no-op, got %v", err)
 	}
 	if c.Dir() != "" {
 		t.Error("a nil cache has no directory")
 	}
-	if _, _, err := c.Open(nil, "loc"); err == nil {
+	if _, _, err := c.Open(nil, "loc", ""); err == nil {
 		t.Error("opening from a nil cache must say there is no cache")
 	}
 }

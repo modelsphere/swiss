@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/modelsphere/swiss/internal/catalog"
 	"github.com/modelsphere/swiss/internal/cluster"
 	"github.com/modelsphere/swiss/internal/plan"
 	"github.com/modelsphere/swiss/internal/site"
@@ -108,11 +109,25 @@ func (s *Server) releaseDigestDrift(ctx context.Context, p *plan.Plan) string {
 	if err != nil {
 		return ""
 	}
-	cat, err := s.openCatalog(ctx, repo.URL, repo.SchemaVersionOrDefault())
+	cat, err := s.openCatalog(ctx, repo.URL, repo.SchemaVersion)
 	if err != nil {
 		return ""
 	}
+	// A plan from the other schema pinned a different kind of file -- a version
+	// file or a variant file -- so its digest says nothing about this catalog's,
+	// however its version and variant line up. A site switching a catalog to v2
+	// is a migration, not a rewrite.
+	if planSchema(p) != cat.SchemaVersion {
+		return ""
+	}
 	return digestDrift(cat.Index, p.Source.Model, p.Source.Version, p.Source.Variant, p.Source.Digest)
+}
+
+func planSchema(p *plan.Plan) string {
+	if p.Source.Schema == catalog.SchemaV2 {
+		return catalog.SchemaV2
+	}
+	return catalog.SchemaV1
 }
 
 // entrypointAuth is the per-request half of the entrypoint credentials: an

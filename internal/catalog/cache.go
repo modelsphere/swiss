@@ -38,24 +38,31 @@ func (c *Cache) Dir() string {
 	return c.dir
 }
 
-// CacheKey identifies one (location, schema) pair so a site that lists the
-// same base URL once as v1 and once as v2 does not share a cache slot.
+// CacheKey identifies one configured catalog: the slot its index is cached in,
+// and what two catalogs in one profile must not share. v1 and unset are the
+// location alone, which is what the key was before v2 -- an index cached by an
+// older swissd is still found, and a profile valid then is valid now. v2 on a
+// base location is its own slot, since index-v2.json sits beside index.json;
+// a location naming its .json is one document whatever the schema.
 func CacheKey(loc, schema string) string {
-	schema, _ = NormalizeSchema(schema)
-	return schema + "|" + loc
+	if strings.TrimSpace(schema) == SchemaV2 && !namesJSON(loc) {
+		return SchemaV2 + "|" + loc
+	}
+	return loc
 }
 
-// One file per location+schema, named by a digest of the key: two catalogs
-// configured on one host do not share a slot, and the name carries no part of
-// a URL that could escape the directory.
+// One file per key, named by a digest of it: two catalogs configured on one
+// host do not share a slot, and the name carries no part of a URL that could
+// escape the directory.
 func (c *Cache) file(key string) string {
 	sum := sha256.Sum256([]byte(key))
 	return filepath.Join(c.dir, "index-"+hex.EncodeToString(sum[:8])+".json")
 }
 
-// Save records the index a catalog was opened from. Best effort by contract:
-// a cache that cannot be written is a warning, never a failed request.
-func (c *Cache) Save(loc string, cat *Catalog) error {
+// Save records the index a catalog was opened from, under the location and
+// schemaVersion it was configured with. Best effort by contract: a cache that
+// cannot be written is a warning, never a failed request.
+func (c *Cache) Save(loc, schema string, cat *Catalog) error {
 	if c == nil || cat == nil || len(cat.raw) == 0 {
 		return nil
 	}
@@ -75,10 +82,6 @@ func (c *Cache) Save(loc string, cat *Catalog) error {
 	}
 	if err := tmp.Close(); err != nil {
 		return err
-	}
-	schema := cat.SchemaVersion
-	if schema == "" {
-		schema = SchemaV1
 	}
 	target := c.file(CacheKey(loc, schema))
 	if err := os.Rename(tmp.Name(), target); err != nil {
@@ -138,15 +141,11 @@ func (c *Cache) prune(keep string) {
 	}
 }
 
-// Open builds a catalog from the cached index for loc, with the time it was
-// written. The bytes are parsed and validated exactly as a fetched index is:
-// having been in a cache is not a reason to trust what is in it.
-func (c *Cache) Open(f Fetcher, loc string) (*Catalog, time.Time, error) {
-	return c.OpenSchema(f, loc, SchemaV1)
-}
-
-// OpenSchema builds a catalog from the cached index for loc at schema.
-func (c *Cache) OpenSchema(f Fetcher, loc, schema string) (*Catalog, time.Time, error) {
+// Open builds a catalog from the cached index for loc and schemaVersion, with
+// the time it was written. The bytes are parsed and validated exactly as a
+// fetched index is: having been in a cache is not a reason to trust what is in
+// it.
+func (c *Cache) Open(f Fetcher, loc, schema string) (*Catalog, time.Time, error) {
 	if c == nil {
 		return nil, time.Time{}, fmt.Errorf("no catalog cache configured")
 	}
@@ -168,7 +167,7 @@ func (c *Cache) OpenSchema(f Fetcher, loc, schema string) (*Catalog, time.Time, 
 		at = fi.ModTime()
 	}
 	return &Catalog{
-		Fetcher: f, Index: idx, SchemaVersion: schema,
+		Fetcher: f, Index: idx, SchemaVersion: schemaOf(idx),
 		Ref: contentRef(raw), raw: raw,
 		entries: map[string]Entry{},
 	}, at, nil

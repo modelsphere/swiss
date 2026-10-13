@@ -44,6 +44,13 @@ type Entry struct {
 	// Digest is set on fetch from the index, not read from the document.
 	Digest   string    `yaml:"-" json:"digest,omitempty"`
 	Variants []Variant `yaml:"variants" json:"variants"`
+	// Unavailable is a v2 variant whose file could not be loaded, by id, with
+	// why. Its siblings are still served: each v2 file is pinned on its own, so
+	// one bad file blocks deploying only itself.
+	Unavailable map[string]string `yaml:"-" json:"unavailable,omitempty"`
+	// defaultID is the index's default variant, kept for when it is the one
+	// Unavailable -- falling back to another would deploy what was not asked.
+	defaultID string
 }
 
 // Source is model identity, never a location. The charts mount weights from
@@ -76,6 +83,10 @@ type Variant struct {
 	Digest  string `yaml:"-" json:"digest,omitempty"`
 	Version string `yaml:"-" json:"version,omitempty"`
 	Path    string `yaml:"-" json:"path,omitempty"`
+	// ServedName and Deprecated are a v2 variant file's own, where v1 has one
+	// servedName per entry and deprecates whole models.
+	ServedName string `yaml:"-" json:"servedName,omitempty"`
+	Deprecated any    `yaml:"-" json:"deprecated,omitempty"`
 }
 
 // Chart carries a name and a version, never a repository: a public catalog
@@ -163,12 +174,24 @@ func (e Entry) ServedModelName() string {
 	return e.Name
 }
 
+// ServedNameOf is what variant v advertises: its own servedName on v2, else the
+// entry's.
+func (e Entry) ServedNameOf(v Variant) string {
+	if v.ServedName != "" {
+		return v.ServedName
+	}
+	return e.ServedModelName()
+}
+
 // Variant looks up a variant by id.
 func (e Entry) Variant(id string) (Variant, error) {
 	for _, v := range e.Variants {
 		if v.ID == id {
 			return v, nil
 		}
+	}
+	if why, ok := e.Unavailable[id]; ok {
+		return Variant{}, fmt.Errorf("model %q variant %q is unavailable: %s", e.Name, id, why)
 	}
 	var ids []string
 	for _, v := range e.Variants {
@@ -180,6 +203,9 @@ func (e Entry) Variant(id string) (Variant, error) {
 // DefaultVariant is the one marked default, else the first. Entries are
 // validated to carry at most one default.
 func (e Entry) DefaultVariant() (Variant, error) {
+	if why, ok := e.Unavailable[e.defaultID]; ok {
+		return Variant{}, fmt.Errorf("model %q default variant %q is unavailable: %s", e.Name, e.defaultID, why)
+	}
 	if len(e.Variants) == 0 {
 		return Variant{}, fmt.Errorf("model %q has no variants", e.Name)
 	}

@@ -238,6 +238,7 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 		Catalog:         cat.Fetcher.String(),
 		CatalogName:     repo.Name,
 		Ref:             cat.Ref,
+		Schema:          cat.SchemaVersion,
 		Entry:           entry,
 		Variant:         v,
 		ChartVersion:    chartVersion,

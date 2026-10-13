@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/modelsphere/swiss/internal/catalog"
 	"github.com/modelsphere/swiss/internal/values"
 	"gopkg.in/yaml.v3"
 )
@@ -277,17 +278,21 @@ func Parse(raw []byte, origin string) (*Profile, error) {
 		return nil, fmt.Errorf("%s: catalog %w", origin, err)
 	}
 	// A name is what a page and a plan request select by, so it has to be
-	// unique; a url listed twice is two names for one catalog, which a
-	// deployment row could only report under one of them.
-	names, urls := map[string]bool{}, map[string]string{}
+	// unique; one index listed twice is two names for one catalog, which a
+	// deployment row could only report under one of them. One base url can
+	// serve both schemas, though -- index.json and index-v2.json side by side,
+	// v1 models staying in the first -- and those are two catalogs.
+	names, keys := map[string]bool{}, map[string]string{}
 	dflt := ""
 	for i, c := range p.Catalogs {
 		c.Name, c.URL = strings.TrimSpace(c.Name), strings.TrimSpace(c.URL)
-		c.SchemaVersion = strings.TrimSpace(c.SchemaVersion)
-		p.Catalogs[i] = c
-		if c.SchemaVersion != "" && c.SchemaVersion != "v1" && c.SchemaVersion != "v2" {
-			return nil, fmt.Errorf("%s: catalogs[%d] schemaVersion %q must be v1 or v2", origin, i, c.SchemaVersion)
+		schema, err := catalog.NormalizeSchema(c.SchemaVersion)
+		if err != nil {
+			return nil, fmt.Errorf("%s: catalogs[%d]: %w", origin, i, err)
 		}
+		c.SchemaVersion = schema
+		p.Catalogs[i] = c
+		key := catalog.CacheKey(c.URL, schema)
 		switch {
 		case c.Name == "" || c.URL == "":
 			return nil, fmt.Errorf("%s: catalogs[%d] needs both name and url", origin, i)
@@ -295,13 +300,13 @@ func Parse(raw []byte, origin string) (*Profile, error) {
 			return nil, fmt.Errorf("%s: catalogs[%d] name %q must be lowercase letters, digits, '.', '-' or '_', starting with a letter or digit", origin, i, c.Name)
 		case names[c.Name]:
 			return nil, fmt.Errorf("%s: catalogs[%d]: name %q is listed twice", origin, i, c.Name)
-		case urls[c.URL] != "":
-			return nil, fmt.Errorf("%s: catalogs[%d]: %s is already listed as %q", origin, i, c.URL, urls[c.URL])
+		case keys[key] != "":
+			return nil, fmt.Errorf("%s: catalogs[%d]: %s is already listed as %q", origin, i, c.URL, keys[key])
 		}
 		if err := checkCatalogURL(c.URL); err != nil {
 			return nil, fmt.Errorf("%s: catalogs[%d] url %w", origin, i, err)
 		}
-		names[c.Name], urls[c.URL] = true, c.Name
+		names[c.Name], keys[key] = true, c.Name
 		// Two defaults is no default: which one a page opens in would be a guess.
 		if c.Default {
 			if dflt != "" {
@@ -333,26 +338,14 @@ type CatalogRepo struct {
 	Name string `yaml:"name" json:"name"`
 	// URL is an https base or an absolute path, the shape the config file takes.
 	URL string `yaml:"url" json:"url"`
-	// SchemaVersion selects which published index the URL resolves to:
-	// "v1" (or empty) loads index.json; "v2" loads index-v2.json. An explicit
-	// URL that already ends in .json wins either way. Empty defaults to v1 so
-	// existing profiles keep their v1 pins and URLs.
+	// SchemaVersion selects which published index the URL resolves to: "v2"
+	// reads index-v2.json, "v1" index.json. Unset reads index.json as before,
+	// or a URL naming its .json file by that document's own apiVersion, so an
+	// existing profile means what it always did.
 	SchemaVersion string `yaml:"schemaVersion,omitempty" json:"schemaVersion,omitempty"`
 	// Default is the catalog a page opens in, and a request uses, when none is
 	// named. At most one is; with none, several catalogs have to be named.
 	Default bool `yaml:"default,omitempty" json:"default,omitempty"`
-}
-
-// SchemaVersionOrDefault is "v1" when SchemaVersion is unset, otherwise the
-// trimmed value. Callers that open a catalog branch on this rather than on the
-// raw field, so an omitted key and an explicit "v1" mean the same thing.
-func (c CatalogRepo) SchemaVersionOrDefault() string {
-	switch strings.TrimSpace(c.SchemaVersion) {
-	case "", "v1":
-		return "v1"
-	default:
-		return strings.TrimSpace(c.SchemaVersion)
-	}
 }
 
 // DefaultCatalogName is what a lone catalog is called: the profile's legacy

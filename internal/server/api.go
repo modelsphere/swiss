@@ -135,8 +135,8 @@ func (s *Server) handleCluster(w http.ResponseWriter, r *http.Request) {
 		info.Warnings = append(info.Warnings, "catalog: "+err.Error())
 	}
 	for _, r := range repos {
-		ci := catalogInfo{Name: r.Name, URL: r.URL, Source: catalogSource(r.URL, r.SchemaVersionOrDefault()), Default: r.Default}
-		if c, err := s.openCatalog(ctx, r.URL, r.SchemaVersionOrDefault()); err == nil {
+		ci := catalogInfo{Name: r.Name, URL: r.URL, Source: catalogSource(r.URL, r.SchemaVersion), Default: r.Default}
+		if c, err := s.openCatalog(ctx, r.URL, r.SchemaVersion); err == nil {
 			ci.Ref = c.Ref
 		} else {
 			info.Warnings = append(info.Warnings, fmt.Sprintf("catalog %s: %v", r.Name, err))
@@ -197,7 +197,7 @@ func (s *Server) catalogFor(ctx context.Context, w http.ResponseWriter, r *http.
 		writeError(w, http.StatusBadRequest, err.Error())
 		return nil, repo, false
 	}
-	c, err := s.openCatalog(ctx, repo.URL, repo.SchemaVersionOrDefault())
+	c, err := s.openCatalog(ctx, repo.URL, repo.SchemaVersion)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return nil, repo, false
@@ -511,7 +511,7 @@ func (s *Server) handleDeployments(w http.ResponseWriter, r *http.Request) {
 	repos, _ := s.Catalogs(ctx)
 	current := map[string]string{}
 	for _, repo := range repos {
-		if c, err := s.openCatalog(ctx, repo.URL, repo.SchemaVersionOrDefault()); err == nil {
+		if c, err := s.openCatalog(ctx, repo.URL, repo.SchemaVersion); err == nil {
 			current[repo.Name] = c.Ref
 		}
 	}
@@ -629,41 +629,18 @@ func (s *Server) deploymentRow(ctx context.Context, rel cluster.Release) *deploy
 }
 
 // digestDrift is the warning for a version that was rewritten in place: the
-// catalog still lists that version and variant, under a different digest than
-// the one this release was composed from. Empty when there is nothing to say,
-// including a plan that predates recording a digest.
-//
-// Compare against the variant pin when the index carries one (schema v2);
-// otherwise the entry digest on IndexVersion (schema v1). Using only
-// IndexVersion.Digest falsely flags every non-default v2 variant, because
-// compose pins the variant file digest while the projected version digest is
-// the default (or first) variant's.
+// catalog still publishes that version and variant, under a different digest
+// than the one this release was composed from. Empty when there is nothing to
+// say, including a plan that predates recording a digest.
 func digestDrift(idx *catalog.Index, model, version, variant, pinned string) string {
 	if idx == nil || model == "" || version == "" || variant == "" || pinned == "" {
 		return ""
 	}
-	m, ok := idx.Model(model)
-	if !ok {
+	current, ok := idx.PublishedDigest(model, version, variant)
+	if !ok || current == "" || current == pinned {
 		return ""
 	}
-	iv, err := m.Version(version)
-	if err != nil {
-		return ""
-	}
-	for _, v := range iv.Variants {
-		if v.ID != variant {
-			continue
-		}
-		current := iv.Digest
-		if v.Digest != "" {
-			current = v.Digest
-		}
-		if current == "" || current == pinned {
-			return ""
-		}
-		return fmt.Sprintf("version %s variant %s: upstream digest changed since this was deployed", version, variant)
-	}
-	return ""
+	return fmt.Sprintf("version %s variant %s: upstream digest changed since this was deployed", version, variant)
 }
 
 // pageParams reads page and perPage, clamped. Anything unparseable is the

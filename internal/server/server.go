@@ -109,13 +109,13 @@ func (s *Server) Catalog(ctx context.Context, name string) (*catalog.Catalog, si
 	if err != nil {
 		return nil, repo, err
 	}
-	c, err := s.openCatalog(ctx, repo.URL, repo.SchemaVersionOrDefault())
+	c, err := s.openCatalog(ctx, repo.URL, repo.SchemaVersion)
 	return c, repo, err
 }
 
-// openCatalog returns the catalog at loc for schema (v1 or v2), refetching once
-// the TTL has passed. The in-memory key includes the schema so one base URL
-// listed twice (v1 and v2) does not share a slot.
+// openCatalog returns the catalog at loc for a profile's schemaVersion (v1, v2
+// or unset), refetching once the TTL has passed. Keyed by catalog.CacheKey, so
+// one base URL listed as v1 and as v2 does not share a slot.
 //
 // A catalog fetch is one HTTP GET of the index, so the TTL is about not doing
 // it per request rather than about the fetch being expensive. On failure the
@@ -147,7 +147,7 @@ func (s *Server) openCatalog(ctx context.Context, loc, schema string) (*catalog.
 		// Nothing in memory for this location: this process may have just
 		// started, which is exactly when an unreachable catalog would otherwise
 		// mean an empty marketplace.
-		if disk, wrote, derr := s.catCache.OpenSchema(f, loc, schema); derr == nil {
+		if disk, wrote, derr := s.catCache.Open(f, loc, schema); derr == nil {
 			s.log.WarnContext(ctx, "catalog unreachable, serving the cached index",
 				"err", err, "cachedAt", wrote, "ref", disk.Ref, "catalog", loc, "schema", schema)
 			s.keepCatalog(disk, key)
@@ -155,7 +155,7 @@ func (s *Server) openCatalog(ctx context.Context, loc, schema string) (*catalog.
 		}
 		return nil, err
 	}
-	if err := s.catCache.Save(loc, c); err != nil {
+	if err := s.catCache.Save(loc, schema, c); err != nil {
 		s.log.WarnContext(ctx, "catalog index cache not written", "err", err, "dir", s.catCache.Dir())
 	}
 	s.keepCatalog(c, key)
@@ -223,7 +223,7 @@ func (s *Server) CatalogRepo(ctx context.Context, name string) (site.CatalogRepo
 func (s *Server) CatalogFrom(ctx context.Context, source string) (site.CatalogRepo, bool) {
 	repos, _ := s.Catalogs(ctx)
 	for _, r := range repos {
-		if catalogSource(r.URL, r.SchemaVersionOrDefault()) == source {
+		if catalogSource(r.URL, r.SchemaVersion) == source {
 			return r, true
 		}
 	}
