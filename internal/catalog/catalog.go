@@ -24,6 +24,9 @@ type Catalog interface {
 	Ref() string
 	// Source is the index location, as a plan records it.
 	Source() string
+	// Site is where the catalog's own site is published, perf reports
+	// included. Empty when the index names none.
+	Site() string
 
 	// Models is every model as it is now, in index order.
 	Models() []Model

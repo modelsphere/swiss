@@ -37,6 +37,7 @@ type V1 struct {
 func (c *V1) Schema() string     { return SchemaV1 }
 func (c *V1) Ref() string        { return c.ref }
 func (c *V1) Source() string     { return c.fetcher.String() }
+func (c *V1) Site() string       { return c.Index.Site }
 func (c *V1) indexBytes() []byte { return c.raw }
 
 // Models lists each model's latest version, every variant at it.

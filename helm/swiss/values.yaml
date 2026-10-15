@@ -55,6 +55,7 @@ config:
   #   rbac                      roles, rolebindings   (the cart subchart)
   #   monitoring.coreos.com     servicemonitors
   #   leaderworkerset.x-k8s.io  leaderworkersets
+  #   disaggregatedset.x-k8s.io disaggregatedsets    (sglang prefill/decode)
   #   autoscaling.4pd.io        llmscalers           (and autoscaling.modelsphere.dev)
   #   inference.x-k8s.io        llmslorequirements   (and inference.modelsphere.dev)
   #   routing.gpucluster.io     modelroutes          (and routing.modelsphere.dev)

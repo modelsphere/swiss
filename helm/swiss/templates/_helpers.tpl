@@ -116,6 +116,9 @@ passes them on.
 - apiGroups: ["leaderworkerset.x-k8s.io"]
   resources: ["leaderworkersets"]
   verbs: {{ $all | toJson }}
+- apiGroups: ["disaggregatedset.x-k8s.io"]
+  resources: ["disaggregatedsets"]
+  verbs: {{ $all | toJson }}
 - apiGroups: ["autoscaling.4pd.io", "autoscaling.modelsphere.dev"]
   resources: ["llmscalers"]
   verbs: {{ $all | toJson }}

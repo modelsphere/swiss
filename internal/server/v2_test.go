@@ -81,14 +81,95 @@ func TestCatalogHistory(t *testing.T) {
 	}
 }
 
-// The listing and model pages serve v1's documents, which is what the web
-// reads; a v2 catalog says so rather than impersonating one.
-func TestV2CatalogIsNotListedForTheWebYet(t *testing.T) {
-	srv := v2Server(t)
-	for _, path := range []string{"/api/catalog?catalog=next", "/api/catalog/qwen3-8b?catalog=next"} {
-		code, out := get(t, srv, path)
-		if code != http.StatusNotImplemented || !strings.Contains(out["error"].(string), "schema v2") {
-			t.Errorf("%s: status %d: %v", path, code, out)
+// The listing serves models, each variant at its own pin, for either schema;
+// only v1 also serves its index.
+func TestCatalogListingServesModelsForEitherSchema(t *testing.T) {
+	code, body := get(t, v2Server(t), "/api/catalog?catalog=next")
+	if code != http.StatusOK {
+		t.Fatalf("v2: status %d: %v", code, body)
+	}
+	if body["schema"] != "v2" || body["site"] != "https://modelsphere.github.io/model-catalog/" || body["index"] != nil {
+		t.Errorf("v2 listing = schema %v site %v index %v", body["schema"], body["site"], body["index"])
+	}
+	qwen := modelNamed(t, body, "qwen3-8b")
+	if qwen["defaultVariant"] != "vllm-tp1-910b" {
+		t.Errorf("defaultVariant = %v", qwen["defaultVariant"])
+	}
+	for _, v := range qwen["variants"].([]any) {
+		v := v.(map[string]any)
+		if v["version"] != "1.0.0" || !strings.HasPrefix(v["digest"].(string), "sha256:") || v["values"] != nil {
+			t.Errorf("v2 variant = %v", v)
 		}
 	}
+
+	code, body = get(t, testServer(t, fakeProbe()), "/api/catalog")
+	if code != http.StatusOK {
+		t.Fatalf("v1: status %d: %v", code, body)
+	}
+	if body["schema"] != "v1" || body["index"] == nil {
+		t.Errorf("v1 listing = schema %v, index %v", body["schema"], body["index"] != nil)
+	}
+	m := modelNamed(t, body, "qwen3.6-35b-a3b")
+	for _, v := range m["variants"].([]any) {
+		if v.(map[string]any)["version"] == "" {
+			t.Errorf("v1 variant has no version: %v", v)
+		}
+	}
+}
+
+// The cluster says which schema each catalog is, so a page can mark v1 legacy.
+func TestClusterNamesEachCatalogsSchema(t *testing.T) {
+	for want, srv := range map[string]*httptest.Server{"v2": v2Server(t), "v1": testServer(t, fakeProbe())} {
+		_, body := get(t, srv, "/api/cluster")
+		cats := body["catalogs"].([]any)
+		if got := cats[0].(map[string]any)["schema"]; got != want {
+			t.Errorf("schema = %v, want %s", got, want)
+		}
+	}
+}
+
+// The model endpoint resolves one variant, at its own version on v2; v1 also
+// serves the entry.
+func TestCatalogModelResolvesAVariantForEitherSchema(t *testing.T) {
+	code, body := get(t, v2Server(t), "/api/catalog/qwen3-8b?catalog=next&variant=vllm-tp2-910b")
+	if code != http.StatusOK {
+		t.Fatalf("v2: status %d: %v", code, body)
+	}
+	v := body["variant"].(map[string]any)
+	if body["schema"] != "v2" || body["entry"] != nil || v["id"] != "vllm-tp2-910b" || v["version"] != "1.0.0" ||
+		v["servedName"] != "Qwen3-8B" || !strings.HasPrefix(v["digest"].(string), "sha256:ed023547") {
+		t.Errorf("v2 model = schema %v entry %v variant %v", body["schema"], body["entry"], v)
+	}
+	if v["values"] == nil || v["image"].(map[string]any)["repository"] != "quay.io/ascend/vllm-ascend" {
+		t.Errorf("a resolved variant carries its values and image: %v", v)
+	}
+	if body["model"].(map[string]any)["name"] != "qwen3-8b" || body["localPath"] == nil {
+		t.Errorf("model %v, localPath %v", body["model"], body["localPath"])
+	}
+	for _, path := range []string{"/api/catalog/nope?catalog=next", "/api/catalog/qwen3-8b?catalog=next&variant=nope",
+		"/api/catalog/qwen3-8b?catalog=next&variant=vllm-tp2-910b&version=0.9.0"} {
+		if code, body := get(t, v2Server(t), path); code != http.StatusNotFound {
+			t.Errorf("%s: status %d, want 404: %v", path, code, body)
+		}
+	}
+
+	code, body = get(t, testServer(t, fakeProbe()), "/api/catalog/qwen3.6-35b-a3b")
+	if code != http.StatusOK {
+		t.Fatalf("v1: status %d: %v", code, body)
+	}
+	v = body["variant"].(map[string]any)
+	if body["schema"] != "v1" || body["entry"] == nil || v["default"] != true || v["version"] == "" {
+		t.Errorf("v1 model = schema %v entry %v variant %v", body["schema"], body["entry"] != nil, v)
+	}
+}
+
+func modelNamed(t *testing.T, listing map[string]any, name string) map[string]any {
+	t.Helper()
+	for _, m := range listing["models"].([]any) {
+		if m := m.(map[string]any); m["name"] == name {
+			return m
+		}
+	}
+	t.Fatalf("no model %s in %v", name, listing["models"])
+	return nil
 }

@@ -104,6 +104,9 @@ type catalogInfo struct {
 	Source string `json:"source"`
 	// Ref is empty when the catalog could not be read; a warning says why.
 	Ref string `json:"ref,omitempty"`
+	// Schema is v1 or v2: the opened index's, else the profile's schemaVersion.
+	// Empty when neither says.
+	Schema string `json:"schema,omitempty"`
 	// Default is the catalog a page opens in when none is named.
 	Default bool `json:"default,omitempty"`
 }
@@ -151,9 +154,9 @@ func (s *Server) handleCluster(w http.ResponseWriter, r *http.Request) {
 		info.Warnings = append(info.Warnings, "catalog: "+err.Error())
 	}
 	for _, r := range repos {
-		ci := catalogInfo{Name: r.Name, URL: r.URL, Source: catalogSource(r.URL, r.SchemaVersion), Default: r.Default}
+		ci := catalogInfo{Name: r.Name, URL: r.URL, Source: catalogSource(r.URL, r.SchemaVersion), Default: r.Default, Schema: r.SchemaVersion}
 		if c, err := s.openCatalog(ctx, r.URL, r.SchemaVersion); err == nil {
-			ci.Ref = c.Ref()
+			ci.Ref, ci.Schema = c.Ref(), c.Schema()
 		} else {
 			info.Warnings = append(info.Warnings, fmt.Sprintf("catalog %s: %v", r.Name, err))
 		}
@@ -217,24 +220,26 @@ func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	v1, ok := c.(*catalog.V1)
-	if !ok {
-		writeError(w, http.StatusNotImplemented, notServedToTheWeb(repo.Name, c))
-		return
-	}
 	// The index only. A marketplace listing must not cost one fetch per model.
-	writeJSON(w, http.StatusOK, map[string]any{
-		"name": repo.Name, "ref": c.Ref(), "source": c.Source(), "index": v1.Index,
-	})
+	// models is the same shape for either schema, each variant at its own pin;
+	// a v1 catalog also serves its index, for a page that predates models.
+	out := map[string]any{
+		"name": repo.Name, "ref": c.Ref(), "source": c.Source(), "schema": c.Schema(),
+		"site": c.Site(), "models": c.Models(),
+	}
+	if v1, ok := c.(*catalog.V1); ok {
+		out["index"] = v1.Index
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
-// notServedToTheWeb is the refusal of the listing and model pages for a v2
-// catalog. Their JSON is the v1 index and entry, which is what the web reads;
-// the v2 shape the web gets is not designed yet, and a v1 imitation of it is
-// the compatibility layer v2 is not getting. Plans, installs, upgrades and
-// drift go through catalog.Catalog and work for both.
-func notServedToTheWeb(name string, c catalog.Catalog) string {
-	return fmt.Sprintf("catalog %q is schema %s, which this page does not list yet -- plan and install from it through the API or the CLI", name, c.Schema())
+// resolvedVariant is a variant as a deploy composes it, values and image
+// included, with the pin it is composed at.
+type resolvedVariant struct {
+	catalog.Variant
+	Version    string `json:"version"`
+	Digest     string `json:"digest"`
+	ServedName string `json:"servedName"`
 }
 
 // catalogFor opens the catalog a request names with ?catalog=. Naming none is
@@ -255,39 +260,53 @@ func (s *Server) catalogFor(ctx context.Context, w http.ResponseWriter, r *http.
 	return c, repo, true
 }
 
+// handleCatalogModel is a model as the index lists it now, and one variant
+// resolved: ?variant= (else the default) at ?version= (else its current one).
+// The same for either schema. A v1 catalog also serves that version's entry,
+// every variant of it, for a page that predates variant.
 func (s *Server) handleCatalogModel(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := contextWithTimeout(r, 20*time.Second)
 	defer cancel()
-	c, repo, ok := s.catalogFor(ctx, w, r)
+	c, _, ok := s.catalogFor(ctx, w, r)
 	if !ok {
 		return
 	}
-	v1, ok := c.(*catalog.V1)
+	name, q := r.PathValue("model"), r.URL.Query()
+	m, ok := c.Model(name)
 	if !ok {
-		writeError(w, http.StatusNotImplemented, notServedToTheWeb(repo.Name, c))
+		writeError(w, http.StatusNotFound, fmt.Sprintf("no model %q in catalog %s", name, c.Source()))
 		return
 	}
-	e, err := v1.Entry(ctx, r.PathValue("model"), r.URL.Query().Get("version"))
+	res, err := c.Resolve(ctx, name, q.Get("variant"), q.Get("version"))
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
+	variants := []catalog.Variant{res.Variant}
+	out := map[string]any{
+		"ref": c.Ref(), "schema": c.Schema(), "model": m,
+		"variant": resolvedVariant{Variant: res.Variant, Version: res.Version, Digest: res.Digest, ServedName: res.ServedName},
+	}
+	if v1, ok := c.(*catalog.V1); ok {
+		if e, err := v1.Entry(ctx, name, q.Get("version")); err == nil {
+			out["entry"], variants = e, e.Variants
+		}
+	}
 	// The path this model's weights default to, so a form shows what it will
 	// get rather than a sentence about the template. The template comes too: it
-	// is what there is to show when the entry's own hf cannot be substituted
+	// is what there is to show when the model's own hf cannot be substituted
 	// into it. Best effort -- an unreadable profile is the profile page's
 	// problem, not this endpoint's.
-	out := map[string]any{"ref": c.Ref(), "entry": e}
 	if prof, err := s.Profile(ctx); err == nil {
 		out["pathTemplate"] = prof.Model.PathTemplate
-		if path, err := prof.LocalPath(e.Source.HF, e.Name); err == nil {
+		if path, err := prof.LocalPath(res.Source.HF, res.Model); err == nil {
 			out["localPath"] = path
 		}
 		// The repository each variant's image is pulled from after the site's
 		// mirror rewrite, by variant id. Resolved here so the rule has one
 		// implementation and a form can offer the rewrite as a choice.
 		images := map[string]string{}
-		for _, v := range e.Variants {
+		for _, v := range variants {
 			if v.Image != nil {
 				images[v.ID] = prof.MirrorImage(v.Image.Repository)
 			}

@@ -48,7 +48,7 @@ func TestChartApplyWith(t *testing.T) {
 	if strings.Contains(helmDeploy, "llmservices") || strings.Contains(helmDeploy, "controllerrevisions") {
 		t.Fatal("rbac.applyWith helm added LLMService rules")
 	}
-	if !strings.Contains(helmDeploy, "leaderworkersets") {
+	if !strings.Contains(helmDeploy, "leaderworkersets") || !strings.Contains(helmDeploy, "disaggregatedsets") {
 		t.Fatal("allowDeploy helm lost deployRules")
 	}
 

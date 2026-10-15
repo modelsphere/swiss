@@ -33,6 +33,7 @@ type V2 struct {
 func (c *V2) Schema() string     { return SchemaV2 }
 func (c *V2) Ref() string        { return c.ref }
 func (c *V2) Source() string     { return c.fetcher.String() }
+func (c *V2) Site() string       { return c.Index.Site }
 func (c *V2) indexBytes() []byte { return c.raw }
 
 func (c *V2) Models() []Model {
