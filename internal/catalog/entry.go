@@ -89,6 +89,9 @@ type Requires struct {
 
 const VendorNvidia = "nvidia"
 
+// EngineMock is a stand-in server, such as mock-llmd, run on an engine's chart.
+const EngineMock = "mock"
+
 // accelerators maps a vendor to the extended resource a pod requests. A table
 // here rather than in the catalog keeps Kubernetes resource strings out of a
 // public repo, and out of every site profile that would otherwise have to

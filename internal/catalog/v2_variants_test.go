@@ -202,8 +202,34 @@ func TestV2VariantIsValidated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := uc.Resolve(context.Background(), "m", "", ""); err == nil || !strings.Contains(err.Error(), "is not sglang or vllm") {
+	if _, err := uc.Resolve(context.Background(), "m", "", ""); err == nil || !strings.Contains(err.Error(), "is not sglang, vllm or mock") {
 		t.Errorf("an unknown engine must be refused by v1's rule: %v", err)
+	}
+}
+
+// A model with no source.hf has no weights: only a variant that mounts no model resolves.
+func TestV2NoSourceNeedsAWeightlessVariant(t *testing.T) {
+	f := memFetcher{}
+	var listed []string
+	for _, v := range []v2Variant{
+		{id: "mock", version: "1.0.0", extra: "values: {model: {localPath: \"\"}}\n"},
+		{id: "real", version: "1.0.0"},
+	} {
+		raw := variantYAML(v)
+		f["models/m/"+v.id+".yaml"] = raw
+		listed = append(listed, fmt.Sprintf(`{"id":%q,"version":"1.0.0","path":"models/m/%s.yaml","digest":%q,"engine":"sglang","chart":{"name":"sglang","version":"0.8.0"},"requires":{"gpus":1}}`, v.id, v.id, contentRef(raw)))
+	}
+	f["index-v2.json"] = []byte(`{"apiVersion":"catalog.swiss/v2","count":1,"models":[{"name":"m","variants":[` + strings.Join(listed, ",") + `]}]}`)
+	c, err := OpenFetcher(context.Background(), f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if r, err := c.Resolve(ctx, "m", "mock", ""); err != nil || !r.Variant.Weightless() {
+		t.Errorf("a weightless variant must resolve without source.hf: %+v, %v", r, err)
+	}
+	if _, err := c.Resolve(ctx, "m", "real", ""); err == nil || !strings.Contains(err.Error(), "source.hf is required") {
+		t.Errorf("a variant that mounts a model must need source.hf: %v", err)
 	}
 }
 

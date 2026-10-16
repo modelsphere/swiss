@@ -135,11 +135,12 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		p, _ = planOf(rel)
 	}
 
-	// The chart labels engine pods app=<release>-<engine>; without a stored plan
-	// the engine is unknown, so fall back to the helm instance label.
+	// The chart labels engine pods app=<release>-<chart> (a mock engine runs on
+	// another engine's chart); without a stored plan the chart is unknown, so
+	// fall back to the helm instance label.
 	selector := "app.kubernetes.io/instance=" + release
 	if p != nil {
-		selector = fmt.Sprintf("app=%s-%s", release, p.Engine)
+		selector = fmt.Sprintf("app=%s-%s", release, p.Chart.Name)
 		out.Route = routeOf(p)
 		out.Model = servedName(p)
 		out.Drift = s.releaseDigestDrift(ctx, p)

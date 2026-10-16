@@ -294,6 +294,22 @@ func TestLocalPathDefaultsFromTheSiteTemplate(t *testing.T) {
 	}
 }
 
+func TestNoSourceKeepsTheCatalogsEmptyLocalPath(t *testing.T) {
+	in := testInput()
+	in.Resolved.Source = catalog.Source{}
+	in.Resolved.Variant.Values = values.Tree{"model": map[string]any{"localPath": ""}}
+	p, err := Compose(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := values.Get(p.Values(), "model.localPath"); v != "" {
+		t.Errorf("localPath = %v, want the catalog's empty path", v)
+	}
+	if p.LayerOf("model.localPath") != values.LayerCatalog {
+		t.Errorf("an empty path must stay the catalog's, got %q", p.LayerOf("model.localPath"))
+	}
+}
+
 // The cache section does not exist in every chart version, so a site that turns
 // it off must produce no cache key at all -- not even a derived one.
 func TestDisabledCacheEmitsNothing(t *testing.T) {

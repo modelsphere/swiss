@@ -147,7 +147,7 @@ func applyCmd(mode exec.Mode) *cobra.Command {
 			// would either block or report a timeout for a release that is fine.
 			fmt.Fprintf(os.Stderr, "\n%s/%s submitted (%s)\nwatch it: kubectl -n %s get pods -l app=%s-%s -w\n",
 				p.Release.Namespace, p.Release.Name, p.Hash[:19],
-				p.Release.Namespace, p.Release.Name, p.Engine)
+				p.Release.Namespace, p.Release.Name, p.Chart.Name)
 			return nil
 		},
 	}

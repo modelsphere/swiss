@@ -123,9 +123,6 @@ func (c *V2) Resolve(ctx context.Context, model, variant, version string) (Resol
 	if err != nil {
 		return Resolved{}, err
 	}
-	if m.Source.HF == "" {
-		return Resolved{}, fmt.Errorf("%s: source.hf is required -- it is the identity the site profile derives a path from", model)
-	}
 	rev := RevisionV2{Version: pin.Version, Digest: pin.Digest}
 	where := pin.Path
 	if version != "" && version != pin.Version {
@@ -148,6 +145,10 @@ func (c *V2) Resolve(ctx context.Context, model, variant, version string) (Resol
 	v := doc.variant(pin.ID == m.DefaultID())
 	if err := v.validate(); err != nil {
 		return Resolved{}, fmt.Errorf("%s %s (%s): %w", model, rev.Version, where, err)
+	}
+	// Without source.hf there is no path to derive, so the chart's default would mount instead.
+	if m.Source.HF == "" && !v.Weightless() {
+		return Resolved{}, fmt.Errorf(`%s: source.hf is required unless variant %s mounts no model (values.model.localPath: "")`, model, pin.ID)
 	}
 	served := doc.ServedName
 	if served == "" {

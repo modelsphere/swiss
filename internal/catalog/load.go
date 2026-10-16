@@ -302,17 +302,28 @@ func (e Entry) Validate() error {
 	return nil
 }
 
+// Weightless reports a variant that mounts no model: values.model.localPath set to "".
+func (v Variant) Weightless() bool {
+	p, ok := values.Get(v.Values, "model.localPath")
+	return ok && p == ""
+}
+
 // validate is the rules one variant is judged on alone, the same in a v1 entry
 // and a v2 variant file.
 func (v Variant) validate() error {
 	where := "variant " + v.ID
 	switch v.Engine {
 	case "sglang", "vllm":
+		if v.Chart.Name != v.Engine {
+			return fmt.Errorf("%s: chart %q does not match engine %q", where, v.Chart.Name, v.Engine)
+		}
+	case EngineMock:
+		// A mock server has no chart of its own: it runs on an engine's chart through commandOverride.
+		if v.Chart.Name != "sglang" && v.Chart.Name != "vllm" {
+			return fmt.Errorf("%s: engine mock runs on the sglang or vllm chart, not %q", where, v.Chart.Name)
+		}
 	default:
-		return fmt.Errorf("%s: engine %q is not sglang or vllm", where, v.Engine)
-	}
-	if v.Chart.Name != v.Engine {
-		return fmt.Errorf("%s: chart %q does not match engine %q", where, v.Chart.Name, v.Engine)
+		return fmt.Errorf("%s: engine %q is not sglang, vllm or mock", where, v.Engine)
 	}
 	if v.Chart.Version == "" {
 		return fmt.Errorf("%s: chart.version is required -- an unpinned chart is not a reproducible deploy", where)
@@ -321,8 +332,13 @@ func (v Variant) validate() error {
 	if _, err := chart.ParseSpec(v.Chart.Version); err != nil {
 		return fmt.Errorf("%s: %w", where, err)
 	}
-	if v.Requires.GPUs < 1 {
-		return fmt.Errorf("%s: requires.gpus must be at least 1", where)
+	if v.Requires.GPUs < 0 {
+		return fmt.Errorf("%s: requires.gpus must not be negative", where)
+	}
+	// 0 is CPU only: the chart leaves the accelerator resource off the pod, so
+	// a field that picks or sizes one would describe a card nothing requests.
+	if r := v.Requires; r.GPUs == 0 && (r.Vendor != "" || len(r.GPUProduct) > 0 || r.MinGPUMemoryGiB > 0 || r.RDMA) {
+		return fmt.Errorf("%s: requires.gpus 0 is CPU only, which leaves no accelerator for vendor, gpuProduct, minGpuMemoryGiB or rdma to describe", where)
 	}
 	// An unknown vendor would render a pod requesting an empty resource
 	// name, which schedules and then runs on no accelerator at all.

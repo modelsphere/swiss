@@ -239,12 +239,15 @@ func siteLayer(p site.Profile, v catalog.Variant) (values.Tree, error) {
 func applyDefaults(site, derived, base values.Tree, in Input) error {
 	// model.localPath from the site's path template. Owned by the form because
 	// weights move and a deploy has to be able to say so.
-	localPath, err := in.Profile.LocalPath(in.Resolved.Source.HF, in.Resolved.Model)
-	if err != nil {
-		return err
-	}
-	if err := values.Set(site, "model.localPath", localPath); err != nil {
-		return err
+	// No source.hf is a model with no weights (catalog.Variant.Weightless): the catalog's empty path stands.
+	if in.Resolved.Source.HF != "" {
+		localPath, err := in.Profile.LocalPath(in.Resolved.Source.HF, in.Resolved.Model)
+		if err != nil {
+			return err
+		}
+		if err := values.Set(site, "model.localPath", localPath); err != nil {
+			return err
+		}
 	}
 
 	// The scheduler and priority class a GPU workload lands on are a property of

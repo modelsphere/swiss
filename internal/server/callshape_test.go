@@ -84,7 +84,7 @@ func TestDetailPageReadsAreAllNameScoped(t *testing.T) {
 		}
 	}
 	// Both reads name the release. Pods is a label selector on one namespace,
-	// which is the chart's own app=<release>-<engine>.
+	// which is the chart's own app=<release>-<chart>.
 	for _, arg := range probe.args {
 		if !strings.Contains(arg, "models") || !strings.Contains(arg, "r") {
 			t.Errorf("a read that does not name the release: %q (all: %v)", arg, probe.args)

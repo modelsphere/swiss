@@ -123,7 +123,11 @@ func describe(m catalog.Model, def catalog.Resolved) string {
 	if m.Description != "" {
 		fmt.Fprintf(&b, "\n%s\n", strings.TrimSpace(m.Description))
 	}
-	fmt.Fprintf(&b, "\nweights   %s", m.Source.HF)
+	weights := m.Source.HF
+	if weights == "" {
+		weights = "none"
+	}
+	fmt.Fprintf(&b, "\nweights   %s", weights)
 	if m.Source.SizeGiB > 0 {
 		fmt.Fprintf(&b, "  (%.0f GiB)", m.Source.SizeGiB)
 	}
