@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"github.com/modelsphere/swiss/internal/auth"
 	"github.com/modelsphere/swiss/internal/catalog"
@@ -338,9 +341,18 @@ func (s *Server) readProfile(ctx context.Context) (raw []byte, origin string, er
 	}
 	v, ok := data[pc.Key]
 	if !ok {
-		return nil, "", fmt.Errorf("site profile %s has no key %q", pc.ConfigMap, pc.Key)
+		return nil, "", fmt.Errorf("site profile %s has no key %q: %w", pc.ConfigMap, pc.Key, errNoProfile)
 	}
 	return []byte(v), pc.ConfigMap, nil
+}
+
+// errNoProfile marks a ConfigMap that holds no profile.
+var errNoProfile = errors.New("not stored")
+
+// profileMissing is a profile read that found nothing stored, as against one
+// that failed. Only this means the site has not been set up.
+func profileMissing(err error) bool {
+	return apierrors.IsNotFound(err) || errors.Is(err, fs.ErrNotExist) || errors.Is(err, errNoProfile)
 }
 
 // Handler builds the mux.

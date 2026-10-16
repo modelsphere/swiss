@@ -1195,7 +1195,15 @@ components:
         authDisabled: { type: boolean, description: "True when swissd runs with no login." }
         user: { type: string }
         expiresAt: { type: string, format: date-time }
-        initialized: { type: boolean, description: "A site profile exists and parses; false sends the web to setup." }
+        initialized: { type: boolean, description: "A site profile is stored and parses, so swissd can compose against it." }
+        setUp:
+          type: boolean
+          description: >-
+            Setup has run: a site profile is stored, whether or not it parses.
+            False only when swissd found none stored, which is the one state the
+            web's setup page is for (it writes over whatever is there). A read that
+            failed any other way reports true. Set up but not initialized is a
+            profile to fix on the site profile page.
 
     ApplyWith:
       type: string

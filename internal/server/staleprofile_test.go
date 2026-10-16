@@ -47,8 +47,8 @@ func TestStaleProfileIsUnconfiguredNotAnError(t *testing.T) {
 	}
 }
 
-// The gate keys off this: not initialised sends the browser to setup, which is
-// the page that can write a new profile.
+// The gate keys off this: set up but not initialised sends the browser to the
+// site profile page, which opens on the stored document to fix it.
 func TestStaleProfileReportsTheSiteUninitialised(t *testing.T) {
 	stale := liveProbe()
 	stale.Maps["swiss/site-profile"] = map[string]string{

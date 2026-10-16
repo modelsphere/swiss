@@ -3,12 +3,18 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/modelsphere/swiss/internal/auth"
 	"github.com/modelsphere/swiss/internal/cluster"
@@ -246,8 +252,35 @@ func TestSessionReportsWhetherTheSiteIsConfigured(t *testing.T) {
 	}
 
 	_, session := do(t, c, http.MethodGet, srv.URL+"/api/session", nil)
-	if session["initialized"] != false {
+	if session["initialized"] != false || session["setUp"] != false {
 		t.Errorf("session: %v", session)
+	}
+}
+
+// setUp is what keeps the setup page, which writes over whatever is stored, to
+// the one site that has nothing stored.
+func TestSessionReportsWhetherSetupHasRun(t *testing.T) {
+	stale := liveProbe()
+	stale.Maps["swiss/site-profile"] = map[string]string{
+		"profile.yaml": profileYAML + "createNamespace: true\n",
+	}
+	for name, tc := range map[string]struct {
+		probe              cluster.Probe
+		initialized, setUp bool
+	}{
+		"working profile": {liveProbe(), true, true},
+		// Stored and set up, just not parseable by this version: fixed on the
+		// profile page, never replaced from the default.
+		"profile that does not parse": {stale, false, true},
+		// Nothing says it is missing, so nothing may offer to replace it.
+		"profile that cannot be read": {brokenProfile{liveProbe()}, false, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, body := get(t, testServer(t, tc.probe), "/api/session")
+			if body["initialized"] != tc.initialized || body["setUp"] != tc.setUp {
+				t.Errorf("want initialized=%v setUp=%v: %v", tc.initialized, tc.setUp, body)
+			}
+		})
 	}
 }
 
@@ -321,5 +354,26 @@ func TestNoProxyKeyTrustsNoProxy(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("empty bearer with no proxy key: %d, want 401", resp.StatusCode)
+	}
+}
+
+// The fake probe answers a missing ConfigMap with no data; a cluster answers
+// NotFound, and a file-backed profile with ErrNotExist. All three are missing,
+// and nothing else is.
+func TestProfileMissing(t *testing.T) {
+	cm := schema.GroupResource{Resource: "configmaps"}
+	for err, want := range map[error]bool{
+		fmt.Errorf("site profile swiss/site-profile: %w", apierrors.NewNotFound(cm, "site-profile")):                          true,
+		fmt.Errorf("site profile: %w", &fs.PathError{Op: "open", Path: "/etc/swiss/profile.yaml", Err: fs.ErrNotExist}):       true,
+		fmt.Errorf("site profile swiss/site-profile has no key %q: %w", "profile.yaml", errNoProfile):                         true,
+		fmt.Errorf("site profile swiss/site-profile: %w", apierrors.NewForbidden(cm, "site-profile", errors.New("no grant"))): false,
+		errors.New("context deadline exceeded"): false,
+	} {
+		if got := profileMissing(err); got != want {
+			t.Errorf("profileMissing(%v) = %v, want %v", err, got, want)
+		}
+	}
+	if profileMissing(nil) {
+		t.Error("a profile that was read is not missing")
 	}
 }

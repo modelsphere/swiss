@@ -87,6 +87,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.setSession(w, r, token, exp)
+	initialized, setUp := s.siteState(ctx)
 	// The same shape /api/session answers with, authenticated included: the app
 	// stores this reply as the session rather than re-asking, so a reply that
 	// leaves the field out reads as logged out and bounces straight back to the
@@ -95,7 +96,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		"authenticated": true,
 		"user":          creds.Username,
 		"expiresAt":     exp.UTC().Format(time.RFC3339),
-		"initialized":   s.initialized(ctx),
+		"initialized":   initialized,
+		"setUp":         setUp,
 		// Returned in the body as well as set as a cookie, so curl and any
 		// future CLI can hold one without a cookie jar.
 		"token": token,
@@ -126,8 +128,9 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	if s.authDisabled() {
+		initialized, setUp := s.siteState(ctx)
 		writeJSON(w, http.StatusOK, map[string]any{
-			"authenticated": true, "authDisabled": true, "initialized": s.initialized(ctx),
+			"authenticated": true, "authDisabled": true, "initialized": initialized, "setUp": setUp,
 		})
 		return
 	}
@@ -136,10 +139,12 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"authenticated": false})
 		return
 	}
+	initialized, setUp := s.siteState(ctx)
 	reply := map[string]any{
 		"authenticated": true,
 		"user":          claims.Sub,
-		"initialized":   s.initialized(ctx),
+		"initialized":   initialized,
+		"setUp":         setUp,
 	}
 	if claims.Exp > 0 {
 		reply["expiresAt"] = time.Unix(claims.Exp, 0).UTC().Format(time.RFC3339)
@@ -254,12 +259,18 @@ func (s *Server) cookieSecure(r *http.Request) bool {
 	return r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
 }
 
-// initialized reports whether the site profile exists and parses. A fresh
-// install has none -- the chart no longer writes one -- so this is what sends
-// the first login to the setup page.
-func (s *Server) initialized(ctx context.Context) bool {
+// siteState is what the session says about the site profile.
+//
+// initialized: it is stored and parses, so swissd can compose against it.
+//
+// setUp: setup has run -- a profile is stored, parsing or not. A fresh install
+// has none, the chart no longer writes one, and that is the one state the setup
+// page is for: it writes over whatever is there. So only a profile swissd found
+// missing is not set up. A read that failed any other way counts as set up,
+// because a blip on the API server must not offer to replace the profile.
+func (s *Server) siteState(ctx context.Context) (initialized, setUp bool) {
 	_, err := s.Profile(ctx)
-	return err == nil
+	return err == nil, !profileMissing(err)
 }
 
 func clientIP(r *http.Request) string {
