@@ -1,5 +1,8 @@
 {{- if .Values.rbac.create }}
 {{- $fullName := include "swiss.fullname" . }}
+{{- /* Cluster-scoped names carry the release namespace: two installs under one
+       release name, in two namespaces, must not claim the same ClusterRole. */}}
+{{- $clusterName := printf "%s-%s" $fullName .Release.Namespace }}
 {{- $sa := include "swiss.serviceAccountName" . }}
 {{- $profileNS := (include "swiss.effectiveProfileRef" . | splitList "/" | first) }}
 # ---------------------------------------------------------------------------
@@ -18,7 +21,7 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ $fullName }}-nodes
+  name: {{ $clusterName }}-nodes
   labels:
     {{- include "swiss.labels" . | nindent 4 }}
 rules:
@@ -34,13 +37,13 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ $fullName }}-nodes
+  name: {{ $clusterName }}-nodes
   labels:
     {{- include "swiss.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ $fullName }}-nodes
+  name: {{ $clusterName }}-nodes
 subjects:
   - kind: ServiceAccount
     name: {{ $sa }}
@@ -53,7 +56,7 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ $fullName }}-namespaces
+  name: {{ $clusterName }}-namespaces
   labels:
     {{- include "swiss.labels" . | nindent 4 }}
 rules:
@@ -64,13 +67,13 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ $fullName }}-namespaces
+  name: {{ $clusterName }}-namespaces
   labels:
     {{- include "swiss.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ $fullName }}-namespaces
+  name: {{ $clusterName }}-namespaces
 subjects:
   - kind: ServiceAccount
     name: {{ $sa }}
@@ -183,7 +186,7 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ $fullName }}-releases
+  name: {{ $clusterName }}-releases
   labels:
     {{- include "swiss.labels" . | nindent 4 }}
 rules:
@@ -200,13 +203,13 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ $fullName }}-releases
+  name: {{ $clusterName }}-releases
   labels:
     {{- include "swiss.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ $fullName }}-releases
+  name: {{ $clusterName }}-releases
 subjects:
   - kind: ServiceAccount
     name: {{ $sa }}

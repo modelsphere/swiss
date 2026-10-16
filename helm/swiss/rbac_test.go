@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func chartDir(t *testing.T) string {
@@ -19,7 +21,12 @@ func chartDir(t *testing.T) string {
 
 func helmTemplate(t *testing.T, sets ...string) (string, error) {
 	t.Helper()
-	args := []string{"template", "swiss", chartDir(t), "--set", "rbac.namespaces={models}"}
+	return helmTemplateIn(t, "default", append([]string{"rbac.namespaces={models}"}, sets...)...)
+}
+
+func helmTemplateIn(t *testing.T, namespace string, sets ...string) (string, error) {
+	t.Helper()
+	args := []string{"template", "swiss", chartDir(t), "--namespace", namespace}
 	for _, s := range sets {
 		args = append(args, "--set", s)
 	}
@@ -75,4 +82,56 @@ func TestChartGrantsLLMService(t *testing.T) {
 	if !strings.Contains(cluster, "kind: ClusterRole") || !strings.Contains(cluster, "llmservices") || !strings.Contains(cluster, "leaderworkersets") {
 		t.Fatal("cluster scope should carry both grants on the ClusterRole")
 	}
+}
+
+// Two installs under one release name, each in its own namespace and managing
+// only that namespace, must not render an object the other also owns.
+func TestChartInstallsSideBySide(t *testing.T) {
+	if _, err := exec.LookPath("helm"); err != nil {
+		t.Skip("helm not on PATH")
+	}
+	owned := map[string]string{}
+	for _, ns := range []string{"team-a", "team-b"} {
+		out, err := helmTemplateIn(t, ns, "rbac.namespaces={"+ns+"}")
+		if err != nil {
+			t.Fatal(out)
+		}
+		for _, id := range objectIDs(t, out, ns) {
+			if other, ok := owned[id]; ok {
+				t.Errorf("%s is rendered by both the %s and the %s install", id, other, ns)
+			}
+			owned[id] = ns
+		}
+	}
+}
+
+// objectIDs is kind/namespace/name per rendered object; cluster-scoped kinds
+// have no namespace, and a namespaced one without its own is the release's.
+func objectIDs(t *testing.T, rendered, releaseNS string) []string {
+	t.Helper()
+	var ids []string
+	for _, doc := range strings.Split(rendered, "\n---") {
+		var obj struct {
+			Kind     string `yaml:"kind"`
+			Metadata struct {
+				Name      string `yaml:"name"`
+				Namespace string `yaml:"namespace"`
+			} `yaml:"metadata"`
+		}
+		if err := yaml.Unmarshal([]byte(doc), &obj); err != nil {
+			t.Fatal(err)
+		}
+		if obj.Kind == "" {
+			continue
+		}
+		ns := obj.Metadata.Namespace
+		switch {
+		case strings.HasPrefix(obj.Kind, "Cluster"):
+			ns = ""
+		case ns == "":
+			ns = releaseNS
+		}
+		ids = append(ids, obj.Kind+"/"+ns+"/"+obj.Metadata.Name)
+	}
+	return ids
 }
