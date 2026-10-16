@@ -1,0 +1,1845 @@
+openapi: 3.1.0
+info:
+  title: swissd API
+  version: 0.7.0
+  summary: Deploy and manage LLM inference releases from a model catalog.
+  description: |
+    swissd composes a model catalog entry with the cluster's site profile into a
+    plan, dry-runs it against the live release, and installs it with helm or as
+    an LLMService that llm-operator reconciles.
+
+    ## Workflow
+
+    ```
+    GET /api/catalog -> POST /api/plans -> POST /api/diff -> POST /api/install | /api/apply -> GET .../status
+                                               ^                                    |
+                                               +------- re-diff <-------------------+   (409: live revision moved)
+    ```
+
+    | Step | Endpoint | Writes |
+    |---|---|---|
+    | browse | `GET /api/catalog`, `GET /api/catalog/{model}` | nothing |
+    | compose | `POST /api/plans` | the plan, to swissd's database, keyed by `hash` |
+    | dry run | `POST /api/diff` | nothing; returns the live `revision` to assert |
+    | install | `POST /api/install` | the release (helm or LLMService) |
+    | upgrade | `POST /api/apply` with `expectRevision` | the release |
+    | roll back | `POST /api/releases/{ns}/{release}/rollback` | the release |
+
+    ## Authentication
+
+    Every `/api/` path except `login`, `logout` and `session` needs one of:
+
+    | Credential | How |
+    |---|---|
+    | session cookie | `swiss_session`, set by `POST /api/login` (HttpOnly, SameSite=Strict) |
+    | bearer token | `Authorization: Bearer <token>`, the `token` from `POST /api/login` |
+    | front-proxy key | `Authorization: Bearer <proxyKey>` plus `X-Remote-User: <name>` (the swiss chart's `auth.proxyKey`) |
+
+    Sessions slide: a request in the second half of a token's life gets a fresh
+    cookie. Changing the password invalidates every outstanding token. With
+    `auth.disabled` nothing is checked.
+
+    ## Errors
+
+    Every error is JSON `{"error": "<message>"}` with the status below.
+
+    | Status | Meaning |
+    |---|---|
+    | 400 | the request is wrong: bad JSON, unknown catalog, invalid field |
+    | 401 | not logged in |
+    | 403 | read-only swissd (`config.allowDeploy` off), or swissd cannot write |
+    | 404 | no such model, variant, plan, release or revision |
+    | 409 | the cluster moved or refuses: release exists / is missing / is pending, `expectRevision` stale, install method mismatch |
+    | 412 | the release has no reachable entrypoint (probe, chat) |
+    | 502 | a dependency failed: the Kubernetes API, the catalog, the chart registry, the SLO server |
+    | 503 | not available on this swissd: no database, SLO server not ready |
+
+    ## Read-only mode
+
+    With `config.allowDeploy` off, `POST /api/plans`, `/diff`, `/apply`,
+    `/install`, rollback, revision diff, uninstall, and `PUT`/`DELETE` on `slo`
+    answer 403. Everything else works.
+
+    ## Install methods
+
+    A release is stored one of two ways, chosen at install and never changed:
+
+    | `applyWith` | Stored as | Applied by |
+    |---|---|---|
+    | `helm` | the plan in ConfigMap `swiss-plan-<release>` beside the helm release | swissd running helmfile |
+    | `llmsvc` | an `LLMService` (`serving.modelsphere.dev`) | llm-operator |
+
+    `llmsvc` needs the LLMService CRD and a plan composed from a schema v2
+    catalog. `GET /api/cluster` reports whether it is available.
+
+    ## Catalogs
+
+    Endpoints that read a catalog take `?catalog=<name>`. Omitted, it is the
+    only catalog, else the one the site profile marks default; with several and
+    no default it is a 400. Catalog schema v1 is legacy and read-only; v2 pins
+    each variant at its own version.
+
+    This document is checked against swissd's routes by
+    `internal/server/openapi_test.go`.
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+servers:
+  - url: /
+    description: the swissd serving this document
+security:
+  - session: []
+  - bearer: []
+tags:
+  - name: health
+    description: Probes for the kubelet; no login.
+  - name: auth
+    description: Login and the session the web app reads first.
+  - name: cluster
+    description: The cluster this swissd serves, its nodes and its sibling sites.
+  - name: profile
+    description: The site profile, which swissd owns and the web edits.
+  - name: catalog
+    description: The model catalogs this site deploys from, schema v1 or v2.
+  - name: deploy
+    description: Compose, dry-run and apply. 403 when deploys are off.
+  - name: releases
+    description: Releases swiss manages, by namespace and name.
+  - name: slo
+    description: The release's LLMSLORequirement, through the SLO server.
+  - name: runs
+    description: The operation log in swissd's database.
+
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      summary: Liveness
+      operationId: healthz
+      security: []
+      responses:
+        "200":
+          description: The process is up.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, version]
+                properties:
+                  status: { type: string, const: ok }
+                  version: { type: string, description: "swissd's build version." }
+
+  /readyz:
+    get:
+      tags: [health]
+      summary: Readiness
+      description: Gates only on reaching the Kubernetes API. The catalog and profile are reported, never gating.
+      operationId: readyz
+      security: []
+      responses:
+        "200":
+          description: Ready.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Readiness" }
+        "503":
+          description: The Kubernetes API is unreachable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Readiness" }
+
+  /api/login:
+    post:
+      tags: [auth]
+      summary: Log in
+      description: |
+        Sets the `swiss_session` cookie and returns the same token in the body
+        for callers without a cookie jar. Ten failures a minute per client IP
+        answer 429; each failure costs one second.
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string, format: password }
+      responses:
+        "200":
+          description: Logged in.
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: "`swiss_session=<token>; HttpOnly; SameSite=Strict`"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Session"
+                  - type: object
+                    required: [token]
+                    properties:
+                      token: { type: string, description: "Use as `Authorization: Bearer <token>`." }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429":
+          description: Too many failed logins from this client; wait a minute.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/logout:
+    post:
+      tags: [auth]
+      summary: Log out
+      description: Clears the cookie. The token stays valid until it expires; change the password to revoke every token.
+      operationId: logout
+      security: []
+      responses:
+        "200":
+          description: Cookie cleared.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, const: true }
+
+  /api/session:
+    get:
+      tags: [auth]
+      summary: Current session
+      description: Always 200. `authenticated` false is the normal first answer.
+      operationId: session
+      security: []
+      responses:
+        "200":
+          description: "The session, or `{\"authenticated\": false}`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+
+  /api/cluster:
+    get:
+      tags: [cluster]
+      summary: Cluster summary
+      description: What the nav header and deploy forms read; problems come back as `warnings`, not as errors.
+      operationId: getCluster
+      responses:
+        "200":
+          description: The cluster.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClusterInfo" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/sites:
+    get:
+      tags: [cluster]
+      summary: Sibling sites
+      description: The other swissd instances the site profile lists. Browser destinations; swissd never calls them.
+      operationId: listSites
+      responses:
+        "200":
+          description: The sites.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [self]
+                properties:
+                  self: { type: string, description: "This site's profile name; empty before setup." }
+                  sites:
+                    type: [array, "null"]
+                    items: { $ref: "#/components/schemas/Site" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/nodes:
+    get:
+      tags: [cluster]
+      summary: GPU inventory
+      description: |
+        Each node's GPUs and the pods holding them. Usage needs a cluster-wide
+        pod list (chart `rbac.nodeGPUUsage`); without it `gpusUsed`, `gpusFree`
+        and `gpuPods` are absent and `usageError` says why.
+      operationId: listNodes
+      responses:
+        "200":
+          description: The nodes.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [cluster, nodes, summary]
+                properties:
+                  cluster: { type: string }
+                  nodes:
+                    type: array
+                    items: { $ref: "#/components/schemas/NodeView" }
+                  summary:
+                    type: object
+                    required: [nodes, gpus, gpusUsed]
+                    properties:
+                      nodes: { type: integer }
+                      gpus: { type: integer, description: "Allocatable GPUs across nodes." }
+                      gpusUsed: { type: integer }
+                  usageError: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
+  /api/profile:
+    get:
+      tags: [profile]
+      summary: Read the site profile
+      description: |
+        The stored text and the parsed profile. A profile that does not parse
+        comes back with `error` and no `profile`, not as an error status.
+      operationId: getProfile
+      responses:
+        "200":
+          description: The profile.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [source, yaml]
+                properties:
+                  source: { type: string, description: "Where it is read from: `namespace/configmap` or a file path." }
+                  yaml: { type: string, description: "The stored document, comments included." }
+                  profile: { $ref: "#/components/schemas/SiteProfile" }
+                  cluster: { type: string, description: "The profile's name." }
+                  error: { type: string, description: "Why the document does not parse." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+    put:
+      tags: [profile]
+      summary: Write the site profile
+      description: |
+        Send `yaml` (stored byte for byte) or `profile` (rendered by swissd), not
+        both. Parsed before it is stored; a profile that does not parse is a 400.
+        Works whether or not deploys are on.
+      operationId: saveProfile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                yaml: { type: string }
+                profile: { $ref: "#/components/schemas/SiteProfile" }
+      responses:
+        "200":
+          description: Saved.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [source, profile, yaml]
+                properties:
+                  source: { type: string }
+                  profile: { $ref: "#/components/schemas/SiteProfile" }
+                  yaml: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
+  /api/profile/template:
+    get:
+      tags: [profile]
+      summary: Default profile
+      description: What a site with no profile starts from.
+      operationId: getProfileTemplate
+      responses:
+        "200":
+          description: The template.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [source, profile, yaml]
+                properties:
+                  source: { type: string }
+                  profile: { $ref: "#/components/schemas/SiteProfile" }
+                  yaml: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/catalog:
+    get:
+      tags: [catalog]
+      summary: List models
+      description: The index only, one fetch whatever the size. `models` has the same shape for either schema.
+      operationId: getCatalog
+      parameters:
+        - $ref: "#/components/parameters/catalog"
+      responses:
+        "200":
+          description: The catalog.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [name, ref, source, schema, models]
+                properties:
+                  name: { type: string, description: "The site's name for this catalog." }
+                  ref: { type: string, description: "The commit the index was read at." }
+                  source: { type: string, description: "The location a plan records." }
+                  schema: { $ref: "#/components/schemas/CatalogSchema" }
+                  site: { type: string, description: "Where the catalog's own site is published; empty when none." }
+                  models:
+                    type: array
+                    items: { $ref: "#/components/schemas/CatalogModel" }
+                  index:
+                    type: object
+                    description: Legacy, v1 only. The raw index.json.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
+  /api/catalog/{model}:
+    get:
+      tags: [catalog]
+      summary: One model, one variant resolved
+      description: The model as listed, and one variant resolved with its values and image, at `version` (else its current one).
+      operationId: getCatalogModel
+      parameters:
+        - $ref: "#/components/parameters/model"
+        - $ref: "#/components/parameters/catalog"
+        - $ref: "#/components/parameters/variant"
+        - $ref: "#/components/parameters/version"
+      responses:
+        "200":
+          description: The model.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ref, schema, model, variant]
+                properties:
+                  ref: { type: string }
+                  schema: { $ref: "#/components/schemas/CatalogSchema" }
+                  model: { $ref: "#/components/schemas/CatalogModel" }
+                  variant: { $ref: "#/components/schemas/ResolvedVariant" }
+                  entry:
+                    type: object
+                    description: Legacy, v1 only. That version's entry file, every variant of it.
+                  pathTemplate: { type: string, description: "The site profile's model path template." }
+                  localPath: { type: string, description: "Where this model's weights default to on this site." }
+                  imageRepository:
+                    type: object
+                    description: Image repository per variant id, after the site's mirror rewrite.
+                    additionalProperties: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
+  /api/catalog/{model}/history:
+    get:
+      tags: [catalog]
+      summary: A variant's published versions
+      description: Newest first. Each `version` can be passed to a plan. On v1 a version is the model's.
+      operationId: getCatalogHistory
+      parameters:
+        - $ref: "#/components/parameters/model"
+        - $ref: "#/components/parameters/catalog"
+        - $ref: "#/components/parameters/variant"
+      responses:
+        "200":
+          description: The history.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ref, schema, model, variant, revisions]
+                properties:
+                  ref: { type: string }
+                  schema: { $ref: "#/components/schemas/CatalogSchema" }
+                  model: { type: string }
+                  variant: { type: string, description: "The variant listed; the default when none was named." }
+                  revisions:
+                    type: array
+                    items: { $ref: "#/components/schemas/CatalogRevision" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
+  /api/catalog/{model}/chart-versions:
+    get:
+      tags: [catalog]
+      summary: Chart versions a variant allows
+      description: Newest first. A pinned chart version is returned as is, with no registry read.
+      operationId: getChartVersions
+      parameters:
+        - $ref: "#/components/parameters/model"
+        - $ref: "#/components/parameters/catalog"
+        - $ref: "#/components/parameters/variant"
+        - $ref: "#/components/parameters/version"
+      responses:
+        "200":
+          description: The versions.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [chart, range, variant, versions]
+                properties:
+                  chart: { type: string }
+                  range: { type: string, description: "The catalog's `chart.version`: exact or a semver range." }
+                  variant: { type: string }
+                  versions:
+                    type: array
+                    items: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /api/plans:
+    post:
+      tags: [deploy]
+      summary: Compose a plan
+      description: |
+        Composes catalog x site profile x request into a plan and stores it,
+        keyed by `hash`, for diff and apply. Nothing touches the cluster.
+
+        With `fromRelease` it recomposes that release: its stored plan supplies
+        the form layer, model and variant, and only what the request names moves.
+      operationId: composePlan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PlanRequest" }
+      responses:
+        "200":
+          description: The plan.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Plan" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
+  /api/diff:
+    post:
+      tags: [deploy]
+      summary: Dry run
+      description: |
+        `helmfile diff` of a plan against the live release. Send a stored
+        `planHash`, or a `PlanRequest` to compose and diff in one call.
+        Pass the returned `revision` as `expectRevision` to apply.
+      operationId: diff
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - type: object
+                  required: [planHash]
+                  properties:
+                    planHash: { type: string }
+                - $ref: "#/components/schemas/PlanRequest"
+      responses:
+        "200":
+          description: The diff.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiffResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
+  /api/install:
+    post:
+      tags: [deploy]
+      summary: Install a new release
+      description: |
+        Creates the release a stored plan describes, with the method `applyWith`
+        names (else the site profile's). 409 when the release already exists.
+      operationId: install
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ApplyRequest" }
+      responses:
+        "200":
+          description: Submitted. Not waiting for pods.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApplyResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/ServerError" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /api/apply:
+    post:
+      tags: [deploy]
+      summary: Upgrade a release
+      description: |
+        Applies a stored plan to an existing release, on the backend that owns
+        it. `expectRevision` is the optimistic lock from the dry run; 409 when
+        the release moved. Naming the other `applyWith` is a 409.
+      operationId: apply
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ApplyRequest" }
+      responses:
+        "200":
+          description: Submitted. Not waiting for pods.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApplyResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/ServerError" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /api/deployments:
+    get:
+      tags: [releases]
+      summary: Releases swiss manages
+      description: |
+        Plan ConfigMaps plus LLMServices, sorted by namespace and name. Only the
+        rows on the page are resolved, so `catalogBehind` counts this page only.
+      operationId: listDeployments
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: perPage
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+      responses:
+        "200":
+          description: One page.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [cluster, catalogRef, page, perPage, deployments, summary]
+                properties:
+                  cluster: { type: string }
+                  catalogRef: { type: string, description: "The catalog's ref when there is exactly one catalog; else empty." }
+                  page: { type: integer }
+                  perPage: { type: integer }
+                  deployments:
+                    type: array
+                    items: { $ref: "#/components/schemas/Deployment" }
+                  summary:
+                    type: object
+                    required: [total, catalogBehind]
+                    properties:
+                      total: { type: integer, description: "Every managed release." }
+                      catalogBehind: { type: integer, description: "Rows on this page whose catalog moved since deploy." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
+  /api/releases/{namespace}/{release}:
+    delete:
+      tags: [releases]
+      summary: Uninstall
+      description: Removes the release first, then its plan record, so a failure never leaves a live release untracked.
+      operationId: uninstall
+      parameters:
+        - $ref: "#/components/parameters/namespace"
+        - $ref: "#/components/parameters/release"
+      responses:
+        "200":
+          description: Uninstalled.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [release, namespace, output]
+                properties:
+                  release: { type: string }
+                  namespace: { type: string }
+                  output: { type: string }
+                  planError: { type: string, description: "The plan clean-up failure, reported because the release is already gone." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/ServerError" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
+  /api/releases/{namespace}/{release}/plan:
+    get:
+      tags: [releases]
+      summary: The plan running now
+      operationId: getReleasePlan
+      parameters:
+        - $ref: "#/components/parameters/namespace"
+        - $ref: "#/components/parameters/release"
+      responses:
+        "200":
+          description: The plan.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Plan" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/releases/{namespace}/{release}/status:
+    get:
+      tags: [releases]
+      summary: Release status
+      description: Helm or operator state, pods, route, and catalog drift. `exists` false is a 200.
+      operationId: getReleaseStatus
+      parameters:
+        - $ref: "#/components/parameters/namespace"
+        - $ref: "#/components/parameters/release"
+      responses:
+        "200":
+          description: The status.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReleaseStatus" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
+  /api/releases/{namespace}/{release}/objects:
+    get:
+      tags: [releases]
+      summary: Custom resources the release rendered
+      description: Each ModelRoute, LLMScaler and LLMSLORequirement as last observed. Per-object failures are in the row.
+      operationId: getReleaseObjects
+      parameters:
+        - $ref: "#/components/parameters/namespace"
+        - $ref: "#/components/parameters/release"
+      responses:
+        "200":
+          description: The objects; empty when the release does not exist.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [objects]
+                properties:
+                  objects:
+                    type: array
+                    items: { $ref: "#/components/schemas/ObjectResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
+  /api/releases/{namespace}/{release}/revisions:
+    get:
+      tags: [releases]
+      summary: Revisions
+      description: What the release can be rolled back to, read from the cluster rather than the database.
+      operationId: listRevisions
+      parameters:
+        - $ref: "#/components/parameters/namespace"
+        - $ref: "#/components/parameters/release"
+      responses:
+        "200":
+          description: The revisions.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [release, namespace, revisions]
+                properties:
+                  release: { type: string }
+                  namespace: { type: string }
+                  revisions:
+                    type: [array, "null"]
+                    items: { $ref: "#/components/schemas/Revision" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
+  /api/releases/{namespace}/{release}/revisions/{revision}/values:
+    get:
+      tags: [releases]
+      summary: Helm values at a revision
+      description: "`helm get values`, all and user-supplied, as YAML text."
+      operationId: getRevisionValues
+      parameters:
+        - $ref: "#/components/parameters/namespace"
+        - $ref: "#/components/parameters/release"
+        - $ref: "#/components/parameters/revision"
+      responses:
+        "200":
+          description: The values.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [namespace, release, revision, all, supplied]
+                properties:
+                  namespace: { type: string }
+                  release: { type: string }
+                  revision: { type: integer }
+                  all: { type: string, description: "Computed values, YAML." }
+                  supplied: { type: string, description: "User-supplied values, YAML." }
+                  suppliedError: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
+  /api/releases/{namespace}/{release}/revisions/{revision}/plan:
+    get:
+      tags: [releases]
+      summary: The plan a revision ran
+      operationId: getRevisionPlan
+      parameters:
+        - $ref: "#/components/parameters/namespace"
+        - $ref: "#/components/parameters/release"
+        - $ref: "#/components/parameters/revision"
+      responses:
+        "200":
+          description: The plan.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Plan" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/releases/{namespace}/{release}/revisions/{revision}/diff:
+    post:
+      tags: [releases]
+      summary: Dry-run a rollback
+      description: Diffs the revision's archived plan against the live release. Pass `revision` as the rollback's `expectRevision`.
+      operationId: diffRevision
+      parameters:
+        - $ref: "#/components/parameters/namespace"
+        - $ref: "#/components/parameters/release"
+        - $ref: "#/components/parameters/revision"
+      responses:
+        "200":
+          description: The diff.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DiffResult"
+                  - type: object
+                    required: [toRevision]
+                    properties:
+                      toRevision: { type: integer }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/ServerError" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
+  /api/releases/{namespace}/{release}/rollback:
+    post:
+      tags: [releases]
+      summary: Roll back
+      description: |
+        Re-applies a revision's archived plan exactly as it ran, on the release's
+        own backend. `expectRevision` is required.
+      operationId: rollback
+      parameters:
+        - $ref: "#/components/parameters/namespace"
+        - $ref: "#/components/parameters/release"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [toRevision, expectRevision]
+              properties:
+                toRevision: { type: integer, minimum: 1 }
+                expectRevision: { type: integer, minimum: 1, description: "The live revision you were looking at." }
+                note: { type: string }
+      responses:
+        "200":
+          description: Submitted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApplyResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/ServerError" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
+  /api/releases/{namespace}/{release}/probe:
+    post:
+      tags: [releases]
+      summary: Probe the entrypoint
+      description: |
+        `GET /v1/models` through the site's gateway. Changes nothing; allowed
+        when deploys are off. Upstream failures are a 200 with `ok` false.
+      operationId: probe
+      parameters:
+        - $ref: "#/components/parameters/namespace"
+        - $ref: "#/components/parameters/release"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EntrypointAuth" }
+      responses:
+        "200":
+          description: The probe result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProbeResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "412": { $ref: "#/components/responses/PreconditionFailed" }
+
+  /api/releases/{namespace}/{release}/chat:
+    post:
+      tags: [releases]
+      summary: Send one inference request
+      description: |
+        A real generation through the gateway, to prove the model answers.
+        Costs a few tokens; allowed when deploys are off. Upstream failures are
+        a 200 with `ok` false.
+      operationId: chat
+      parameters:
+        - $ref: "#/components/parameters/namespace"
+        - $ref: "#/components/parameters/release"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChatRequest" }
+      responses:
+        "200":
+          description: The reply.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChatResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "412": { $ref: "#/components/responses/PreconditionFailed" }
+
+  /api/releases/{namespace}/{release}/slo:
+    parameters:
+      - $ref: "#/components/parameters/namespace"
+      - $ref: "#/components/parameters/release"
+    get:
+      tags: [slo]
+      summary: Read the SLO requirement
+      description: The SLO server's view of the release's route. `found` false when it has none.
+      operationId: getSLO
+      responses:
+        "200":
+          description: The requirement.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SLOConfig" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/SLOToken" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+    put:
+      tags: [slo]
+      summary: Edit the SLO requirement
+      description: Merges; fields left out keep their stored value. Other SLO server statuses are passed through.
+      operationId: saveSLO
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SLOEdit" }
+      responses:
+        "200":
+          description: The requirement as stored.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SLOConfig" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/SLOToken" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+    delete:
+      tags: [slo]
+      summary: Reset the SLO requirement
+      description: Clears the edits; returns what is left, as GET does.
+      operationId: resetSLO
+      responses:
+        "200":
+          description: The requirement after reset.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SLOConfig" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/SLOToken" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /api/runs:
+    get:
+      tags: [runs]
+      summary: Operation log
+      description: Newest first. A swissd with no database answers an empty list with `hasStore` false.
+      operationId: listRuns
+      parameters:
+        - name: namespace
+          in: query
+          schema: { type: string }
+        - name: release
+          in: query
+          schema: { type: string }
+        - name: action
+          in: query
+          schema: { type: string, enum: [install, apply, rollback, uninstall] }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+      responses:
+        "200":
+          description: The runs.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [runs, hasStore]
+                properties:
+                  runs:
+                    type: array
+                    items: { $ref: "#/components/schemas/Run" }
+                  hasStore: { type: boolean }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/runs/{id}:
+    get:
+      tags: [runs]
+      summary: One run, with its output
+      operationId: getRun
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: The run.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Run" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+components:
+  securitySchemes:
+    session:
+      type: apiKey
+      in: cookie
+      name: swiss_session
+    bearer:
+      type: http
+      scheme: bearer
+      description: "A login `token`, or the front-proxy key with `X-Remote-User`."
+
+  parameters:
+    catalog:
+      name: catalog
+      in: query
+      description: The site's catalog name. Optional with one catalog or a default.
+      schema: { type: string }
+    model:
+      name: model
+      in: path
+      required: true
+      description: The catalog's model id.
+      schema: { type: string }
+    variant:
+      name: variant
+      in: query
+      description: Variant id; the model's default when omitted.
+      schema: { type: string }
+    version:
+      name: version
+      in: query
+      description: Published version; the variant's current one when omitted. On v1, the model's version.
+      schema: { type: string }
+    namespace:
+      name: namespace
+      in: path
+      required: true
+      schema: { type: string }
+    release:
+      name: release
+      in: path
+      required: true
+      schema: { type: string }
+    revision:
+      name: revision
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+
+  responses:
+    BadRequest:
+      description: The request is wrong.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthorized:
+      description: Not logged in.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: not logged in }
+    Forbidden:
+      description: This swissd is read-only, or cannot write the cluster.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: "this swissd is read-only: set server.allowDeploy and grant rbac.allowDeploy" }
+    NotFound:
+      description: No such model, variant, plan, release or revision.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Conflict:
+      description: |
+        The cluster refuses: the release already exists (install) or does not
+        (apply), is pending or applying, moved past `expectRevision`, is an
+        external LLMService, is installed with the other method, or `llmsvc` is
+        unavailable here.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          examples:
+            moved: { value: { error: "release moved from revision 9 to 1 since you looked; re-check it before applying" } }
+            exists: { value: { error: "release models/qwen already exists at revision 2: use `swiss apply` to upgrade it" } }
+            method: { value: { error: "release models/qwen is installed with llmsvc, not helm: an existing install keeps its method" } }
+    PreconditionFailed:
+      description: |
+        No entrypoint to call: the site profile names no `route.nginxService`,
+        the release publishes no route, or the `route.auth` Secret is unreadable.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    SLOToken:
+      description: The site profile's `scaler.sloTokenSecret` is missing or unreadable.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    ServerError:
+      description: The operation failed; the message carries helm's or helmfile's output.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    BadGateway:
+      description: A dependency failed (Kubernetes API, catalog, chart registry, SLO server).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unavailable:
+      description: Not available on this swissd (no database, profile unreadable, SLO server not ready).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+
+    Readiness:
+      type: object
+      required: [ready, checks]
+      properties:
+        ready: { type: boolean }
+        checks:
+          type: object
+          properties:
+            cluster: { type: string, description: "`ok` or the error." }
+            catalog: { type: string, description: "Cached catalog refs, or `not fetched`." }
+            profile: { type: string, description: "Cached profile name, or `not fetched`." }
+
+    Session:
+      type: object
+      required: [authenticated]
+      properties:
+        authenticated: { type: boolean }
+        authDisabled: { type: boolean, description: "True when swissd runs with no login." }
+        user: { type: string }
+        expiresAt: { type: string, format: date-time }
+        initialized: { type: boolean, description: "A site profile exists and parses; false sends the web to setup." }
+
+    ApplyWith:
+      type: string
+      enum: [helm, llmsvc]
+      description: "How a release is stored: `helm` (plan ConfigMap, swissd runs helmfile) or `llmsvc` (LLMService, llm-operator runs helm)."
+
+    CatalogSchema:
+      type: string
+      enum: [v1, v2]
+      description: v1 is legacy and read-only; v2 pins each variant at its own version.
+
+    ClusterInfo:
+      type: object
+      required: [name, profile, catalog, version, allowDeploy]
+      properties:
+        name: { type: string, description: "The site profile's name; empty before setup." }
+        profile: { type: string, description: "Where the profile is read from." }
+        profileName: { type: string }
+        priorityClassName: { type: string }
+        schedulerName: { type: string }
+        namespace: { type: string, description: "Where releases land unless a deploy names another." }
+        chartRepo: { type: string }
+        catalog: { type: string, description: "The default catalog's URL. Prefer `catalogs`." }
+        catalogFrom: { type: string, enum: [profile, config], description: "Which document lists the catalogs." }
+        catalogRef: { type: string }
+        catalogs:
+          type: array
+          items: { $ref: "#/components/schemas/CatalogInfo" }
+        version: { type: string, description: "swissd's version." }
+        allowDeploy: { type: boolean }
+        sites:
+          type: array
+          items: { $ref: "#/components/schemas/Site" }
+        warnings:
+          type: array
+          items: { type: string }
+        llmservice: { $ref: "#/components/schemas/LLMServiceInfo" }
+
+    CatalogInfo:
+      type: object
+      required: [name, url, source]
+      properties:
+        name: { type: string }
+        url: { type: string }
+        source: { type: string, description: "The location as a plan records it." }
+        ref: { type: string, description: "Empty when the catalog could not be read; a warning says why." }
+        schema: { $ref: "#/components/schemas/CatalogSchema" }
+        default: { type: boolean }
+
+    LLMServiceInfo:
+      type: object
+      required: [served, available, applyWith, newInstalls]
+      properties:
+        served: { type: boolean, description: "The LLMService CRD is served (discovery, not operator readiness)." }
+        available: { type: boolean, description: "An install may name `llmsvc`." }
+        applyWith: { $ref: "#/components/schemas/ApplyWith", description: "The site profile's default." }
+        newInstalls: { $ref: "#/components/schemas/ApplyWith", description: "What an install naming no method gets." }
+
+    Site:
+      type: object
+      required: [name, url]
+      properties:
+        name: { type: string }
+        url: { type: string, format: uri }
+
+    NodeView:
+      type: object
+      description: Node fields are PascalCase; the usage fields are camelCase.
+      properties:
+        Name: { type: string }
+        GPUProduct: { type: string }
+        GPUResource: { type: string, examples: [nvidia.com/gpu, huawei.com/Ascend910] }
+        GPUs: { type: integer, description: "Allocatable." }
+        Labels: { type: object, additionalProperties: { type: string } }
+        Taints: { type: [array, "null"], items: { type: string } }
+        Schedulable: { type: boolean }
+        Ready: { type: boolean }
+        Kubelet: { type: string }
+        InternalIP: { type: string }
+        ExternalIP: { type: string }
+        Conditions:
+          type: [array, "null"]
+          items:
+            type: object
+            properties:
+              Type: { type: string }
+              Status: { type: string, enum: ["True", "False", Unknown] }
+              Reason: { type: string }
+              Message: { type: string }
+        gpusUsed: { type: integer }
+        gpusFree: { type: integer }
+        gpuPods:
+          type: array
+          items:
+            type: object
+            required: [namespace, name, gpus]
+            properties:
+              namespace: { type: string }
+              name: { type: string }
+              gpus: { type: integer }
+              node: { type: string }
+
+    SiteProfile:
+      type: object
+      description: |
+        What makes a model work in this cluster. The authoritative reference is
+        the default template (`GET /api/profile/template`) and
+        `examples/site-prod.yaml`.
+      required: [name, model]
+      properties:
+        name: { type: string }
+        namespace: { type: string }
+        applyWith: { $ref: "#/components/schemas/ApplyWith", description: "The method an install naming none uses. Empty is helm." }
+        catalogs:
+          type: array
+          items: { $ref: "#/components/schemas/CatalogRepo" }
+        catalog: { type: string, deprecated: true, description: "One catalog URL; use `catalogs`." }
+        chartRepo: { type: string, examples: ["oci://ghcr.io/modelsphere/charts"] }
+        chartPath: { type: string, description: "Local charts directory; helm only." }
+        registry:
+          type: object
+          properties:
+            mirror: { type: string }
+        model:
+          type: object
+          required: [pathTemplate]
+          properties:
+            pathTemplate: { type: string }
+            overrides: { type: object, additionalProperties: { type: string } }
+        schedule:
+          type: object
+          properties:
+            priorityClassName: { type: string }
+            schedulerName: { type: string }
+        cache:
+          type: object
+          properties:
+            enabled: { type: boolean }
+            hostPath: { type: string }
+        scaler:
+          type: object
+          properties:
+            serverAddress: { type: string }
+            sloAddress: { type: string }
+            sloTokenSecret: { type: string }
+            sloTokenKey: { type: string }
+            serverHeaders: { type: object, additionalProperties: { type: string } }
+        route:
+          type: object
+          properties:
+            nginxConfigMap: { type: string }
+            nginxService: { type: string }
+            nginxSelector: { type: string }
+            monitorConfigMap: { type: string }
+            gateway: { type: string }
+            nginxPort: { type: integer }
+            auth:
+              type: object
+              properties:
+                header: { type: string }
+                prefix: { type: string }
+                secretRef: { type: string }
+                secretKey: { type: string }
+                headers: { type: object, additionalProperties: { type: string } }
+        nodes:
+          type: object
+          properties:
+            gpusPerNode: { type: integer }
+            gpuProductAliases:
+              type: object
+              description: "Product -> node selectors, each `key=value[,key=value...]`."
+              additionalProperties: { type: array, items: { type: string } }
+        sites:
+          type: array
+          items: { $ref: "#/components/schemas/Site" }
+        extra:
+          type: object
+          description: Values every release on this site gets, as the site layer.
+
+    CatalogRepo:
+      type: object
+      required: [name, url]
+      properties:
+        name: { type: string }
+        url: { type: string }
+        schemaVersion: { $ref: "#/components/schemas/CatalogSchema", description: "Unset is v1." }
+        default: { type: boolean }
+
+    Chart:
+      type: object
+      required: [name, version]
+      properties:
+        name: { type: string }
+        version: { type: string, description: "Exact, or a semver range resolved at compose." }
+
+    Requires:
+      type: object
+      required: [gpus]
+      properties:
+        gpus: { type: integer, description: "Per node." }
+        vendor: { type: string, examples: [nvidia, ascend] }
+        nodes: { type: integer }
+        topology: { type: string }
+        gpuProduct: { type: array, items: { type: string } }
+        minGpuMemoryGiB: { type: number }
+        rdma: { type: boolean }
+
+    ModelVariant:
+      type: object
+      required: [id, version, digest, engine, chart, requires]
+      properties:
+        id: { type: string }
+        version: { type: string, description: "This variant's current version (v1 - its entry's)." }
+        digest: { type: string }
+        engine: { type: string, examples: [vllm, sglang] }
+        default: { type: boolean }
+        description: { type: string }
+        link: { type: string }
+        chart: { $ref: "#/components/schemas/Chart" }
+        requires: { $ref: "#/components/schemas/Requires" }
+        servedName: { type: string }
+        deprecated: { description: "`true`, or the reason." , type: [boolean, string] }
+        replaces: { type: string }
+
+    CatalogModel:
+      type: object
+      required: [name, source, defaultVariant, variants]
+      properties:
+        name: { type: string }
+        displayName: { type: string }
+        description: { type: string }
+        family: { type: string }
+        tags: { type: array, items: { type: string } }
+        deprecated: { type: [boolean, string] }
+        source:
+          type: object
+          required: [hf]
+          properties:
+            hf: { type: string, description: "The Hugging Face repo; the model's identity across catalogs." }
+            revision: { type: string }
+            sizeGiB: { type: number }
+        defaultVariant: { type: string }
+        variants:
+          type: array
+          items: { $ref: "#/components/schemas/ModelVariant" }
+        tuning:
+          type: array
+          items:
+            type: object
+            required: [baseline, optimized]
+            properties:
+              baseline: { $ref: "#/components/schemas/VariantRef" }
+              optimized: { $ref: "#/components/schemas/VariantRef" }
+              uplift: { type: number }
+              workloads:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    name: { type: string }
+                    uplift: { type: number }
+              report: { type: string }
+
+    VariantRef:
+      type: object
+      required: [id]
+      properties:
+        id: { type: string }
+        version: { type: string }
+
+    ResolvedVariant:
+      type: object
+      description: A variant as a deploy composes it, at the version resolved.
+      required: [id, engine, chart, requires, version, digest, servedName]
+      properties:
+        id: { type: string }
+        description: { type: string }
+        link: { type: string }
+        default: { type: boolean }
+        engine: { type: string }
+        chart: { $ref: "#/components/schemas/Chart" }
+        image:
+          type: object
+          required: [repository, tag]
+          properties:
+            repository: { type: string }
+            tag: { type: string }
+            digest: { type: string }
+        requires: { $ref: "#/components/schemas/Requires" }
+        values: { type: object, description: "The catalog layer's chart values." }
+        version: { type: string }
+        digest: { type: string, description: "sha256 of the file this version pins." }
+        servedName: { type: string, description: "The model name the engine serves." }
+
+    CatalogRevision:
+      type: object
+      required: [version, digest]
+      properties:
+        version: { type: string }
+        digest: { type: string }
+        releaseDate: { type: string, description: "v2 only, UTC date of the commit." }
+        commit: { type: string, description: "v2 only." }
+        subject: { type: string, description: "v2 only, the commit subject." }
+        current: { type: boolean, description: "The revision the index lists now." }
+
+    PlanRequest:
+      type: object
+      description: |
+        A deploy (`model`) or an upgrade (`fromRelease`). Form values ride
+        `overrides`; the named fields below exist because their key path or
+        validation is swissd's business, not the form's.
+      properties:
+        fromRelease: { type: string, description: "Recompose this release; release, namespace, model and variant come from its plan." }
+        catalog: { type: string, description: "Deploy: the catalog to compose from. Upgrade: a different catalog moves the release (same HF model and engine only)." }
+        model: { type: string, description: "Required unless `fromRelease`." }
+        version: { type: string }
+        variant: { type: string }
+        release: { type: string, description: "Defaults to `serviceId`, else the model id." }
+        namespace: { type: string, description: "Defaults to the site profile's namespace." }
+        serviceId: { type: string, description: "The route, scaler and SLO identity. Cannot change on an upgrade." }
+        localPath: { type: string, description: "Overrides the profile's path template." }
+        gpuProducts: { type: array, items: { type: string }, description: "Any one of these products." }
+        forceGpuProducts: { type: boolean, description: "Accept products the variant does not list, if this cluster has them." }
+        overrides: { type: object, description: "Form-layer values. On an upgrade, merged over the release's form layer." }
+        overridesYAML: { type: string, description: "Form-layer values as YAML text." }
+        editsYAML: { type: string, description: "The edit layer, applied last and exempt from ownership." }
+        createNamespace: { type: boolean }
+        chartVersion: { type: string, description: "Must fall in the variant's chart range. Empty is the newest it allows (or the running one on upgrade)." }
+
+    Plan:
+      type: object
+      description: |
+        The deploy, complete on its own. `hash` covers release, source, chart
+        and the merged values; two plans with one hash render the same thing.
+      required: [apiVersion, release, source, chart, engine, profile, hash]
+      properties:
+        apiVersion: { type: string, const: plan.swiss/v1 }
+        release:
+          type: object
+          required: [name, namespace]
+          properties:
+            name: { type: string }
+            namespace: { type: string }
+        source:
+          type: object
+          required: [model, variant]
+          properties:
+            catalog: { type: string }
+            catalogName: { type: string }
+            ref: { type: string, description: "Catalog commit." }
+            model: { type: string }
+            hf: { type: string }
+            version: { type: string }
+            digest: { type: string }
+            variant: { type: string }
+            schema: { type: string, enum: [v2], description: "Absent on v1." }
+        chart:
+          type: object
+          required: [name, version]
+          properties:
+            name: { type: string }
+            version: { type: string }
+            repo: { type: string }
+            path: { type: string }
+        engine: { type: string }
+        profile: { type: string }
+        layers:
+          type: object
+          description: "One values document per layer, applied in order: `catalog`, `site`, `derived`, `form`, `edit`."
+          properties:
+            catalog: { type: object }
+            site: { type: object }
+            derived: { type: object }
+            form: { type: object }
+            edit: { type: object }
+        createNamespace: { type: boolean }
+        helmfile: { type: string, description: "The helmfile these values are applied through. Not hashed." }
+        warnings: { type: array, items: { type: string }, description: "Accepted but worth seeing. Not hashed." }
+        hash: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+
+    DiffResult:
+      type: object
+      required: [planHash, changed, output, revision, exists]
+      properties:
+        planHash: { type: string }
+        changed: { type: boolean, description: "False means nothing would change; applying would write an empty revision." }
+        output: { type: string, description: "helmfile diff output." }
+        revision: { type: integer, description: "The live revision; send as `expectRevision`. 0 when the release does not exist." }
+        exists: { type: boolean, description: "False means install, true means apply." }
+
+    ApplyRequest:
+      type: object
+      required: [planHash]
+      properties:
+        planHash: { type: string, description: "A plan stored by `POST /api/plans`." }
+        expectRevision: { type: integer, description: "The live revision the diff saw. Omitted asserts nothing." }
+        note: { type: string, description: "Why; recorded in the log and beside the release." }
+        forceConflicts: { type: boolean, description: "Upgrade only. Take fields another field manager owns (a hand `kubectl edit`)." }
+        applyWith:
+          $ref: "#/components/schemas/ApplyWith"
+          description: Install only; empty is the site profile's. An upgrade naming the other method is a 409.
+
+    ApplyResult:
+      type: object
+      required: [planHash, release, revision, output, status]
+      properties:
+        planHash: { type: string }
+        release: { type: string }
+        revision: { type: integer }
+        output: { type: string }
+        status: { type: string, examples: [applied] }
+        statusError: { type: string, description: "The release is live but its status record was not updated." }
+
+    Deployment:
+      type: object
+      required: [release, namespace, revision, backend]
+      properties:
+        release: { type: string }
+        namespace: { type: string }
+        chart: { type: string, description: "`name-version`." }
+        status: { type: string, description: "helm's status." }
+        revision: { type: integer }
+        updated: { type: string, format: date-time }
+        model: { type: string }
+        variant: { type: string }
+        catalogRef: { type: string }
+        catalog: { type: string, description: "The configured catalog it came from; absent when the site no longer lists it." }
+        version: { type: string }
+        phase: { type: string, description: "swiss's apply phase: applying, applied, failed (or the operator's)." }
+        drift: { type: string, description: "What a person should look at." }
+        route: { type: string }
+        backend: { $ref: "#/components/schemas/ApplyWith" }
+        external: { type: boolean, description: "An LLMService swiss did not write." }
+        cleanupPending: { type: boolean, description: "Both a plan ConfigMap and an LLMService exist." }
+
+    ReleaseStatus:
+      type: object
+      required: [release, namespace, exists, revision, pods, ready, total, authPrefix]
+      properties:
+        release: { type: string }
+        namespace: { type: string }
+        exists: { type: boolean }
+        revision: { type: integer }
+        helmStatus: { type: string }
+        pods:
+          type: [array, "null"]
+          items:
+            type: object
+            required: [name, phase, ready, restarts, ageSeconds]
+            properties:
+              name: { type: string }
+              phase: { type: string }
+              ready: { type: boolean }
+              restarts: { type: integer }
+              node: { type: string }
+              message: { type: string }
+              ageSeconds: { type: integer }
+        ready: { type: integer }
+        total: { type: integer }
+        route: { type: string }
+        url: { type: string, description: "The route on the site's gateway." }
+        model: { type: string, description: "The served name to put in a request." }
+        authHeader: { type: string, description: "Header the gateway reads the key from. Never the key." }
+        authPrefix: { type: string, description: "Prefix before the key, e.g. `Bearer `; may be empty." }
+        warning: { type: string }
+        drift: { type: string, description: "The catalog republished this version and variant under another digest." }
+        planStatus:
+          type: object
+          description: Helm releases. The last apply as swiss recorded it.
+          required: [phase]
+          properties:
+            phase: { type: string, enum: [applying, applied, failed] }
+            action: { type: string }
+            revision: { type: integer }
+            startedAt: { type: string, format: date-time }
+            updatedAt: { type: string, format: date-time }
+            error: { type: string }
+            note: { type: string }
+            forced: { type: boolean }
+        backend: { $ref: "#/components/schemas/ApplyWith" }
+        cleanupPending: { type: boolean }
+        llmservice:
+          type: object
+          description: LLMService releases. The operator's status.
+          properties:
+            phase: { type: string, examples: [Applying, Applied, Failed] }
+            message: { type: string }
+            revision: { type: integer }
+            conditions:
+              type: array
+              items:
+                type: object
+                required: [type]
+                properties:
+                  type: { type: string }
+                  status: { type: string }
+                  reason: { type: string }
+                  message: { type: string }
+
+    ObjectResult:
+      type: object
+      required: [ref]
+      properties:
+        ref:
+          type: object
+          required: [apiVersion, kind, namespace, name]
+          properties:
+            apiVersion: { type: string }
+            kind: { type: string }
+            namespace: { type: string }
+            name: { type: string }
+        live:
+          type: object
+          properties:
+            generation: { type: integer }
+            created: { type: string, format: date-time }
+            spec: { type: object }
+            status: { type: object }
+        missing: { type: boolean }
+        error: { type: string }
+
+    Revision:
+      type: object
+      required: [revision]
+      properties:
+        revision: { type: integer }
+        model: { type: string }
+        version: { type: string }
+        variant: { type: string }
+        chart: { type: string }
+        planHash: { type: string }
+        current: { type: boolean }
+
+    EntrypointAuth:
+      type: object
+      description: Overrides the site profile's gateway credential for this call. Never echoed back.
+      properties:
+        apiKey: { type: string, format: password }
+        headers: { type: object, additionalProperties: { type: string } }
+
+    ProbeResult:
+      type: object
+      required: [url, ok, latencyMs]
+      properties:
+        url: { type: string }
+        ok: { type: boolean }
+        status: { type: integer, description: "The gateway's HTTP status." }
+        latencyMs: { type: integer }
+        models: { type: array, items: { type: string } }
+        error: { type: string }
+        body: { type: string, description: "Response snippet when not ok." }
+        sentHeaders: { type: array, items: { type: string }, description: "Header names only." }
+        curl: { type: string, description: "The request as a runnable line; the key is a shell variable." }
+
+    ChatRequest:
+      allOf:
+        - $ref: "#/components/schemas/EntrypointAuth"
+        - type: object
+          properties:
+            api:
+              type: string
+              enum: [chat, completions, messages]
+              default: chat
+              description: "`/v1/chat/completions`, `/v1/completions` or `/v1/messages`."
+            prompt: { type: string, default: "Reply with the single word: ok" }
+            model: { type: string, description: "Defaults to the plan's served name." }
+            maxTokens: { type: integer, default: 32 }
+
+    ChatResult:
+      type: object
+      required: [url, api, ok, latencyMs]
+      properties:
+        url: { type: string }
+        api: { type: string }
+        model: { type: string }
+        ok: { type: boolean, description: "200 and some text generated." }
+        status: { type: integer }
+        latencyMs: { type: integer }
+        reply: { type: string }
+        reasoning: { type: string, description: "The thinking channel of a reasoning model." }
+        finishReason: { type: string }
+        error: { type: string }
+        body: { type: string }
+        sentHeaders: { type: array, items: { type: string } }
+        curl: { type: string }
+
+    SLOMetric:
+      type: object
+      required: [type, threshold]
+      properties:
+        type: { type: string }
+        threshold: { type: number, description: "TTFT in seconds, OTPS in tokens/s." }
+
+    SLOSection:
+      type: object
+      properties:
+        default:
+          type: object
+          properties:
+            metrics: { type: array, items: { $ref: "#/components/schemas/SLOMetric" } }
+        ranges: { type: array, items: {} }
+
+    SLOBound:
+      type: object
+      required: [type, value]
+      properties:
+        type: { type: string }
+        value: { type: number }
+
+    SLOEdit:
+      type: object
+      description: Either `priority` (0 or 10 only) or `highPriority`. `route` must be the release if sent.
+      properties:
+        route: { type: string }
+        priority: { type: integer, enum: [0, 10] }
+        highPriority: { type: boolean }
+        minimumDeployment: { $ref: "#/components/schemas/SLOBound" }
+        maximumDeployment: { $ref: "#/components/schemas/SLOBound" }
+        ttft: { $ref: "#/components/schemas/SLOSection" }
+        otps: { $ref: "#/components/schemas/SLOSection" }
+
+    SLOConfig:
+      description: The SLO server's record plus `found` and the derived CRD `priority`.
+      allOf:
+        - $ref: "#/components/schemas/SLOEdit"
+        - type: object
+          required: [found]
+          properties:
+            found: { type: boolean }
+
+    Run:
+      type: object
+      required: [id, namespace, release, action, planHash, changed, startedAt, endedAt]
+      properties:
+        id: { type: integer, format: int64 }
+        namespace: { type: string }
+        release: { type: string }
+        action: { type: string, enum: [install, apply, rollback, uninstall] }
+        planHash: { type: string, description: "Empty for an uninstall with no plan." }
+        actor: { type: string }
+        changed: { type: boolean }
+        error: { type: string }
+        output: { type: string }
+        note: { type: string }
+        revision: { type: integer, description: "0 when the operation left none." }
+        startedAt: { type: string, format: date-time }
+        endedAt: { type: string, format: date-time }
