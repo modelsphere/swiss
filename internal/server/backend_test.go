@@ -303,7 +303,7 @@ func TestLLMInvisibleMatchesUnserved(t *testing.T) {
 			warns := warningsOf(body)
 			switch kind {
 			case "forbidden":
-				if info["served"] != true || !containsString(warns, "LLMService CRD is served but swissd has no llmservices grant; set rbac.applyWith") {
+				if info["served"] != true || !containsString(warns, "LLMService CRD is served but swissd has no llmservices grant; upgrade the swiss chart, which grants it") {
 					t.Fatalf("cluster served %v warnings %v", info["served"], warns)
 				}
 			case "discovery":
@@ -341,7 +341,7 @@ func TestLLMApplyWithHiddenFallsBackToHelm(t *testing.T) {
 			}
 			warns := warningsOf(body)
 			if kind == "forbidden" {
-				if info["served"] != true || !containsString(warns, "LLMService CRD is served but swissd has no llmservices grant; set rbac.applyWith") {
+				if info["served"] != true || !containsString(warns, "LLMService CRD is served but swissd has no llmservices grant; upgrade the swiss chart, which grants it") {
 					t.Fatalf("served %v warnings %v", info["served"], warns)
 				}
 			} else if !containsString(warns, "site profile applyWith is llmsvc but the LLMService CRD is not served; new installs use helm: discovery down") {

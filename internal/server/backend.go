@@ -131,6 +131,19 @@ func (a llmsvcAccess) visible() bool {
 	return a.served && a.discErr == nil && !a.forbidden
 }
 
+// why is what hides the API, for a refusal. Empty when it is visible.
+func (a llmsvcAccess) why() string {
+	switch {
+	case a.discErr != nil:
+		return "LLMService discovery failed: " + a.discErr.Error()
+	case !a.served:
+		return "the LLMService CRD is not served on this cluster"
+	case a.forbidden:
+		return "swissd has no llmservices grant; upgrade the swiss chart, which grants it"
+	}
+	return ""
+}
+
 // llmsvcAccess reports discovery, cached for crdServedTTL. A nil client is an
 // unserved CRD and makes no discovery call. A discovery error is cached like
 // a normal answer and logged once per TTL.
@@ -255,22 +268,36 @@ func (s *Server) readBackend(ctx context.Context, namespace, release string) (ba
 	return s.helmBackend(), nil
 }
 
-// backendForApply picks the owner of an existing release, and the configured
-// backend for a new install. An upgrade of something swiss does not manage
-// stays on helm, which refuses it the way it does today.
-func (s *Server) backendForApply(ctx context.Context, p *plan.Plan, mode exec.Mode) (backend, error) {
+// backendForApply is an existing release's owner, else for an install the
+// backend the request names, else the site profile's. An upgrade of something
+// swiss does not manage stays on helm, which refuses it the way it does today.
+func (s *Server) backendForApply(ctx context.Context, p *plan.Plan, mode exec.Mode, want string) (backend, error) {
 	b, _, err := s.backendFor(ctx, p.Release.Namespace, p.Release.Name)
 	if err != nil {
 		return nil, failErr(http.StatusBadGateway, err)
 	}
 	if b != nil {
+		// An install over it is refused by the owner, which says so better.
+		if mode != exec.Install && want != "" && want != b.Name() {
+			return nil, fail(http.StatusConflict, "release %s/%s is installed with %s, not %s: an existing install keeps its method",
+				p.Release.Namespace, p.Release.Name, b.Name(), want)
+		}
 		return b, nil
 	}
-	if mode == exec.Install {
-		if s.applyWith(ctx) == backendLLMSVC && s.llmsvcAccess(ctx).visible() {
-			return s.llmBackend(), nil
-		}
+	if mode != exec.Install {
 		return s.helmBackend(), nil
+	}
+	switch want {
+	case backendHelm:
+		return s.helmBackend(), nil
+	case backendLLMSVC:
+		if access := s.llmsvcAccess(ctx); !access.visible() {
+			return nil, fail(http.StatusConflict, "cannot install with llmsvc: %s", access.why())
+		}
+		return s.llmBackend(), nil
+	}
+	if s.applyWith(ctx) == backendLLMSVC && s.llmsvcAccess(ctx).visible() {
+		return s.llmBackend(), nil
 	}
 	return s.helmBackend(), nil
 }

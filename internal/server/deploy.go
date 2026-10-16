@@ -94,6 +94,9 @@ type applyRequest struct {
 	// is what a hand `kubectl edit` leaves behind. Per apply, never stored in
 	// the plan -- see exec.ApplyOptions.
 	ForceConflicts bool `json:"forceConflicts,omitempty"`
+	// ApplyWith is a new install's backend, helm or llmsvc; empty is the site
+	// profile's. An existing release keeps its own.
+	ApplyWith string `json:"applyWith,omitempty"`
 }
 
 func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
@@ -585,6 +588,12 @@ func (s *Server) handleApply(mode exec.Mode) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		switch req.ApplyWith {
+		case "", backendHelm, backendLLMSVC:
+		default:
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("applyWith %q is not helm or llmsvc", req.ApplyWith))
+			return
+		}
 		if s.store == nil {
 			writeError(w, http.StatusServiceUnavailable, "no database: apply needs a stored plan")
 			return
@@ -594,14 +603,14 @@ func (s *Server) handleApply(mode exec.Mode) http.HandlerFunc {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		s.applyPlan(ctx, w, p, mode, req.ExpectRevision, actionName(mode), req.Note, req.ForceConflicts)
+		s.applyPlan(ctx, w, p, mode, req.ApplyWith, req.ExpectRevision, actionName(mode), req.Note, req.ForceConflicts)
 	}
 }
 
 // applyPlan is the cluster-changing half, shared by apply, install and
 // rollback. They differ in where the plan came from and in nothing after that.
-func (s *Server) applyPlan(ctx context.Context, w http.ResponseWriter, p *plan.Plan, mode exec.Mode, expectRevision int, action, note string, forceConflicts bool) {
-	b, err := s.backendForApply(ctx, p, mode)
+func (s *Server) applyPlan(ctx context.Context, w http.ResponseWriter, p *plan.Plan, mode exec.Mode, applyWith string, expectRevision int, action, note string, forceConflicts bool) {
+	b, err := s.backendForApply(ctx, p, mode, applyWith)
 	if err != nil {
 		writeStatus(w, err, http.StatusBadGateway)
 		return

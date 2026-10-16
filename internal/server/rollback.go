@@ -227,7 +227,7 @@ func (s *Server) handleRollback(w http.ResponseWriter, r *http.Request) {
 	// No force here: a rollback restores a plan that was applied cleanly once,
 	// and taking fields from another manager during one would be a second
 	// surprise on top of the one being undone.
-	s.applyPlan(ctx, w, p, exec.Upgrade, req.ExpectRevision, "rollback", req.Note, false)
+	s.applyPlan(ctx, w, p, exec.Upgrade, "", req.ExpectRevision, "rollback", req.Note, false)
 }
 
 // archivedPlan reads the workspace that produced a revision, and checks it

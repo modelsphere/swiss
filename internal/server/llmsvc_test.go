@@ -1318,3 +1318,115 @@ func TestLLMUpgradeKeepsUnownedAnnotations(t *testing.T) {
 		t.Fatalf("fresh swiss set: %v", got)
 	}
 }
+
+// An install naming its backend gets that one whatever the profile says; one
+// naming none still gets the profile's.
+func TestInstallNamesItsBackend(t *testing.T) {
+	t.Run("llmsvc over a helm profile", func(t *testing.T) {
+		rig := startRig(t, llmProbe(), true, true, backendHelm)
+		_, body := get(t, rig.srv, "/api/cluster")
+		info := body["llmservice"].(map[string]any)
+		if info["available"] != true || info["newInstalls"] != "helm" {
+			t.Fatalf("llmservice %v", info)
+		}
+		hash := rig.storePlan(t, map[string]any{"release": llmRelease})
+		code, out := post(t, rig.srv, "/api/install", map[string]any{"planHash": hash, "applyWith": "llmsvc"})
+		if code != 200 {
+			t.Fatalf("install %d %v", code, out)
+		}
+		if len(rig.w.written) != 0 {
+			t.Fatalf("llmsvc install must not write a plan ConfigMap: %v", rig.w.written)
+		}
+		rig.mustGet(t, "models", llmRelease)
+	})
+	t.Run("helm over an llmsvc profile", func(t *testing.T) {
+		rig := startRig(t, llmProbe(), true, false, backendLLMSVC)
+		hash := rig.storePlan(t, map[string]any{"release": llmRelease})
+		code, out := post(t, rig.srv, "/api/install", map[string]any{"planHash": hash, "applyWith": "helm"})
+		if code != http.StatusInternalServerError {
+			t.Fatalf("helm runs helmfile, which this test stubs to fail: %d %v", code, out)
+		}
+		if _, ok := rig.w.written[planRef("models", llmRelease)]; !ok {
+			t.Fatal("applyWith helm writes the plan ConfigMap")
+		}
+		if rig.count(t) != 0 {
+			t.Fatal("applyWith helm must not create an LLMService")
+		}
+	})
+}
+
+func TestInstallWithLLMSVCRefusedWhenUnserved(t *testing.T) {
+	rig := startRig(t, llmProbe(), false, false, backendHelm)
+	_, body := get(t, rig.srv, "/api/cluster")
+	if info := body["llmservice"].(map[string]any); info["available"] != false {
+		t.Fatalf("llmservice %v", info)
+	}
+	hash := rig.storePlan(t, map[string]any{"release": llmRelease})
+	code, out := post(t, rig.srv, "/api/install", map[string]any{"planHash": hash, "applyWith": "llmsvc"})
+	if code != http.StatusConflict {
+		t.Fatalf("status %d %v", code, out)
+	}
+	if want := "cannot install with llmsvc: the LLMService CRD is not served on this cluster"; errText(out) != want {
+		t.Fatalf("got %q", errText(out))
+	}
+	if rig.count(t) != 0 || len(rig.w.written) != 0 {
+		t.Fatalf("a refused install must not write: objects %d cms %v", rig.count(t), rig.w.written)
+	}
+}
+
+func TestApplyWithUnknownRefused(t *testing.T) {
+	rig := startRig(t, llmProbe(), true, false, backendHelm)
+	hash := rig.storePlan(t, map[string]any{"release": llmRelease})
+	code, out := post(t, rig.srv, "/api/install", map[string]any{"planHash": hash, "applyWith": "operator"})
+	if code != http.StatusBadRequest || errText(out) != `applyWith "operator" is not helm or llmsvc` {
+		t.Fatalf("%d %v", code, out)
+	}
+}
+
+// An existing release stays on the backend that owns it: naming the other on
+// an upgrade is refused, and naming none or its own upgrades it in place.
+func TestExistingInstallKeepsItsBackend(t *testing.T) {
+	t.Run("llmsvc", func(t *testing.T) {
+		rig := startRig(t, llmProbe(), true, true, backendHelm)
+		hash := rig.storePlan(t, map[string]any{"release": llmRelease})
+		if code, out := post(t, rig.srv, "/api/install", map[string]any{"planHash": hash, "applyWith": "llmsvc"}); code != 200 {
+			t.Fatalf("install %d %v", code, out)
+		}
+		next := rig.storePlan(t, map[string]any{
+			"release": llmRelease, "overrides": map[string]any{"replicaCount": 2},
+		})
+		code, out := post(t, rig.srv, "/api/apply", map[string]any{"planHash": next, "expectRevision": 1, "applyWith": "helm"})
+		if code != http.StatusConflict {
+			t.Fatalf("status %d %v", code, out)
+		}
+		if want := "release models/" + llmRelease + " is installed with llmsvc, not helm: an existing install keeps its method"; errText(out) != want {
+			t.Fatalf("got %q", errText(out))
+		}
+		code, out = post(t, rig.srv, "/api/apply", map[string]any{"planHash": next, "expectRevision": 1})
+		if code != 200 || asNum(out["revision"]) != 2 {
+			t.Fatalf("apply %d %v", code, out)
+		}
+		if len(rig.w.written) != 0 {
+			t.Fatalf("an llmsvc upgrade must not write a plan ConfigMap: %v", rig.w.written)
+		}
+	})
+	t.Run("helm", func(t *testing.T) {
+		probe := llmProbe()
+		probe.Rel = []cluster.Release{{
+			Name: llmRelease, Namespace: "models", Status: "deployed", Revision: 2, Chart: "vllm-0.7.6",
+		}}
+		probe.Maps[planRef("models", llmRelease)] = map[string]string{"plan.yaml": "release: {}\n"}
+		rig := startRig(t, probe, true, false, backendLLMSVC)
+		hash := rig.storePlan(t, map[string]any{"release": llmRelease})
+		code, out := post(t, rig.srv, "/api/apply", map[string]any{"planHash": hash, "applyWith": "llmsvc"})
+		if code != http.StatusConflict {
+			t.Fatalf("status %d %v", code, out)
+		}
+		if want := "release models/" + llmRelease + " is installed with helm, not llmsvc: an existing install keeps its method"; errText(out) != want {
+			t.Fatalf("got %q", errText(out))
+		}
+		if rig.count(t) != 0 {
+			t.Fatal("a helm release must not gain an LLMService")
+		}
+	})
+}

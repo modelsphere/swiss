@@ -89,9 +89,11 @@ type clusterInfo struct {
 }
 
 // llmClusterInfo is the cluster page's view of the operator's CRD. Served is
-// discovery, not a Deployment readiness check.
+// discovery, not a Deployment readiness check. Available is whether an install
+// may name llmsvc; NewInstalls is what an install naming none gets.
 type llmClusterInfo struct {
 	Served      bool   `json:"served"`
+	Available   bool   `json:"available"`
 	ApplyWith   string `json:"applyWith"`
 	NewInstalls string `json:"newInstalls"`
 }
@@ -173,7 +175,7 @@ func (s *Server) handleCluster(w http.ResponseWriter, r *http.Request) {
 	if applyWith == backendLLMSVC && access.visible() {
 		newInstalls = backendLLMSVC
 	}
-	info.LLMService = &llmClusterInfo{Served: access.served, ApplyWith: applyWith, NewInstalls: newInstalls}
+	info.LLMService = &llmClusterInfo{Served: access.served, Available: access.visible(), ApplyWith: applyWith, NewInstalls: newInstalls}
 	if access.discErr != nil {
 		info.Warnings = append(info.Warnings, "LLMService discovery failed: "+access.discErr.Error())
 	}
@@ -185,7 +187,7 @@ func (s *Server) handleCluster(w http.ResponseWriter, r *http.Request) {
 		info.Warnings = append(info.Warnings, msg)
 	}
 	if access.forbidden {
-		info.Warnings = append(info.Warnings, "LLMService CRD is served but swissd has no llmservices grant; set rbac.applyWith")
+		info.Warnings = append(info.Warnings, "LLMService CRD is served but swissd has no llmservices grant; upgrade the swiss chart, which grants it")
 	}
 	writeJSON(w, http.StatusOK, info)
 }

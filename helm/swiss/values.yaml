@@ -46,6 +46,9 @@ config:
   # endpoints need -- one switch, so swissd cannot accept an apply it has no
   # permission to perform. Needs persistence and one replica.
   #
+  # On by default: swissd is where installs are managed. Set false for a
+  # read-only viewer, which also drops the write grant below.
+  #
   # The grant is everything the sglang and vllm charts render, in the namespaces
   # rbac.scope selects, and nothing else:
   #
@@ -71,7 +74,7 @@ config:
   #
   # Requires rbac.create; with RBAC managed outside this chart the permissions
   # are yours to wire.
-  allowDeploy: false
+  allowDeploy: true
 
   # Drafts, plans and the audit log. Never the source of truth for what is
   # deployed -- every applied plan is also written beside its release.
@@ -163,25 +166,6 @@ rbac:
   # It is configmaps create/update in swissd's own namespace. RBAC cannot scope
   # a create to one name.
   manageProfile: true
-
-  # Which grant the release Role (or the cluster-scoped releases ClusterRole)
-  # carries. The deploy switch stays config.allowDeploy: this only chooses
-  # which rules that switch turns on. helm renders today's rules unchanged.
-  #
-  #   helm    (default) today's grant. With allowDeploy, everything the engine
-  #           charts render. Without it, the read rules only.
-  #   both    today's grant, plus LLMService. With allowDeploy: llmservices
-  #           get/list/watch/create/update/patch/delete and apps
-  #           controllerrevisions get/list, in the same Role. Without
-  #           allowDeploy: llmservices get/list/watch and controllerrevisions
-  #           get/list, so the deployments page can see them.
-  #   llmsvc  no Secret, Role or workload writes. With allowDeploy: llmservices
-  #           CRUD, controllerrevisions get/list, the namespaces ClusterRole,
-  #           and the read grants (secrets/configmaps/pods get/list, plus the
-  #           modelroute/scaler/slo reads). Without allowDeploy: the same read
-  #           views as both. The backend a new install uses is applyWith on
-  #           the site profile, not this grant.
-  applyWith: helm
 
   # Namespaces holding model releases. Used when scope is namespaced.
   namespaces: []

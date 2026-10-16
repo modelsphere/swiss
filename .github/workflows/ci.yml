@@ -52,16 +52,13 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
       - run: go vet ./...
       - run: go test ./...
-      - name: helm lint, each rbac.applyWith
+      - name: helm lint
         run: |
           set -eu
           lint() { helm lint --strict helm/swiss --set 'rbac.namespaces={ci}' "$@"; }
-          deploy="--set config.allowDeploy=true --set persistence.enabled=true"
           lint
-          lint $deploy
-          lint $deploy --set rbac.applyWith=both
-          lint $deploy --set rbac.applyWith=llmsvc
-          lint --set rbac.scope=cluster $deploy --set rbac.applyWith=both
+          lint --set config.allowDeploy=false
+          lint --set rbac.scope=cluster
 
   gate:
     runs-on: ubuntu-latest

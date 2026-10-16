@@ -23,15 +23,11 @@ type Profile struct {
 	// Namespace a release lands in unless the deploy overrides it.
 	Namespace string `yaml:"namespace,omitempty" json:"namespace,omitempty"`
 
-	// ApplyWith is the backend a new install uses: "helm" or "llmsvc". Empty
-	// means helm. A release already in the cluster stays on the backend that
-	// owns it. llmsvc needs the LLMService CRD; when that CRD is not served,
-	// discovery fails, or swissd has no llmservices grant, new installs stay
-	// on helm and /api/cluster says so.
-	//
-	// It is a property of the cluster, like the catalogs below, so it lives in
-	// the document an operator edits from the web. The chart's rbac.applyWith
-	// stays install-time: that is the grant, which a running swissd cannot widen.
+	// ApplyWith is the backend an install naming none uses: "helm" or
+	// "llmsvc". Empty means helm. A release already in the cluster stays on the
+	// backend that owns it. llmsvc needs the LLMService CRD; when that CRD is
+	// not served, discovery fails, or swissd has no llmservices grant, new
+	// installs stay on helm and /api/cluster says so.
 	ApplyWith string `yaml:"applyWith,omitempty" json:"applyWith,omitempty"`
 
 	// Catalogs are the catalog repos this site deploys from, each under a name
