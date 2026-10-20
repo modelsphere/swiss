@@ -380,6 +380,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/catalogs/{catalog}/api/v2/{path...}", s.handleCatalogAPI)
 	mux.HandleFunc("POST /api/catalogs/{catalog}/api/v2/{path...}", s.handleCatalogAPI)
 	mux.HandleFunc("DELETE /api/catalogs/{catalog}/api/v2/{path...}", s.handleCatalogAPI)
+	mux.HandleFunc("PUT /api/catalogs/{catalog}", s.handleCatalogPut)
 
 	/******************************************/
 	/*    secrets management                  */

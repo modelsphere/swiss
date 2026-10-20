@@ -473,6 +473,74 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "502": { $ref: "#/components/responses/BadGateway" }
 
+  /api/catalogs/{catalog}:
+    parameters:
+      - { name: catalog, in: path, required: true, description: The site profile's catalog name., schema: { type: string } }
+    put:
+      tags: [catalog]
+      summary: Update a catalog
+      description: |
+        Provisional: the site profile holds a catalog's settings for now, so
+        this takes only a writable catalog's token -- `token`, a new one, or
+        `renamedFrom`, the one stored for the name it had before a rename --
+        and refuses any other field (400). `dryRun` keeps nothing; it checks
+        `token`, or else the token stored (for `renamedFrom`, or this name; 409
+        when there is none), at `url` when given, so a catalog the profile does
+        not hold yet, or not at that url or as writable, is checked before the
+        profile is saved; without `url`, the profile's. swissd tries the token on the catalog's catalog-server with a
+        dry-run write that commits nothing, `POST <catalog url>api/v2/models?dryRun=true`
+        with no body: catalog-server checks a write's token first, so 400 (the
+        body) means it is reached and takes the token. Only then is it kept, as
+        `catalog.<name>.token` in swissd's Secret. A token it refuses (401, or
+        403: it takes no writes) is 422; a catalog that cannot be reached, or is
+        not a catalog-server, is 502. Refused, the token held before stays.
+        Removing a token is `DELETE /api/secrets/catalog.<name>.token`.
+      operationId: putCatalog
+      parameters:
+        - { name: dryRun, in: query, description: "`true` or `1`: check, keep nothing.", schema: { type: string, enum: ["true", "1"] } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              description: "`token` or `renamedFrom`, not both; with dryRun, either may be left out."
+              properties:
+                token: { type: string, minLength: 1 }
+                renamedFrom: { type: string, description: "The catalog's name before a rename: the token stored for it is checked and kept under this one." }
+                url: { type: string, description: "With dryRun only: where the catalog is, for one the profile does not hold yet, or not there." }
+      responses:
+        "200":
+          description: Updated -- the catalog as the site profile has it, and that its token is set -- or, with dryRun, checked (`name`, `url`, `dryRun`).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [name, url, tokenSet]
+                properties:
+                  name: { type: string }
+                  url: { type: string }
+                  schemaVersion: { type: string }
+                  default: { type: boolean }
+                  writable: { type: boolean }
+                  tokenSet: { type: boolean }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403":
+          description: The catalog is not marked writable in the site profile, or this swissd cannot write the cluster.
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: No token given, and none stored to check.
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "422":
+          description: The catalog's catalog-server does not take the token (it answered 401, or 403 for no tokensFile).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "catalog internal does not take this token: that token is not in the server's tokensFile" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
   /api/catalogs/{catalog}/api/v2/{path...}:
     parameters:
       - { name: catalog, in: path, required: true, description: The site profile's catalog name., schema: { type: string } }
@@ -491,7 +559,10 @@ paths:
         `GET`/`PUT`/`DELETE models/{model}/variants/{id}` reads and writes a
         variant. swissd answers only 403 (not writable in the profile), 404 (no
         such catalog), 409 (no token yet) and 502; a successful write drops its
-        cached index of that catalog.
+        cached index of that catalog. A 401 is catalog-server's, with
+        `WWW-Authenticate: Bearer realm="catalog"`: the token swissd holds is in
+        no entry of its tokensFile any more -- changed or removed there since it
+        was set.
       operationId: getCatalogAPI
       responses:
         default: { description: "catalog-server's answer." }
