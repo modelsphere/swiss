@@ -131,6 +131,11 @@ func TestSecrets(t *testing.T) {
 	if got := w.secrets["swiss/site-profile-secrets"]; len(got) != 0 {
 		t.Fatalf("after removing the only stored key: %v", got)
 	}
+	// No Secret yet lists no keys as a list: a page reads it before any is set.
+	empty, _, _ := writableCatalog(t, nil)
+	if raw, _ := io.ReadAll(send(t, "GET", empty.URL+"/api/secrets", "", nil).Body); !strings.Contains(string(raw), `"keys": []`) {
+		t.Fatalf("an absent Secret: %s", raw)
+	}
 	if code, _ := put(t, srv, "/api/secrets/kubeconfig", map[string]string{"value": "x"}); code != http.StatusNotFound {
 		t.Errorf("an unknown key: %d", code)
 	}

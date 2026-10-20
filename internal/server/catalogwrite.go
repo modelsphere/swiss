@@ -42,6 +42,11 @@ func (s *Server) readSecrets(ctx context.Context) (map[string]string, error) {
 	return data, err
 }
 
+// secretKeys is never nil: no Secret yet is an empty list, not JSON null.
+func secretKeys(data map[string]string) []string {
+	return append([]string{}, slices.Sorted(maps.Keys(data))...)
+}
+
 // handleSecrets lists what is set, never a value.
 func (s *Server) handleSecrets(w http.ResponseWriter, r *http.Request) {
 	data, err := s.readSecrets(r.Context())
@@ -49,7 +54,7 @@ func (s *Server) handleSecrets(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"secret": s.secretRef(), "keys": slices.Sorted(maps.Keys(data))})
+	writeJSON(w, http.StatusOK, map[string]any{"secret": s.secretRef(), "keys": secretKeys(data)})
 }
 
 // handleSecret sets (PUT {"value": ...}) or removes (DELETE) one key.
@@ -92,7 +97,7 @@ func (s *Server) handleSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.log.InfoContext(r.Context(), "secret written", "secret", s.secretRef(), "key", key, "removed", r.Method == http.MethodDelete)
-	writeJSON(w, http.StatusOK, map[string]any{"secret": s.secretRef(), "keys": slices.Sorted(maps.Keys(data))})
+	writeJSON(w, http.StatusOK, map[string]any{"secret": s.secretRef(), "keys": secretKeys(data)})
 }
 
 // handleCatalogVariant passes a variant file's read or write through to the
