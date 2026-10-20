@@ -57,7 +57,6 @@ jobs:
           set -eu
           lint() { helm lint --strict helm/swiss --set 'rbac.namespaces={ci}' "$@"; }
           lint
-          lint --set config.allowDeploy=false
           lint --set rbac.scope=cluster
 
   gate:

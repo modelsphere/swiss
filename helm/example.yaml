@@ -3,7 +3,6 @@ config:
   cluster:
     profile: ""
     profileKey: profile.yaml
-  allowDeploy: true
 
 rbac:
   scope: cluster

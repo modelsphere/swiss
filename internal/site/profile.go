@@ -431,7 +431,6 @@ func Parse(raw []byte, origin string) (*Profile, error) {
 			return nil, fmt.Errorf("%s: catalogs[%d]: %w", origin, i, err)
 		}
 		c.SchemaVersion = schema
-		p.Catalogs[i] = c
 		key := catalog.CacheKey(c.URL, schema)
 		switch {
 		case c.Name == "" || c.URL == "":
@@ -446,6 +445,10 @@ func Parse(raw []byte, origin string) (*Profile, error) {
 		if err := checkCatalogURL(c.URL); err != nil {
 			return nil, fmt.Errorf("%s: catalogs[%d] url %w", origin, i, err)
 		}
+		if err := checkWritable(c); err != nil {
+			return nil, fmt.Errorf("%s: catalogs[%d] %w", origin, i, err)
+		}
+		p.Catalogs[i] = c
 		names[c.Name], keys[key] = true, c.Name
 		// Two defaults is no default: which one a page opens in would be a guess.
 		if c.Default {
@@ -489,6 +492,10 @@ type CatalogRepo struct {
 	// Default is the catalog a page opens in, and a request uses, when none is
 	// named. At most one is; with none, several catalogs have to be named.
 	Default bool `yaml:"default,omitempty" json:"default,omitempty"`
+	// Writable marks a catalog-server catalog the console edits through its
+	// api/v2; swissd itself only reads it. The token is the console's, not
+	// written here: the profile is a ConfigMap.
+	Writable bool `yaml:"writable,omitempty" json:"writable,omitempty"`
 }
 
 // DefaultCatalogName is what a lone catalog is called: the profile's legacy
@@ -514,6 +521,19 @@ func (p Profile) CatalogRepos() []CatalogRepo {
 func checkCatalogURL(c string) error {
 	if c != "" && !strings.HasPrefix(c, "http://") && !strings.HasPrefix(c, "https://") && !strings.HasPrefix(c, "/") {
 		return fmt.Errorf("%q must be an http:// or https:// url, or an absolute path", c)
+	}
+	return nil
+}
+
+// checkWritable guards for writable catalog: must be in schema v2 and HTTP(s) protocol
+func checkWritable(c CatalogRepo) error {
+	switch {
+	case !c.Writable:
+		return nil
+	case c.SchemaVersion != "v2":
+		return fmt.Errorf("writable needs schemaVersion v2: catalog-server serves v2 only")
+	case !strings.HasPrefix(c.URL, "http://") && !strings.HasPrefix(c.URL, "https://"):
+		return fmt.Errorf("writable needs an http:// or https:// url: writes go to the catalog's api/v2")
 	}
 	return nil
 }

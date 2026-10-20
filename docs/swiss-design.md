@@ -199,6 +199,31 @@ variants:
       startupProbe: { periodSeconds: 15, failureThreshold: 80 }
 ```
 
+**A writable catalog is edited through swissd.** A profile entry with
+`writable: true` is a catalog-server (schema v2) that takes writes on its
+`api/v2/`. swissd passes a variant file's read and writes through to it and
+checks nothing itself: catalog-server holds the rules.
+
+```
+PUT /api/catalog/<model>/variants/<id>?catalog=<name>&dryRun=…   (If-Match | If-None-Match: *)
+  profile catalogs[<name>].writable      else 403
+  Secret[catalog.<name>.token]           else 409
+  ──▶ <url>api/v2/models/<model>/variants/<id>, Authorization: Bearer <token>
+  2xx ──▶ drop the cached index, so the next read shows the commit
+```
+
+**swissd keeps one Secret, beside the profile: `<profile ConfigMap>-secrets`.**
+The profile is a ConfigMap, so a credential the web sets needs a home of its
+own, and swissd writing it keeps the whole setup in the web rather than a
+`kubectl create secret` step.
+
+| Decision | Why |
+|---|---|
+| one Secret, keys by purpose (`catalog.<name>.token`) | one object to grant, back up and rotate; a new kind of credential is a new key pattern, not a new Secret |
+| named after the profile | it follows the profile's namespace and its write grant without a setting of its own |
+| `GET /api/secrets` lists keys only | the web shows what is set; no value leaves swissd |
+| writes read-modify-write under a lock | swissd runs one replica; two keys set at once both land |
+
 ## LLMService backend
 
 A release is stored either as a helm release swiss drives itself, or as an LLMService the operator drives. Handlers call one backend and stop there. `internal/llmsvc` is the mapping and the client.
@@ -259,18 +284,16 @@ Deferred:
 
 ## RBAC
 
-The chart's deploy switch is `config.allowDeploy`. It gates the write endpoints and the write grant together. The backend a new install uses is `applyWith` on the site profile (`helm` or `llmsvc`; omitted means helm), not a value in this chart. `rbac.applyWith` chooses the grant on the release Role, or the releases ClusterRole when `rbac.scope` is `cluster`.
+The chart has no read-only or no-profile mode: swissd is where installs are
+managed, so it always gets the grants that needs, and renders `server.allowDeploy: true`.
+The backend a new install uses is `applyWith` on the site profile (`helm` or
+`llmsvc`), not a chart value, so the grant covers both.
 
-| `config.allowDeploy` | `rbac.applyWith` | Release Role |
-| --- | --- | --- |
-| false | `helm` (default) | today's read grant |
-| true | `helm` | today's deploy grant (`swiss.deployRules`) |
-| false | `both` or `llmsvc` | today's read grant, plus `llmservices` get/list/watch and `controllerrevisions` get/list |
-| true | `both` | today's deploy grant, plus `llmservices` get/list/watch/create/update/patch/delete and `controllerrevisions` get/list |
-| true | `llmsvc` | the read grants (`secrets`, `configmaps` and `pods` get/list, and `swiss.objectReadRules`), `llmservices` CRUD, and `controllerrevisions` get/list. `swiss.deployRules` is not included |
-
-The namespaces ClusterRole (`namespaces` get/create/patch) is still created only when `config.allowDeploy` is set, including `rbac.applyWith: llmsvc`.
-
-| Refused | Why |
+| Role | Grant |
 | --- | --- |
-| `rbac.applyWith` other than `helm`, `both` or `llmsvc` | unknown grant |
+| release Role (or the releases ClusterRole with `rbac.scope: cluster`) | `secrets`, `configmaps`, `pods` get/list; `swiss.deployRules`; `llmservices` CRUD; `controllerrevisions` get/list |
+| namespaces ClusterRole | `namespaces` get/create/patch |
+| profile Role, in the profile's namespace | `configmaps` and `secrets` get/create/update/patch: the profile and `<profile>-secrets` |
+
+`server.allowDeploy` stays in swissd's own config for a swissd run outside the
+chart, where off means a read-only viewer.

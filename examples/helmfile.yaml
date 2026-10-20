@@ -20,9 +20,7 @@ releases:
     chart: modelsphere/swiss
     version: 0.6.1
     values:
-      - config:
-          allowDeploy: true
-        service:
+      - service:
           # enable it if going to access swiss directly
           # type: NodePort
         rbac:

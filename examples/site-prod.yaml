@@ -18,6 +18,10 @@ namespace: swiss-deploy
 #   - name: archive
 #     url: https://modelsphere.github.io/model-catalog/
 #     # schemaVersion omitted → v1
+#   - name: internal                      # a catalog-server the console edits
+#     url: https://catalog.example.com/
+#     schemaVersion: v2
+#     writable: true                      # its write token is set on the site profile page
 
 # Charts come from the registry. A local path works for the CLI; swissd has no
 # checkout to point at, so the registry is the real answer.

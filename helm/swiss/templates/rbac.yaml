@@ -49,7 +49,6 @@ subjects:
     name: {{ $sa }}
     namespace: {{ .Release.Namespace }}
 ---
-{{- if .Values.config.allowDeploy }}
 # Namespaces are cluster-scoped, so an install that creates one needs a
 # ClusterRole whichever rbac.scope is in use. patch as well as create: helm v4
 # applies the Namespace object server-side, and that is a PATCH.
@@ -79,7 +78,6 @@ subjects:
     name: {{ $sa }}
     namespace: {{ .Release.Namespace }}
 ---
-{{- end }}
 # ---------------------------------------------------------------------------
 # swissd's own namespace: the site profile ConfigMap, and the entrypoint Secret
 # when the profile names one by bare name. Granted whichever scope is in use,
@@ -98,13 +96,12 @@ name -- just no longer conditional on a value this chart can see.
 The login Secret needs no grant at all: it is mounted as a volume, and the
 kubelet reads it rather than swissd.
 */}}
-{{- $profileVerbs := list "get" }}
-{{- if .Values.rbac.manageProfile }}
-{{- /* swissd writes the profile the setup page and the editor produce. `create`
-       cannot be scoped to one name by RBAC, so this is configmaps create in
-       swissd's own namespace. */}}
-{{- $profileVerbs = list "get" "create" "update" "patch" }}
-{{- end }}
+{{- /* swissd writes the profile the setup page and the editor produce, and its
+       Secret beside it (<profile>-secrets). `create` cannot be scoped to one
+       name by RBAC, so this is configmaps and secrets create in the profile's
+       namespace. */}}
+{{- $profileVerbs := list "get" "create" "update" "patch" }}
+{{- $secretVerbs := ternary $profileVerbs (list "get") (eq $profileNS .Release.Namespace) }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -115,7 +112,7 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get"]
+    verbs: {{ $secretVerbs | toJson }}
   {{- if eq $profileNS .Release.Namespace }}
   - apiGroups: [""]
     resources: ["configmaps"]
@@ -150,7 +147,7 @@ metadata:
     {{- include "swiss.labels" . | nindent 4 }}
 rules:
   - apiGroups: [""]
-    resources: ["configmaps"]
+    resources: ["configmaps", "secrets"]
     verbs: {{ $profileVerbs | toJson }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -193,11 +190,7 @@ rules:
   - apiGroups: [""]
     resources: ["secrets", "configmaps", "pods"]
     verbs: ["get", "list"]
-  {{- if .Values.config.allowDeploy }}
   {{- include "swiss.deployRules" . | nindent 2 }}
-  {{- else }}
-  {{- include "swiss.objectReadRules" . | nindent 2 }}
-  {{- end }}
   {{- include "swiss.llmsvcRules" . | nindent 2 }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -238,11 +231,7 @@ rules:
   - apiGroups: [""]
     resources: ["secrets", "configmaps", "pods"]
     verbs: ["get", "list"]
-  {{- if $.Values.config.allowDeploy }}
   {{- include "swiss.deployRules" $ | nindent 2 }}
-  {{- else }}
-  {{- include "swiss.objectReadRules" $ | nindent 2 }}
-  {{- end }}
   {{- include "swiss.llmsvcRules" $ | nindent 2 }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1

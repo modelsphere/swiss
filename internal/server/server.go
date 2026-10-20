@@ -72,6 +72,9 @@ type Server struct {
 	charts    map[string]chartListing
 	profile   *site.Profile
 	profileAt time.Time
+
+	// secretsMu orders read-modify-writes of the unified Secret.
+	secretsMu sync.Mutex
 }
 
 type openCatalog struct {
@@ -369,6 +372,21 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/catalog/{model}", s.handleCatalogModel)
 	mux.HandleFunc("GET /api/catalog/{model}/chart-versions", s.handleChartVersions)
 	mux.HandleFunc("GET /api/catalog/{model}/history", s.handleCatalogHistory)
+
+	/******************************************/
+	/*    writable catalog layers             */
+	/******************************************/
+	mux.HandleFunc("GET /api/catalog/{model}/variants/{id}", s.handleCatalogVariant)
+	mux.HandleFunc("PUT /api/catalog/{model}/variants/{id}", s.handleCatalogVariant)
+	mux.HandleFunc("DELETE /api/catalog/{model}/variants/{id}", s.handleCatalogVariant)
+
+	/******************************************/
+	/*    secrets management                  */
+	/******************************************/
+	mux.HandleFunc("GET /api/secrets", s.handleSecrets)
+	mux.HandleFunc("PUT /api/secrets/{key}", s.handleSecret)
+	mux.HandleFunc("DELETE /api/secrets/{key}", s.handleSecret)
+
 	mux.HandleFunc("GET /api/deployments", s.handleDeployments)
 	mux.HandleFunc("GET /api/nodes", s.handleNodes)
 	mux.HandleFunc("GET /api/profile", s.handleProfile)
@@ -413,7 +431,7 @@ func (s *Server) Handler() http.Handler {
 			"POST /api/releases/{namespace}/{release}/revisions/{revision}/diff",
 		} {
 			mux.HandleFunc(p, func(w http.ResponseWriter, _ *http.Request) {
-				writeError(w, http.StatusForbidden, "this swissd is read-only: set server.allowDeploy and grant rbac.allowDeploy")
+				writeError(w, http.StatusForbidden, "this swissd is read-only: set server.allowDeploy")
 			})
 		}
 	}

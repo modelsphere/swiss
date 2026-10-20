@@ -13,6 +13,9 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 // Release is a live helm release, enough to answer "would this collide" and
@@ -272,7 +275,7 @@ func (f Fake) Object(_ context.Context, ref ObjectRef) (*Object, error) {
 func (f Fake) Secret(_ context.Context, ref string) (map[string]string, error) {
 	s, ok := f.Secrets[ref]
 	if !ok {
-		return nil, fmt.Errorf("no secret %s", ref)
+		return nil, apierrors.NewNotFound(schema.GroupResource{Resource: "secrets"}, ref)
 	}
 	return s, nil
 }

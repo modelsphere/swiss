@@ -42,29 +42,6 @@ config:
   # How long a fetched catalog or profile is reused before refetching.
   cacheTTL: 60s
 
-  # Gates every endpoint that changes a cluster, and grants the RBAC those
-  # endpoints need -- one switch, so swissd cannot accept an apply it has no
-  # permission to perform. Needs persistence and one replica.
-  #
-  # On by default: swissd is where installs are managed. Set false for a
-  # read-only viewer, which also drops the write grant below.
-  #
-  # The grant is everything the sglang and vllm charts render, in the namespaces
-  # rbac.scope selects, and nothing else:
-  #
-  #   core                          configmaps, services, serviceaccounts, secrets
-  #   apps                          deployments
-  #   policy                        poddisruptionbudgets
-  #   rbac                          roles, rolebindings   (the cart subchart)
-  #   monitoring.coreos.com         servicemonitors
-  #   leaderworkerset.x-k8s.io      leaderworkersets
-  #   disaggregatedset.x-k8s.io     disaggregatedsets    (sglang prefill/decode)
-  #   autoscaling.modelsphere.dev   llmscalers           (and autoscaling.modelsphere.dev)
-  #   inference.modelsphere.dev     llmslorequirements   (and inference.modelsphere.dev)
-  #   routing.modelsphere.dev       modelroutes          (and routing.modelsphere.dev)
-  #
-  allowDeploy: true
-
   # Drafts, plans and the audit log. Never the source of truth for what is
   # deployed -- every applied plan is also written beside its release.
   database: /data/swiss.db
@@ -117,6 +94,26 @@ auth:
 # ---------------------------------------------------------------------------
 # RBAC. Read the comments before widening this.
 # ---------------------------------------------------------------------------
+# swissd deploys, and writes its own site profile and the Secret beside it: the
+# chart always grants both. Deploying needs persistence and one replica.
+#
+# The deploy grant is everything the sglang and vllm charts render, in the
+# namespaces rbac.scope selects, and nothing else:
+#
+#   core                          configmaps, services, serviceaccounts, secrets
+#   apps                          deployments
+#   policy                        poddisruptionbudgets
+#   rbac                          roles, rolebindings   (the cart subchart)
+#   monitoring.coreos.com         servicemonitors
+#   leaderworkerset.x-k8s.io      leaderworkersets
+#   disaggregatedset.x-k8s.io     disaggregatedsets    (sglang prefill/decode)
+#   autoscaling.modelsphere.dev   llmscalers           (and autoscaling.modelsphere.dev)
+#   inference.modelsphere.dev     llmslorequirements   (and inference.modelsphere.dev)
+#   routing.modelsphere.dev       modelroutes          (and routing.modelsphere.dev)
+#
+# The profile grant is configmaps and secrets create/update in the profile's
+# namespace -- the profile and <profile>-secrets, which holds what the web sets,
+# a writable catalog's token. RBAC cannot scope a create to one name.
 rbac:
   create: true
 
@@ -146,15 +143,6 @@ rbac:
   # elsewhere. Off means swissd shows capacity and reports usage as unknown,
   # which is the honest answer when it cannot see every pod.
   nodeGPUUsage: true
-
-  # Lets swissd write its own site profile: the setup page on a fresh install,
-  # and the profile editor after that. swissd owns the profile now -- the chart
-  # creates none -- so turning this off means the ConfigMap has to be managed
-  # by hand or by GitOps, and the web editor will say it cannot write.
-  #
-  # It is configmaps create/update in swissd's own namespace. RBAC cannot scope
-  # a create to one name.
-  manageProfile: true
 
   # Namespaces holding model releases. Used when scope is namespaced.
   namespaces: []

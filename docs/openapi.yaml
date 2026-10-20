@@ -47,7 +47,7 @@ info:
     |---|---|
     | 400 | the request is wrong: bad JSON, unknown catalog, invalid field |
     | 401 | not logged in |
-    | 403 | read-only swissd (`config.allowDeploy` off), or swissd cannot write |
+    | 403 | read-only swissd (`server.allowDeploy` off), or swissd cannot write |
     | 404 | no such model, variant, plan, release or revision |
     | 409 | the cluster moved or refuses: release exists / is missing / is pending, `expectRevision` stale, install method mismatch |
     | 412 | the release has no reachable entrypoint (probe, chat) |
@@ -56,7 +56,7 @@ info:
 
     ## Read-only mode
 
-    With `config.allowDeploy` off, `POST /api/plans`, `/diff`, `/apply`,
+    With `server.allowDeploy` off, `POST /api/plans`, `/diff`, `/apply`,
     `/install`, rollback, revision diff, uninstall, and `PUT`/`DELETE` on `slo`
     answer 403. Everything else works.
 
@@ -109,6 +109,8 @@ tags:
     description: The release's LLMSLORequirement, through the SLO server.
   - name: runs
     description: The operation log in swissd's database.
+  - name: secrets
+    description: The one Secret swissd keeps beside the profile, written from the web.
 
 paths:
   /healthz:
@@ -469,6 +471,100 @@ paths:
                     items: { $ref: "#/components/schemas/CatalogRevision" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
+  /api/catalog/{model}/variants/{id}:
+    parameters:
+      - $ref: "#/components/parameters/model"
+      - { name: id, in: path, required: true, description: "The variant id, its file's name.", schema: { type: string } }
+      - $ref: "#/components/parameters/catalog"
+    get:
+      tags: [catalog]
+      summary: Read a variant file, with its digest as ETag
+      operationId: getCatalogVariantFile
+      responses:
+        "200": { description: The file., content: { application/yaml: { schema: { type: string } } } }
+        "403": { $ref: "#/components/responses/NotWritable" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/NoCatalogToken" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+    put:
+      tags: [catalog]
+      summary: Add (If-None-Match *) or replace (If-Match) a variant file
+      description: |
+        Like every method here, passed through to the writable catalog's
+        catalog-server, `api/v2/models/{model}/variants/{id}`, with its write
+        token (model-catalog's `docs/openapi.yaml`). Headers, body, `dryRun` and
+        `message` go as sent; catalog-server's answer comes back as it is, its
+        `ETag`, 412, 422 and 428 included. A successful write drops swissd's
+        cached index of that catalog.
+      operationId: putCatalogVariantFile
+      parameters:
+        - { name: dryRun, in: query, schema: { type: string, enum: ["true", "1"] } }
+        - { name: message, in: query, description: The commit's message., schema: { type: string } }
+      requestBody:
+        required: true
+        content: { application/yaml: { schema: { type: string } } }
+      responses:
+        "200": { description: "Replaced, would be (dryRun), or unchanged: catalog-server's answer." }
+        "201": { description: Added. }
+        "403": { $ref: "#/components/responses/NotWritable" }
+        "409": { $ref: "#/components/responses/NoCatalogToken" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+    delete:
+      tags: [catalog]
+      summary: Delete a variant file (If-Match)
+      operationId: deleteCatalogVariantFile
+      parameters:
+        - { name: dryRun, in: query, schema: { type: string, enum: ["true", "1"] } }
+        - { name: message, in: query, description: The commit's message., schema: { type: string } }
+      responses:
+        "200": { description: "Deleted, or would be: catalog-server's answer." }
+        "403": { $ref: "#/components/responses/NotWritable" }
+        "409": { $ref: "#/components/responses/NoCatalogToken" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
+  /api/secrets:
+    get:
+      tags: [secrets]
+      summary: The keys set in swissd's Secret, never a value
+      description: The Secret is `<profile ConfigMap>-secrets`, beside the profile.
+      operationId: listSecrets
+      responses:
+        "200":
+          description: The keys.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Secrets" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
+  /api/secrets/{key}:
+    parameters:
+      - { name: key, in: path, required: true, description: "catalog.<name>.token, the only kind yet.", schema: { type: string, pattern: '^catalog\.[a-z0-9][a-z0-9._-]*\.token$' } }
+    put:
+      tags: [secrets]
+      summary: Set one key
+      operationId: putSecret
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [value], properties: { value: { type: string, minLength: 1 } } }
+      responses:
+        "200": { description: The keys now set., content: { application/json: { schema: { $ref: "#/components/schemas/Secrets" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+    delete:
+      tags: [secrets]
+      summary: Remove one key
+      operationId: deleteSecret
+      responses:
+        "200": { description: The keys now set., content: { application/json: { schema: { $ref: "#/components/schemas/Secrets" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "502": { $ref: "#/components/responses/BadGateway" }
 
@@ -1121,9 +1217,19 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
-          example: { error: "this swissd is read-only: set server.allowDeploy and grant rbac.allowDeploy" }
+          example: { error: "this swissd is read-only: set server.allowDeploy" }
     NotFound:
       description: No such model, variant, plan, release or revision.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotWritable:
+      description: The catalog is not marked writable in the site profile.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NoCatalogToken:
+      description: The catalog has no write token in swissd's Secret yet.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
@@ -1396,6 +1502,13 @@ components:
           type: object
           description: Values every release on this site gets, as the site layer.
 
+    Secrets:
+      type: object
+      required: [secret, keys]
+      properties:
+        secret: { type: string, description: "namespace/name; empty for a profile read from a file." }
+        keys: { type: array, items: { type: string } }
+
     CatalogRepo:
       type: object
       required: [name, url]
@@ -1404,6 +1517,7 @@ components:
         url: { type: string }
         schemaVersion: { $ref: "#/components/schemas/CatalogSchema", description: "Unset is v1." }
         default: { type: boolean }
+        writable: { type: boolean, description: "A catalog-server catalog the console edits; needs schemaVersion v2 and an http(s) url. swissd only reads it." }
 
     Chart:
       type: object

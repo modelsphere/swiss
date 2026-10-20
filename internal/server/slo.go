@@ -27,7 +27,7 @@ import (
 // own vocabulary on its side of the wire.
 func (s *Server) handleSLO(w http.ResponseWriter, r *http.Request) {
 	if (r.Method == http.MethodPut || r.Method == http.MethodDelete) && !s.cfg.Server.AllowDeploy {
-		writeError(w, http.StatusForbidden, "this swissd is read-only: set server.allowDeploy and grant rbac.allowDeploy")
+		writeError(w, http.StatusForbidden, "this swissd is read-only: set server.allowDeploy")
 		return
 	}
 	ns, release := r.PathValue("namespace"), r.PathValue("release")

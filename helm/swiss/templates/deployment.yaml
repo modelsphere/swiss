@@ -1,8 +1,11 @@
-{{- if and .Values.config.allowDeploy (not .Values.persistence.enabled) (not .Values.persistence.existingClaim) }}
-{{- fail "config.allowDeploy needs persistence: the database holds the audit log, which is not cluster state and cannot be rebuilt, plus the release -> plan mapping apply and upgrade read. Set persistence.enabled or persistence.existingClaim." }}
+{{- if or (hasKey .Values.config "allowDeploy") (hasKey .Values.rbac "manageProfile") }}
+{{- fail "config.allowDeploy and rbac.manageProfile were removed: swissd always deploys and writes its profile. Drop them from the values." }}
 {{- end }}
-{{- if and .Values.config.allowDeploy (gt (int .Values.replicaCount) 1) }}
-{{- fail "config.allowDeploy runs one replica: sqlite is a single writer and the volume is ReadWriteOnce" }}
+{{- if and (not .Values.persistence.enabled) (not .Values.persistence.existingClaim) }}
+{{- fail "swissd needs persistence: the database holds the audit log, which is not cluster state and cannot be rebuilt, plus the release -> plan mapping apply and upgrade read. Set persistence.enabled or persistence.existingClaim." }}
+{{- end }}
+{{- if gt (int .Values.replicaCount) 1 }}
+{{- fail "swissd runs one replica: sqlite is a single writer and the volume is ReadWriteOnce" }}
 {{- end }}
 apiVersion: apps/v1
 kind: Deployment
@@ -16,7 +19,7 @@ spec:
   {{- if .Values.updateStrategy }}
   strategy:
     {{- toYaml .Values.updateStrategy | nindent 4 }}
-  {{- else if and .Values.config.allowDeploy (or .Values.persistence.enabled .Values.persistence.existingClaim) }}
+  {{- else }}
   strategy:
     type: Recreate
   {{- end }}
@@ -85,10 +88,8 @@ spec:
               mountPath: /etc/swiss-auth
               readOnly: true
             {{- end }}
-            {{- if .Values.config.allowDeploy }}
             - name: data
               mountPath: {{ dir .Values.config.database }}
-            {{- end }}
       volumes:
         - name: config
           configMap:
@@ -102,15 +103,9 @@ spec:
             secretName: {{ include "swiss.authSecretName" . }}
             defaultMode: 0400
         {{- end }}
-        {{- if .Values.config.allowDeploy }}
         - name: data
-          {{- if or .Values.persistence.enabled .Values.persistence.existingClaim }}
           persistentVolumeClaim:
             claimName: {{ .Values.persistence.existingClaim | default (printf "%s-data" (include "swiss.fullname" .)) }}
-          {{- else }}
-          emptyDir: {}
-          {{- end }}
-        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

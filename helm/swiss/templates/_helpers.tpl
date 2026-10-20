@@ -66,23 +66,6 @@ the RBAC that reads it cannot disagree.
 {{- end -}}
 {{- end -}}
 
-{{/*
-The custom resources a release page reports on, read-only. Granted whether or
-not deploy is on: reading what a ModelRoute or LLMScaler last observed changes
-nothing, and the page is how an operator finds out a model is not routed.
-*/}}
-{{- define "swiss.objectReadRules" -}}
-- apiGroups: ["autoscaling.4pd.io", "autoscaling.modelsphere.dev"]
-  resources: ["llmscalers"]
-  verbs: ["get"]
-- apiGroups: ["inference.x-k8s.io", "inference.modelsphere.dev"]
-  resources: ["llmslorequirements"]
-  verbs: ["get"]
-- apiGroups: ["routing.gpucluster.io", "routing.modelsphere.dev"]
-  resources: ["modelroutes"]
-  verbs: ["get"]
-{{- end -}}
-
 {{/* Exactly what the sglang and vllm charts render, plus helm's release storage. */}}
 {{- define "swiss.deployRules" -}}
 {{- $all := list "get" "list" "watch" "create" "update" "patch" "delete" }}
@@ -132,19 +115,13 @@ passes them on.
 
 {{/*
 LLMService access, granted whichever install method a release uses: the method
-is picked per install, so the grant cannot depend on it. With allowDeploy the
-release Role can write llmservices; without it, get/list/watch is enough for
-the deployments page. controllerrevisions are always read-only: they hold
-archived specs.
+is picked per install, so the grant cannot depend on it. controllerrevisions are
+read-only: they hold archived specs.
 */}}
 {{- define "swiss.llmsvcRules" -}}
-{{- $verbs := list "get" "list" "watch" -}}
-{{- if .Values.config.allowDeploy -}}
-{{- $verbs = list "get" "list" "watch" "create" "update" "patch" "delete" -}}
-{{- end -}}
 - apiGroups: ["serving.modelsphere.dev"]
   resources: ["llmservices"]
-  verbs: {{ $verbs | toJson }}
+  verbs: ["get","list","watch","create","update","patch","delete"]
 - apiGroups: ["apps"]
   resources: ["controllerrevisions"]
   verbs: {{ list "get" "list" | toJson }}

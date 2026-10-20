@@ -137,6 +137,32 @@ func TestCatalogsValidation(t *testing.T) {
 	}
 }
 
+// Only a catalog catalog-server can serve may be marked writable, and the
+// profile holds no token for it.
+func TestWritableCatalog(t *testing.T) {
+	const head = "name: prod\nmodel:\n  pathTemplate: /models/{{name}}\ncatalogs:\n  - name: internal\n"
+
+	p, err := Parse([]byte(head+"    url: https://catalog.example.com/\n    schemaVersion: v2\n    writable: true\n"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := CatalogRepo{Name: "internal", URL: "https://catalog.example.com/", SchemaVersion: "v2", Writable: true}
+	if got := p.CatalogRepos(); len(got) != 1 || got[0] != want {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+
+	for name, raw := range map[string]string{
+		"schema v1":      "    url: https://catalog.example.com/\n    schemaVersion: v1\n    writable: true\n",
+		"no schema":      "    url: https://catalog.example.com/\n    writable: true\n",
+		"a path":         "    url: /mnt/catalog\n    schemaVersion: v2\n    writable: true\n",
+		"a token inline": "    url: https://catalog.example.com/\n    schemaVersion: v2\n    writable: true\n    token: hunter2\n",
+	} {
+		if _, err := Parse([]byte(head+raw), "test"); err == nil {
+			t.Errorf("%s: must be refused", name)
+		}
+	}
+}
+
 // One catalog may be marked default; it is the one a page opens in.
 func TestCatalogDefault(t *testing.T) {
 	p, err := Parse([]byte("name: prod\nmodel:\n  pathTemplate: /models/{{name}}\n"+

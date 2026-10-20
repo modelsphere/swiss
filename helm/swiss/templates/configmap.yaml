@@ -25,7 +25,7 @@ data:
     server:
       addr: ":8080"
       cacheTTL: {{ .Values.config.cacheTTL }}
-      allowDeploy: {{ .Values.config.allowDeploy }}
+      allowDeploy: true
       database: {{ .Values.config.database | quote }}
       auth:
         {{- if .Values.auth.disabled }}

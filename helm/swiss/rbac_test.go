@@ -43,33 +43,18 @@ func TestChartGrantsLLMService(t *testing.T) {
 	}
 	crud := `verbs: ["get","list","watch","create","update","patch","delete"]`
 
-	read, err := helmTemplate(t, "config.allowDeploy=false")
-	if err != nil {
-		t.Fatal(read)
-	}
-	if strings.Contains(read, "leaderworkersets") || strings.Contains(read, crud) {
-		t.Fatal("without allowDeploy the release Role must stay read-only")
-	}
-	if !strings.Contains(read, `resources: ["llmservices"]`) || !strings.Contains(read, `verbs: ["get","list","watch"]`) || !strings.Contains(read, "controllerrevisions") {
-		t.Fatalf("read view missing llmservices:\n%s", read)
-	}
-	if !strings.Contains(read, `resources: ["modelroutes"]`) {
-		t.Fatal("read view lost the object read rules")
-	}
-
-	// Deploy is the chart's default.
 	deploy, err := helmTemplate(t)
 	if err != nil {
 		t.Fatal(deploy)
 	}
 	if !strings.Contains(deploy, "leaderworkersets") || !strings.Contains(deploy, "disaggregatedsets") {
-		t.Fatal("allowDeploy lost deployRules")
+		t.Fatal("the release Role lost deployRules")
 	}
 	if !strings.Contains(deploy, `resources: ["llmservices"]`) || !strings.Contains(deploy, crud) || !strings.Contains(deploy, "controllerrevisions") {
-		t.Fatalf("allowDeploy missing llmservices CRUD:\n%s", deploy)
+		t.Fatalf("missing llmservices CRUD:\n%s", deploy)
 	}
 	if !strings.Contains(deploy, `resources: ["namespaces"]`) {
-		t.Fatal("allowDeploy missing the namespaces ClusterRole")
+		t.Fatal("missing the namespaces ClusterRole")
 	}
 	if strings.Contains(deploy, "applyWith:") {
 		t.Fatal("the chart must not render applyWith; that is the site profile")
