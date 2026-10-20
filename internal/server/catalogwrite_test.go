@@ -18,7 +18,8 @@ type seen struct {
 
 // writableCatalog is a swissd whose profile lists "internal", writable, and
 // "public", not, both at a fake catalog-server; secrets seeds swissd's Secret.
-func writableCatalog(t *testing.T, secrets map[string]string) (*httptest.Server, *Server, *[]seen) {
+// index, when given, is the file internal's URL names.
+func writableCatalog(t *testing.T, secrets map[string]string, index ...string) (*httptest.Server, *Server, *[]seen) {
 	t.Helper()
 	var got []seen
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -31,7 +32,7 @@ func writableCatalog(t *testing.T, secrets map[string]string) (*httptest.Server,
 	t.Cleanup(up.Close)
 	probe := cluster.Fake{
 		Maps: map[string]map[string]string{"swiss/site-profile": {"profile.yaml": profileYAML + "catalogs:\n" +
-			"  - name: internal\n    url: " + up.URL + "/base/\n    schemaVersion: v2\n    writable: true\n" +
+			"  - name: internal\n    url: " + up.URL + "/base/" + strings.Join(index, "") + "\n    schemaVersion: v2\n    writable: true\n" +
 			"  - name: public\n    url: " + up.URL + "/pub/\n    schemaVersion: v2\n"}},
 		Secrets: map[string]map[string]string{},
 	}
@@ -58,7 +59,7 @@ func send(t *testing.T, method, url, body string, header map[string]string) *htt
 	return res
 }
 
-// A write goes to the catalog's own api/v2 as sent, with the catalog's token,
+// A write goes to the catalog's own api/v2, path and query as sent, with the catalog's token,
 // and swissd drops the index it cached so the edit shows on the next read.
 func TestCatalogVariantWritePassesThrough(t *testing.T) {
 	srv, s, got := writableCatalog(t, map[string]string{"catalog.internal.token": "tok"})
@@ -69,7 +70,7 @@ func TestCatalogVariantWritePassesThrough(t *testing.T) {
 	key := catalog.CacheKey(repo.URL, repo.SchemaVersion)
 	s.cats[key] = openCatalog{}
 
-	res := send(t, "PUT", srv.URL+"/api/catalog/kimi/variants/tp8?catalog=internal&dryRun=true&message=%E8%B0%83", "version: 1.0.1\n",
+	res := send(t, "PUT", srv.URL+"/api/catalogs/internal/api/v2/models/kimi/variants/tp8?dryRun=true&message=%E8%B0%83", "version: 1.0.1\n",
 		map[string]string{"If-Match": `"sha256:old"`, "Cookie": "swiss_session=x"})
 	if res.StatusCode != 200 || res.Header.Get("ETag") != `"sha256:new"` {
 		t.Fatalf("response not passed back: %d %q", res.StatusCode, res.Header.Get("ETag"))
@@ -89,12 +90,52 @@ func TestCatalogVariantWritePassesThrough(t *testing.T) {
 	}
 }
 
+// A new model goes to the catalog's model collection, its JSON body as sent.
+func TestCatalogNewModelPassesThrough(t *testing.T) {
+	srv, _, got := writableCatalog(t, map[string]string{"catalog.internal.token": "tok"})
+	body := `{"metadata":"name: m\n","variants":["id: a\n"]}`
+	res := send(t, "POST", srv.URL+"/api/catalogs/internal/api/v2/models?dryRun=true", body, map[string]string{"Content-Type": "application/json"})
+	if res.StatusCode != 200 || len(*got) != 1 {
+		t.Fatalf("status %d, catalog hits %d", res.StatusCode, len(*got))
+	}
+	if g := (*got)[0]; g.method != "POST" || g.path != "/base/api/v2/models" || g.query != "dryRun=true" || g.body != body || g.header.Get("Authorization") != "Bearer tok" {
+		t.Fatalf("not forwarded as sent: %+v", g)
+	}
+}
+
+// A catalog URL may name its index file for reads; writes go to the API beside it.
+func TestCatalogWriteBesideANamedIndex(t *testing.T) {
+	srv, _, got := writableCatalog(t, map[string]string{"catalog.internal.token": "tok"}, "index-v2.json")
+	send(t, "POST", srv.URL+"/api/catalogs/internal/api/v2/models", "{}", nil)
+	if len(*got) != 1 || (*got)[0].path != "/base/api/v2/models" {
+		t.Fatalf("forwarded to %+v", *got)
+	}
+}
+
+// Settings, setup and a model's metadata are catalog-server's API too: every
+// api/v2 path goes through as it is, with no route of swissd's own.
+func TestCatalogAPIPassesEveryPath(t *testing.T) {
+	srv, _, got := writableCatalog(t, map[string]string{"catalog.internal.token": "tok"})
+	calls := []string{"GET init", "POST init", "GET catalog", "PUT catalog", "GET models/kimi/metadata", "PUT models/kimi/metadata"}
+	for _, c := range calls {
+		method, path, _ := strings.Cut(c, " ")
+		send(t, method, srv.URL+"/api/catalogs/internal/api/v2/"+path, "", nil)
+	}
+	var reached []string
+	for _, g := range *got {
+		reached = append(reached, g.method+" "+strings.TrimPrefix(g.path, "/base/api/v2/"))
+	}
+	if strings.Join(reached, ",") != strings.Join(calls, ",") {
+		t.Fatalf("reached %v, want %v", reached, calls)
+	}
+}
+
 func TestCatalogVariantWriteRefusals(t *testing.T) {
 	srv, _, got := writableCatalog(t, nil)
 	for path, want := range map[string]int{
-		"/api/catalog/kimi/variants/tp8?catalog=public":   http.StatusForbidden, // not writable
-		"/api/catalog/kimi/variants/tp8?catalog=internal": http.StatusConflict,  // no token yet
-		"/api/catalog/kimi/variants/tp8?catalog=absent":   http.StatusNotFound,
+		"/api/catalogs/public/api/v2/models/kimi/variants/tp8":   http.StatusForbidden, // not writable
+		"/api/catalogs/internal/api/v2/models/kimi/variants/tp8": http.StatusConflict,  // no token yet
+		"/api/catalogs/absent/api/v2/models/kimi/variants/tp8":   http.StatusNotFound,
 	} {
 		if res := send(t, "DELETE", srv.URL+path, "", nil); res.StatusCode != want {
 			t.Errorf("%s: %d, want %d", path, res.StatusCode, want)

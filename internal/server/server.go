@@ -376,9 +376,10 @@ func (s *Server) Handler() http.Handler {
 	/******************************************/
 	/*    writable catalog layers             */
 	/******************************************/
-	mux.HandleFunc("GET /api/catalog/{model}/variants/{id}", s.handleCatalogVariant)
-	mux.HandleFunc("PUT /api/catalog/{model}/variants/{id}", s.handleCatalogVariant)
-	mux.HandleFunc("DELETE /api/catalog/{model}/variants/{id}", s.handleCatalogVariant)
+	mux.HandleFunc("GET /api/catalogs/{catalog}/api/v2/{path...}", s.handleCatalogAPI)
+	mux.HandleFunc("PUT /api/catalogs/{catalog}/api/v2/{path...}", s.handleCatalogAPI)
+	mux.HandleFunc("POST /api/catalogs/{catalog}/api/v2/{path...}", s.handleCatalogAPI)
+	mux.HandleFunc("DELETE /api/catalogs/{catalog}/api/v2/{path...}", s.handleCatalogAPI)
 
 	/******************************************/
 	/*    secrets management                  */

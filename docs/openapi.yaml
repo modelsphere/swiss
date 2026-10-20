@@ -404,7 +404,6 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "502": { $ref: "#/components/responses/BadGateway" }
-
   /api/catalog/{model}:
     get:
       tags: [catalog]
@@ -474,56 +473,54 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "502": { $ref: "#/components/responses/BadGateway" }
 
-  /api/catalog/{model}/variants/{id}:
+  /api/catalogs/{catalog}/api/v2/{path...}:
     parameters:
-      - $ref: "#/components/parameters/model"
-      - { name: id, in: path, required: true, description: "The variant id, its file's name.", schema: { type: string } }
-      - $ref: "#/components/parameters/catalog"
+      - { name: catalog, in: path, required: true, description: The site profile's catalog name., schema: { type: string } }
+      - { name: "path...", in: path, required: true, description: "catalog-server's path below api/v2/.", schema: { type: string } }
     get:
       tags: [catalog]
-      summary: Read a variant file, with its digest as ETag
-      operationId: getCatalogVariantFile
+      summary: catalog-server's GET, passed through
+      description: |
+        Like every method here: a writable catalog's catalog-server API, passed
+        through as it is. `/api/catalogs/<name>/api/v2/<path>` is
+        `<catalog url>api/v2/<path>`, with the catalog's write token from swissd's
+        Secret. Paths, queries, headers, bodies and answers are catalog-server's
+        (model-catalog's `docs/openapi.yaml`): `POST init` sets an empty catalog
+        up, `PUT catalog` changes its settings, `POST models` adds a model,
+        `PUT models/{model}/metadata` edits one, and
+        `GET`/`PUT`/`DELETE models/{model}/variants/{id}` reads and writes a
+        variant. swissd answers only 403 (not writable in the profile), 404 (no
+        such catalog), 409 (no token yet) and 502; a successful write drops its
+        cached index of that catalog.
+      operationId: getCatalogAPI
       responses:
-        "200": { description: The file., content: { application/yaml: { schema: { type: string } } } }
+        default: { description: "catalog-server's answer." }
         "403": { $ref: "#/components/responses/NotWritable" }
-        "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/NoCatalogToken" }
-        "502": { $ref: "#/components/responses/BadGateway" }
     put:
       tags: [catalog]
-      summary: Add (If-None-Match *) or replace (If-Match) a variant file
-      description: |
-        Like every method here, passed through to the writable catalog's
-        catalog-server, `api/v2/models/{model}/variants/{id}`, with its write
-        token (model-catalog's `docs/openapi.yaml`). Headers, body, `dryRun` and
-        `message` go as sent; catalog-server's answer comes back as it is, its
-        `ETag`, 412, 422 and 428 included. A successful write drops swissd's
-        cached index of that catalog.
-      operationId: putCatalogVariantFile
-      parameters:
-        - { name: dryRun, in: query, schema: { type: string, enum: ["true", "1"] } }
-        - { name: message, in: query, description: The commit's message., schema: { type: string } }
-      requestBody:
-        required: true
-        content: { application/yaml: { schema: { type: string } } }
+      summary: catalog-server's PUT, passed through
+      operationId: putCatalogAPI
       responses:
-        "200": { description: "Replaced, would be (dryRun), or unchanged: catalog-server's answer." }
-        "201": { description: Added. }
+        default: { description: "catalog-server's answer." }
         "403": { $ref: "#/components/responses/NotWritable" }
         "409": { $ref: "#/components/responses/NoCatalogToken" }
-        "502": { $ref: "#/components/responses/BadGateway" }
+    post:
+      tags: [catalog]
+      summary: catalog-server's POST, passed through
+      operationId: postCatalogAPI
+      responses:
+        default: { description: "catalog-server's answer." }
+        "403": { $ref: "#/components/responses/NotWritable" }
+        "409": { $ref: "#/components/responses/NoCatalogToken" }
     delete:
       tags: [catalog]
-      summary: Delete a variant file (If-Match)
-      operationId: deleteCatalogVariantFile
-      parameters:
-        - { name: dryRun, in: query, schema: { type: string, enum: ["true", "1"] } }
-        - { name: message, in: query, description: The commit's message., schema: { type: string } }
+      summary: catalog-server's DELETE, passed through
+      operationId: deleteCatalogAPI
       responses:
-        "200": { description: "Deleted, or would be: catalog-server's answer." }
+        default: { description: "catalog-server's answer." }
         "403": { $ref: "#/components/responses/NotWritable" }
         "409": { $ref: "#/components/responses/NoCatalogToken" }
-        "502": { $ref: "#/components/responses/BadGateway" }
 
   /api/secrets:
     get:

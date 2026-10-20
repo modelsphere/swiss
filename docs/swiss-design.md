@@ -201,15 +201,17 @@ variants:
 
 **A writable catalog is edited through swissd.** A profile entry with
 `writable: true` is a catalog-server (schema v2) that takes writes on its
-`api/v2/`. swissd passes a variant file's read and writes through to it and
-checks nothing itself: catalog-server holds the rules.
+`api/v2/`. swissd stands in for the catalog's address and passes that API
+through as it is -- no endpoint of its own to keep in step with catalog-server's,
+and it checks nothing itself: catalog-server holds the rules.
 
 ```
-PUT /api/catalog/<model>/variants/<id>?catalog=<name>&dryRun=…   (If-Match | If-None-Match: *)
-  profile catalogs[<name>].writable      else 403
-  Secret[catalog.<name>.token]           else 409
-  ──▶ <url>api/v2/models/<model>/variants/<id>, Authorization: Bearer <token>
-  2xx ──▶ drop the cached index, so the next read shows the commit
+/api/catalogs/<name>/api/v2/<path>           e.g. POST init (setup), PUT catalog (settings),
+                                             POST models, PUT models/<m>/metadata, PUT models/<m>/variants/<id>
+  profile catalogs[<name>].writable          else 403
+  Secret[catalog.<name>.token]               else 409
+  ──▶ <url>api/v2/<path>, query, headers and body as sent, Authorization: Bearer <token>
+  a write's 2xx ──▶ drop the cached index, so the next read shows the commit
 ```
 
 **swissd keeps one Secret, beside the profile: `<profile ConfigMap>-secrets`.**

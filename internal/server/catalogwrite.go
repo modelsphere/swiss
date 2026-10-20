@@ -8,8 +8,10 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"path"
 	"regexp"
 	"slices"
+	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
@@ -100,13 +102,11 @@ func (s *Server) handleSecret(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"secret": s.secretRef(), "keys": secretKeys(data)})
 }
 
-// handleCatalogVariant passes a variant file's read or write through to the
-// writable catalog's catalog-server, with its token: catalog-server checks
-// the change, so this only routes it. ?catalog= picks the catalog as on reads;
-// the rest of the query (dryRun, message) goes along.
-func (s *Server) handleCatalogVariant(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	repo, err := s.CatalogRepo(r.Context(), q.Get("catalog"))
+// handleCatalogAPI is a writable catalog's catalog-server API, passed through
+// as it is: /api/catalogs/<name>/api/v2/<path> is <url>api/v2/<path>, with the
+// catalog's token. catalog-server checks every change, so this only routes it.
+func (s *Server) handleCatalogAPI(w http.ResponseWriter, r *http.Request) {
+	repo, err := s.CatalogRepo(r.Context(), r.PathValue("catalog"))
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
@@ -130,9 +130,12 @@ func (s *Server) handleCatalogVariant(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	q.Del("catalog")
-	target = target.JoinPath("api/v2/models", r.PathValue("model"), "variants", r.PathValue("id"))
-	target.RawQuery = q.Encode()
+	// A URL naming its index file reads fine; catalog-server's API is beside it.
+	if strings.HasSuffix(target.Path, ".json") {
+		target.Path = path.Dir(target.Path)
+	}
+	target = target.JoinPath("api/v2", r.PathValue("path"))
+	target.RawQuery = r.URL.RawQuery
 
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
@@ -143,12 +146,15 @@ func (s *Server) handleCatalogVariant(w http.ResponseWriter, r *http.Request) {
 		// The commit is the catalog's new state; serving the old index for the
 		// rest of the TTL would show the edit as lost.
 		ModifyResponse: func(res *http.Response) error {
-			if r.Method != http.MethodGet && res.StatusCode < 300 {
+			if r.Method == http.MethodGet {
+				return nil
+			}
+			if res.StatusCode < 300 {
 				s.mu.Lock()
 				delete(s.cats, catalog.CacheKey(repo.URL, repo.SchemaVersion))
 				s.mu.Unlock()
-				s.log.InfoContext(r.Context(), "catalog write", "catalog", repo.Name, "method", r.Method, "path", target.Path, "status", res.StatusCode)
 			}
+			s.log.InfoContext(r.Context(), "catalog write", "catalog", repo.Name, "method", r.Method, "url", target.String(), "status", res.StatusCode)
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
