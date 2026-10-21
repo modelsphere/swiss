@@ -240,3 +240,118 @@ readinessProbe:
   initialDelaySeconds: 3
   periodSeconds: 10
   failureThreshold: 3
+
+# ---------------------------------------------------------------------------
+# catalog-server: a catalog of your own, vendored from model-catalog's
+# catalog-server/chart (templates/catalog-server/). Off by default. On, it is
+# installed beside swissd as <release>-catalog-server; point a site profile
+# catalog at it, writable, to edit it from the web. Everything below enabled is
+# that chart's values.
+# ---------------------------------------------------------------------------
+catalogServer:
+  enabled: false
+  # catalog-server, with model-catalog's web app, in one pod: the image
+  # (catalog-server/Dockerfile) serves the catalog's git repository, kept on a
+  # volume, its write API, and the pages. Settings are catalog-server's config
+  # file (catalog-server.example.yaml), rendered from config below.
+  image:
+    repository: ghcr.io/modelsphere/catalog-server
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  imagePullSecrets: []
+
+  nameOverride: ""
+  fullnameOverride: ""
+
+  config:
+    # The path it is served under: /catalog/ behind an ingress that keeps the
+    # prefix. Where clients reach it is the catalog's own say, its catalog.yaml's
+    # site and raw, written when it is set up; the chart routes to it (ingress,
+    # service) and does not check the two agree.
+    basePath: /
+    # The branch served and written: the repository's HEAD when empty; for a
+    # catalog set up here, its first branch's name.
+    branch: ""
+    # Seconds between looks at the branch, for a change pushed to the repository
+    # by someone else; 0 never.
+    syncInterval: 30
+    # Who commits; each commit's author is the token's holder.
+    committer:
+      name: catalog-server
+      email: catalog-server@localhost
+    # Serve the web app built into the image, under basePath.
+    pages: true
+    # Any other setting, merged over the above (catalog-server.example.yaml).
+    extra: {}
+
+  # Who may write, and set an empty catalog up. Neither set: the catalog is
+  # read-only, and the web app offers no editing.
+  tokens:
+    # A Secret of your own, holding the tokens file (README.md, Tokens) at key.
+    existingSecret: ""
+    key: tokens.yaml
+    # Or the entries themselves, rendered into a Secret: {name, email, sha256}
+    # -- the sha256 of the token, printf %s "$TOKEN" | sha256sum -- or {name,
+    # email, token}.
+    entries: []
+    # - name: Ada Lovelace
+    #   email: ada@example.com
+    #   sha256: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+
+  # The catalog's git repository lives on this volume, at /data/catalog: made
+  # there by setting the catalog up, or a bare clone you put there.
+  persistence:
+    enabled: true
+    # A PVC that exists already (holding a catalog, say) instead of a new one.
+    existingClaim: ""
+    storageClass: "" # empty: the cluster's default
+    accessModes: [ReadWriteOnce]
+    size: 2Gi
+    # The chart's own PVC is kept on helm uninstall: it is the catalog, history
+    # and all. Delete it by hand when done.
+    keep: true
+
+  service:
+    type: ClusterIP
+    port: 80
+
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    host: ""
+    path: /
+    pathType: Prefix
+    tls: []
+
+  # Or a Gateway API HTTPRoute, attached to a Gateway of yours.
+  httpRoute:
+    enabled: false
+    annotations: {}
+    # The Gateways it attaches to.
+    parentRefs: []
+    # - name: gateway-infra
+    #   namespace: monitoring
+    #   sectionName: http
+    hostnames: []
+    path: /
+    pathType: PathPrefix
+
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: "1", memory: 512Mi }
+
+  podAnnotations: {}
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000 # the image's node user
+    runAsGroup: 1000
+    fsGroup: 1000
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities: { drop: [ALL] }
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}

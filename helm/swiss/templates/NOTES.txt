@@ -55,3 +55,18 @@ what it no longer renders. Hand the ConfigMap to swissd before upgrading, or
 lose what is in it --
 
   kubectl -n {{ .Release.Namespace }} annotate configmap {{ include "swiss.fullname" . }}-profile     helm.sh/resource-policy=keep
+{{- if .Values.catalogServer.enabled }}{{ with fromYaml (include "swiss.catalogServer" .) }}
+
+catalog-server is installed as {{ include "catalog-server.fullname" . }}, at {{ include "catalog-server.url" . }}.
+{{- if not (include "catalog-server.writes" .) }}
+Writes are off: set catalogServer.tokens to edit it.
+{{- end }}
+To edit it from the model library, add it to the site profile, writable, and
+set its write token there:
+
+  catalogs:
+    - name: internal
+      url: {{ include "catalog-server.url" . }}
+      schemaVersion: v2
+      writable: true
+{{- end }}{{ end }}

@@ -1,0 +1,85 @@
+{{- if .Values.catalogServer.enabled }}{{- with fromYaml (include "swiss.catalogServer" .) }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "catalog-server.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "catalog-server.labels" . | nindent 4 }}
+spec:
+  # One writer per repository: writes take turns inside the one process.
+  replicas: 1
+  # A ReadWriteOnce volume has to be released by the old pod before the new one mounts it.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {{- include "catalog-server.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "catalog-server.selectorLabels" . | nindent 8 }}
+      annotations:
+        # A changed config rolls the pod; the tokens file is read again on change.
+        checksum/config: {{ include "catalog-server.config" . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: catalog-server
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # The image's command reads /etc/catalog-server/config.yaml, mounted below.
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            - { name: config, mountPath: /etc/catalog-server/config.yaml, subPath: config.yaml, readOnly: true }
+            {{- if include "catalog-server.writes" . }}
+            # A directory, not a subPath: the tokens file follows the Secret when it changes.
+            - { name: tokens, mountPath: /etc/catalog-server/tokens, readOnly: true }
+            {{- end }}
+            # A write builds its commit in a temporary git index.
+            - { name: tmp, mountPath: /tmp }
+          # /healthz is 200 once a catalog is served -- an empty one, before it is set up, too.
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "catalog-server.claimName" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: config
+          configMap:
+            name: {{ include "catalog-server.fullname" . }}
+        {{- if include "catalog-server.writes" . }}
+        - name: tokens
+          secret:
+            secretName: {{ include "catalog-server.tokensSecret" . }}
+        {{- end }}
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}{{- end }}

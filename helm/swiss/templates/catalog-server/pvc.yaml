@@ -1,0 +1,22 @@
+{{- if .Values.catalogServer.enabled }}{{- with fromYaml (include "swiss.catalogServer" .) }}
+{{- if and .Values.persistence.enabled (not .Values.persistence.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "catalog-server.claimName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "catalog-server.labels" . | nindent 4 }}
+  {{- if .Values.persistence.keep }}
+  annotations:
+    helm.sh/resource-policy: keep
+  {{- end }}
+spec:
+  accessModes: {{- toYaml .Values.persistence.accessModes | nindent 4 }}
+  {{- with .Values.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size }}
+{{- end }}
+{{- end }}{{- end }}

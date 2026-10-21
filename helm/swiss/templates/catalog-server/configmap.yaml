@@ -1,0 +1,11 @@
+{{- if .Values.catalogServer.enabled }}{{- with fromYaml (include "swiss.catalogServer" .) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "catalog-server.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "catalog-server.labels" . | nindent 4 }}
+data:
+  config.yaml: |-
+{{ include "catalog-server.config" . | indent 4 }}
+{{- end }}{{- end }}

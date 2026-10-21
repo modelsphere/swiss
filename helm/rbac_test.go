@@ -10,13 +10,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// chartDir is the swiss chart, beside this file.
 func chartDir(t *testing.T) string {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller")
 	}
-	return filepath.Dir(file)
+	return filepath.Join(filepath.Dir(file), "swiss")
 }
 
 func helmTemplate(t *testing.T, sets ...string) (string, error) {

@@ -2,4 +2,3 @@
 .git/
 .gitignore
 *.tmproj
-*_test.go

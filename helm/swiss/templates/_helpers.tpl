@@ -126,3 +126,16 @@ read-only: they hold archived specs.
   resources: ["controllerrevisions"]
   verbs: {{ list "get" "list" | toJson }}
 {{- end -}}
+
+{{/*
+catalog-server, vendored: model-catalog's catalog-server/chart, its templates
+copied into templates/catalog-server/ as they are, each wrapped to render, when
+catalogServer.enabled, with this context in place of the swiss chart's: its
+values are catalogServer, its chart catalog-server's. One line differs: the
+config checksum includes the config, not the ConfigMap's template path.
+*/}}
+{{- define "swiss.catalogServer" -}}
+Values: {{- toYaml .Values.catalogServer | nindent 2 }}
+Release: {{- toYaml .Release | nindent 2 }}
+Chart: { Name: catalog-server, Version: 0.1.0, AppVersion: "0.1.0" }
+{{- end -}}

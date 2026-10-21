@@ -1,0 +1,29 @@
+{{- if .Values.catalogServer.enabled }}{{- with fromYaml (include "swiss.catalogServer" .) }}
+{{- if .Values.httpRoute.enabled }}
+{{- if not .Values.httpRoute.parentRefs }}
+{{- fail "httpRoute.enabled is true but httpRoute.parentRefs is empty" }}
+{{- end }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "catalog-server.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "catalog-server.labels" . | nindent 4 }}
+  {{- with .Values.httpRoute.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  parentRefs: {{- toYaml .Values.httpRoute.parentRefs | nindent 4 }}
+  {{- with .Values.httpRoute.hostnames }}
+  hostnames: {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - matches:
+        - path:
+            type: {{ .Values.httpRoute.pathType }}
+            value: {{ .Values.httpRoute.path }}
+      backendRefs:
+        - name: {{ include "catalog-server.fullname" . }}
+          port: {{ .Values.service.port }}
+{{- end }}
+{{- end }}{{- end }}

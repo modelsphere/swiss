@@ -48,7 +48,7 @@ jobs:
           if [ -n "$unformatted" ]; then
             echo "::error::not gofmt-formatted:"; echo "$unformatted"; exit 1
           fi
-      # helm on PATH so helm/swiss/rbac_test.go renders the chart instead of skipping.
+      # helm on PATH so the chart tests in helm/ render the chart instead of skipping.
       - uses: azure/setup-helm@v5.0.1
       - run: go vet ./...
       - run: go test ./...
@@ -58,6 +58,7 @@ jobs:
           lint() { helm lint --strict helm/swiss --set 'rbac.namespaces={ci}' "$@"; }
           lint
           lint --set rbac.scope=cluster
+          lint --set catalogServer.enabled=true
 
   gate:
     runs-on: ubuntu-latest
