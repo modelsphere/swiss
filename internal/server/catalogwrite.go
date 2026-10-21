@@ -1,7 +1,6 @@
 package server
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -90,58 +89,46 @@ func (s *Server) handleSecret(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleCatalogPut updates a catalog. The site profile holds its settings for
-// now, so this takes only a writable catalog's token -- a new one, or the one
-// stored for the name it had before a rename -- kept once its catalog-server is
-// reached and takes it; a refused one is not kept, and the one before stays. A
-// dry run keeps nothing: it checks the token given, or else the one stored, at
-// the url given, so a catalog the profile does not hold yet, or not at that url,
-// is checked before the profile is saved.
+// now, so this takes only a writable catalog's token, kept once its
+// catalog-server is reached and takes it; a refused one is not kept, and the one
+// before stays. A dry run keeps nothing, and checks the token at url when given,
+// so a catalog the profile does not hold yet, or not as the form has it, is
+// checked before the profile is saved. It never sends a stored token.
 func (s *Server) handleCatalogPut(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Token       string `json:"token"`
-		RenamedFrom string `json:"renamedFrom"`
-		URL         string `json:"url"`
+		Token string `json:"token"`
+		URL   string `json:"url"`
 	}
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	dryRun := slices.Contains([]string{"true", "1"}, r.URL.Query().Get("dryRun"))
-	if err := dec.Decode(&body); err != nil || (body.Token != "" && body.RenamedFrom != "") || (!dryRun && (body.URL != "" || body.Token == "" && body.RenamedFrom == "")) {
-		writeError(w, http.StatusBadRequest, `want {"token": "<new>"} or {"renamedFrom": "<its name before>"}, and "url" only with dryRun: the rest of a catalog is the site profile's`)
+	if err := dec.Decode(&body); err != nil || body.Token == "" || (!dryRun && body.URL != "") {
+		writeError(w, http.StatusBadRequest, `want {"token": "<non-empty>"}, and "url" only with dryRun: the rest of a catalog is the site profile's`)
 		return
 	}
-	if body.RenamedFrom != "" && !secretKey.MatchString(catalogTokenKey(body.RenamedFrom)) {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("renamedFrom %q is not a catalog name", body.RenamedFrom))
-		return
-	}
-	repo, err := s.CatalogRepo(r.Context(), r.PathValue("catalog"))
-	switch {
-	case dryRun && body.URL != "":
+	var repo site.CatalogRepo
+	if dryRun && body.URL != "" {
+		if !strings.HasPrefix(body.URL, "http://") && !strings.HasPrefix(body.URL, "https://") {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("url %q must start with http:// or https://", body.URL))
+			return
+		}
 		repo = site.CatalogRepo{Name: r.PathValue("catalog"), URL: body.URL}
-	case err != nil:
-		writeError(w, http.StatusNotFound, err.Error())
-		return
-	case !dryRun && !repo.Writable:
-		writeError(w, http.StatusForbidden, fmt.Sprintf("catalog %s is not writable in the site profile", repo.Name))
-		return
+	} else {
+		var err error
+		if repo, err = s.CatalogRepo(r.Context(), r.PathValue("catalog")); err != nil {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if !dryRun && !repo.Writable {
+			writeError(w, http.StatusForbidden, fmt.Sprintf("catalog %s is not writable in the site profile", repo.Name))
+			return
+		}
 	}
 	if code, msg := s.secretsWritable(); code != 0 {
 		writeError(w, code, msg)
 		return
 	}
-	token := body.Token
-	if token == "" {
-		from := cmp.Or(body.RenamedFrom, repo.Name)
-		data, err := s.readSecrets(r.Context())
-		if err != nil {
-			writeError(w, http.StatusBadGateway, err.Error())
-			return
-		}
-		if token = data[catalogTokenKey(from)]; token == "" {
-			writeError(w, http.StatusConflict, fmt.Sprintf("catalog %s has no token stored to check", from))
-			return
-		}
-	}
-	if code, msg := checkCatalogToken(r.Context(), repo, token); code != 0 {
+	if code, msg := checkCatalogToken(r.Context(), repo, body.Token); code != 0 {
 		writeError(w, code, msg)
 		return
 	}
@@ -149,7 +136,7 @@ func (s *Server) handleCatalogPut(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"name": repo.Name, "url": repo.URL, "dryRun": true})
 		return
 	}
-	if _, err := s.writeSecret(r.Context(), catalogTokenKey(repo.Name), token); err != nil {
+	if _, err := s.writeSecret(r.Context(), catalogTokenKey(repo.Name), body.Token); err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
@@ -277,17 +264,25 @@ func checkCatalogToken(ctx context.Context, repo site.CatalogRepo, token string)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
-	res, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	client := &http.Client{
+		Timeout:       10 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	res, err := client.Do(req)
 	if err != nil {
 		return http.StatusBadGateway, fmt.Sprintf("cannot check the token with catalog %s: %v", repo.Name, err)
 	}
 	defer res.Body.Close()
+	// Only catalog-server's own error, and short: url may name any server.
 	b, _ := io.ReadAll(io.LimitReader(res.Body, 64<<10))
 	var body struct {
 		Error string `json:"error"`
 	}
 	if json.Unmarshal(b, &body) != nil || body.Error == "" {
-		body.Error = cmp.Or(strings.TrimSpace(string(b)), res.Status)
+		body.Error = res.Status
+	}
+	if r := []rune(body.Error); len(r) > 200 {
+		body.Error = string(r[:200]) + "…"
 	}
 	switch res.StatusCode {
 	case http.StatusBadRequest:

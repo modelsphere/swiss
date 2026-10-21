@@ -229,6 +229,8 @@ func TestCatalogPutToken(t *testing.T) {
 	}{
 		{"internal", map[string]string{"token": "typo"}, http.StatusUnprocessableEntity, "catalog internal does not take this token: that token is not in the server's tokensFile"},
 		{"internal", map[string]string{"token": ""}, http.StatusBadRequest, "want"},
+		// A stored token is never sent: one is always given.
+		{"internal", map[string]string{"renamedFrom": "before"}, http.StatusBadRequest, "want"},
 		// The rest of a catalog is the site profile's yet.
 		{"internal", map[string]string{"token": "tok", "url": "https://elsewhere/"}, http.StatusBadRequest, "site profile"},
 		{"public", map[string]string{"token": "tok"}, http.StatusForbidden, "not writable"},
@@ -276,6 +278,14 @@ func TestCatalogPutDryRun(t *testing.T) {
 	if code, _ := put(t, srv, "/api/catalogs/new?dryRun=true", map[string]string{"token": "tok"}); code != http.StatusNotFound {
 		t.Errorf("a new catalog with no url: %d", code)
 	}
+	if code, _ := put(t, srv, "/api/catalogs/new?dryRun=true", map[string]string{"token": "tok", "url": "file:///etc/"}); code != http.StatusBadRequest {
+		t.Errorf("a url not http(s): %d", code)
+	}
+	// The stored token is not checked anywhere: a dry run is given one too.
+	n := len(*got)
+	if code, _ := put(t, srv, "/api/catalogs/internal?dryRun=true", map[string]string{"url": "https://elsewhere/"}); code != http.StatusBadRequest || len(*got) != n {
+		t.Errorf("a dry run without a token: %d, %d asked", code, len(*got)-n)
+	}
 	if code, _ := put(t, srv, "/api/catalogs/internal", map[string]string{"token": "tok", "url": upstream + "/base/"}); code != http.StatusBadRequest {
 		t.Errorf("a url outside a dry run: %d", code)
 	}
@@ -284,53 +294,20 @@ func TestCatalogPutDryRun(t *testing.T) {
 	}
 }
 
-// A token stored is checked and carried over too: a dry run without a token
-// checks the one stored, as when only the url changes, and a rename carries the
-// one stored for the old name.
-func TestCatalogPutStoredToken(t *testing.T) {
-	srv, s, got := writableCatalog(t, map[string]string{"catalog.before.token": "tok", "catalog.internal.token": "stale"})
-	w := &fakeWriter{}
-	s.SetWriter(w)
-	repo, err := s.CatalogRepo(t.Context(), "internal")
-	if err != nil {
-		t.Fatal(err)
-	}
-	moved := strings.TrimSuffix(repo.URL, "base/") + "moved/"
-
-	if code, out := put(t, srv, "/api/catalogs/internal?dryRun=true", map[string]string{"url": moved}); code != http.StatusUnprocessableEntity {
-		t.Errorf("the stored token, at the url it moves to: %d %v", code, out)
-	}
-	if g := (*got)[0]; g.path != "/moved/api/v2/models" || g.header.Get("Authorization") != "Bearer stale" {
-		t.Fatalf("asked with: %+v", g)
-	}
-	if code, out := put(t, srv, "/api/catalogs/internal?dryRun=true", map[string]string{"renamedFrom": "before", "url": moved}); code != 200 {
-		t.Errorf("a rename, checked: %d %v", code, out)
-	}
-	if code, out := put(t, srv, "/api/catalogs/internal", map[string]string{"renamedFrom": "before"}); code != 200 {
-		t.Fatalf("a rename: %d %v", code, out)
-	}
-	if got := w.secrets["swiss/site-profile-secrets"]; got["catalog.internal.token"] != "tok" {
-		t.Fatalf("the old name's token is not carried over: %v", got)
-	}
-	for _, c := range []struct {
-		path string
-		body map[string]string
-		code int
-	}{
-		{"/api/catalogs/internal?dryRun=true", map[string]string{"renamedFrom": "absent"}, http.StatusConflict},
-		{"/api/catalogs/internal", map[string]string{}, http.StatusBadRequest},
-		{"/api/catalogs/internal", map[string]string{"token": "tok", "renamedFrom": "before"}, http.StatusBadRequest},
-		{"/api/catalogs/internal", map[string]string{"renamedFrom": "Not A Name"}, http.StatusBadRequest},
-	} {
-		if code, out := put(t, srv, c.path, c.body); code != c.code {
-			t.Errorf("%s %v: %d %v, want %d", c.path, c.body, code, out, c.code)
-		}
-	}
-}
-
-// A catalog that is not a catalog-server cannot have a token checked, so none is kept.
+// A catalog that is not a catalog-server cannot have a token checked, so none is
+// kept; what it answers is not echoed, and a redirect is not followed.
 func TestCatalogPutNeedsACatalogServer(t *testing.T) {
-	up := httptest.NewServer(http.NotFoundHandler())
+	var followed bool
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/hop/"):
+			http.Redirect(w, r, "/landed", http.StatusFound)
+		case r.URL.Path == "/landed":
+			followed = true
+		default:
+			http.Error(w, "an in-cluster page", http.StatusNotFound)
+		}
+	}))
 	t.Cleanup(up.Close)
 	probe := cluster.Fake{
 		Maps:    map[string]map[string]string{"swiss/site-profile": {"profile.yaml": profileYAML + "catalogs:\n  - name: old\n    url: " + up.URL + "/\n    schemaVersion: v2\n    writable: true\n"}},
@@ -342,7 +319,10 @@ func TestCatalogPutNeedsACatalogServer(t *testing.T) {
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
 	code, out := put(t, srv, "/api/catalogs/old", map[string]string{"token": "tok"})
-	if msg, _ := out["error"].(string); code != http.StatusBadGateway || !strings.Contains(msg, "cannot check the token with catalog old") || w.secrets != nil {
+	if msg, _ := out["error"].(string); code != http.StatusBadGateway || !strings.Contains(msg, "cannot check the token with catalog old") || strings.Contains(msg, "in-cluster") || w.secrets != nil {
 		t.Fatalf("%d %v, written %v", code, out, w.secrets)
+	}
+	if code, out := put(t, srv, "/api/catalogs/old?dryRun=true", map[string]string{"token": "tok", "url": up.URL + "/hop/"}); code != http.StatusBadGateway || followed {
+		t.Fatalf("a redirect: %d %v, followed %v", code, out, followed)
 	}
 }

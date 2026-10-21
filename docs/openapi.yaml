@@ -481,19 +481,17 @@ paths:
       summary: Update a catalog
       description: |
         Provisional: the site profile holds a catalog's settings for now, so
-        this takes only a writable catalog's token -- `token`, a new one, or
-        `renamedFrom`, the one stored for the name it had before a rename --
-        and refuses any other field (400). `dryRun` keeps nothing; it checks
-        `token`, or else the token stored (for `renamedFrom`, or this name; 409
-        when there is none), at `url` when given, so a catalog the profile does
-        not hold yet, or not at that url or as writable, is checked before the
-        profile is saved; without `url`, the profile's. swissd tries the token on the catalog's catalog-server with a
+        this takes only a writable catalog's `token`, and refuses any other
+        field (400). swissd tries it on the catalog's catalog-server with a
         dry-run write that commits nothing, `POST <catalog url>api/v2/models?dryRun=true`
         with no body: catalog-server checks a write's token first, so 400 (the
         body) means it is reached and takes the token. Only then is it kept, as
         `catalog.<name>.token` in swissd's Secret. A token it refuses (401, or
-        403: it takes no writes) is 422; a catalog that cannot be reached, or is
-        not a catalog-server, is 502. Refused, the token held before stays.
+        403: it takes no writes) is 422; a catalog that cannot be reached, is not
+        a catalog-server, or redirects, is 502. Refused, the token held before
+        stays. `dryRun` keeps nothing, and checks at `url` when given, so a
+        catalog the profile does not hold yet, or not as the form has it, is
+        checked before the profile is saved. A stored token is never sent here.
         Removing a token is `DELETE /api/secrets/catalog.<name>.token`.
       operationId: putCatalog
       parameters:
@@ -505,11 +503,10 @@ paths:
             schema:
               type: object
               additionalProperties: false
-              description: "`token` or `renamedFrom`, not both; with dryRun, either may be left out."
+              required: [token]
               properties:
                 token: { type: string, minLength: 1 }
-                renamedFrom: { type: string, description: "The catalog's name before a rename: the token stored for it is checked and kept under this one." }
-                url: { type: string, description: "With dryRun only: where the catalog is, for one the profile does not hold yet, or not there." }
+                url: { type: string, format: uri, description: "With dryRun only, http(s): where the catalog is, for one the profile does not hold yet, or not there." }
       responses:
         "200":
           description: Updated -- the catalog as the site profile has it, and that its token is set -- or, with dryRun, checked (`name`, `url`, `dryRun`).
@@ -530,9 +527,6 @@ paths:
           description: The catalog is not marked writable in the site profile, or this swissd cannot write the cluster.
           content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
         "404": { $ref: "#/components/responses/NotFound" }
-        "409":
-          description: No token given, and none stored to check.
-          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
         "422":
           description: The catalog's catalog-server does not take the token (it answered 401, or 403 for no tokensFile).
           content:
