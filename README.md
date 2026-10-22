@@ -107,3 +107,16 @@ reading it from there.
 One instance per cluster, inside the cluster it manages. Read the RBAC section of
 the design doc before installing: `rbac.scope` decides whether swissd can read
 every Secret in the cluster.
+
+## End-to-end test
+
+`make test-e2e` builds swissd, installs it on a kind cluster with llm-operator
+and the CRDs the vllm chart renders, and deploys the catalog's CPU-only `mock-llm`
+through both backends. Needs Go, docker, kind, kubectl and helm; no GPU.
+
+```sh
+make test-e2e                  # KEEP_CLUSTER=1 to leave the cluster up
+make test-e2e E2E_ARGS='-ginkgo.label-filter=helm'
+```
+
+What is real and what is mocked, and every setting: [docs/e2e.md](docs/e2e.md).

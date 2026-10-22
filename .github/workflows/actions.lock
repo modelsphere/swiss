@@ -7,6 +7,10 @@ workflows:
         - 'actions/checkout@v7.0.1'
         - 'actions/setup-go@v7.0.0'
         - 'azure/setup-helm@v5.0.1'
+    '.github/workflows/e2e.yml':
+        - 'actions/checkout@v7.0.1'
+        - 'actions/setup-go@v7.0.0'
+        - 'azure/setup-helm@v5.0.1'
     '.github/workflows/publish.yml':
         - 'actions/checkout@v7.0.1'
         - 'azure/setup-helm@v5.0.1'

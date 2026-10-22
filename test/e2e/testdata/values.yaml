@@ -1,0 +1,21 @@
+# swiss chart values for the kind e2e. The image and rbac.namespaces are set
+# on the helm command from IMG and MODEL_NS. The profile fixture's namespace
+# comes from MODEL_NS too, so the two cannot disagree.
+image:
+  pullPolicy: Never
+
+config:
+  cacheTTL: 5s
+
+auth:
+  username: admin
+  password: e2e-kind
+
+persistence:
+  enabled: true
+  size: 1Gi
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 64Mi

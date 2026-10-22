@@ -1,0 +1,19 @@
+# Site profile for the kind e2e, saved through PUT /api/profile.
+# @CATALOG@, @CHART_REPO@ and @MODEL_NS@ are replaced when the suite renders it.
+#
+# mock-llm is published in the v2 index only. It runs on CPU with no weights,
+# so the model path is never mounted. CART stays off: the test talks to the
+# engine directly.
+name: kind-e2e
+namespace: "@MODEL_NS@"
+chartRepo: "@CHART_REPO@"
+catalogs:
+  - name: public
+    url: "@CATALOG@"
+    schemaVersion: v2
+    default: true
+model:
+  pathTemplate: /models/{{org}}/{{name}}
+defaults:
+  features:
+    cart: false

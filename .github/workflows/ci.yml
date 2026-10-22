@@ -44,7 +44,7 @@ jobs:
           cache-dependency-path: swiss/go.sum
       - name: gofmt
         run: |
-          unformatted=$(gofmt -l cmd internal helm web/embed.go)
+          unformatted=$(gofmt -l cmd internal helm test web/embed.go)
           if [ -n "$unformatted" ]; then
             echo "::error::not gofmt-formatted:"; echo "$unformatted"; exit 1
           fi

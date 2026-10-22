@@ -1,0 +1,62 @@
+name: e2e
+
+# test/e2e on a kind cluster: swissd built from this checkout, a mock model
+# deployed through the helm and LLMService backends. Runs on every pull request
+# and push to master, and on workflow_dispatch (label_filter runs one backend).
+# Not a required check: it pulls the catalog, charts and images from the internet.
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      label_filter:
+        description: "Ginkgo label filter. Empty runs both backends. Example: helm"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      KIND_VERSION: v0.33.0
+      # kind v0.33.0 linux-amd64, from
+      # https://kind.sigs.k8s.io/dl/v0.33.0/kind-linux-amd64.sha256sum
+      KIND_SHA256: aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          # docker build compiles the UI out of this submodule.
+          submodules: true
+          persist-credentials: false
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: azure/setup-helm@v5.0.1
+      - name: Install kind
+        run: |
+          curl -fsSLo kind-linux-amd64 "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          echo "${KIND_SHA256}  kind-linux-amd64" | sha256sum -c
+          chmod +x kind-linux-amd64
+          sudo mv kind-linux-amd64 /usr/local/bin/kind
+          kind version
+      - name: e2e
+        env:
+          LABEL_FILTER: ${{ inputs.label_filter }}
+        run: |
+          if [ -n "${LABEL_FILTER}" ]; then
+            # Quotes survive into the recipe so a filter with spaces stays one argument.
+            make test-e2e E2E_ARGS="-ginkgo.label-filter='${LABEL_FILTER}'"
+          else
+            make test-e2e
+          fi
