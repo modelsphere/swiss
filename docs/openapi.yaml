@@ -832,7 +832,7 @@ paths:
         - $ref: "#/components/parameters/release"
       responses:
         "200":
-          description: Uninstalled.
+          description: Uninstalled, or `output` is "uninstall already in progress" when the release is already uninstalling, including while that uninstall is still running.
           content:
             application/json:
               schema:
@@ -846,6 +846,11 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: An apply on this release is in progress.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "500": { $ref: "#/components/responses/ServerError" }
         "502": { $ref: "#/components/responses/BadGateway" }
 

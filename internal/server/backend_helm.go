@@ -63,9 +63,6 @@ func (b helmBackend) Archived(ctx context.Context, ns, release string, rev int) 
 
 func (b helmBackend) Apply(ctx context.Context, p *plan.Plan, mode exec.Mode, o applyOpts) (applyResult, error) {
 	s := b.s
-	if err := s.refuseUninstalling(ctx, p.Release.Namespace, p.Release.Name); err != nil {
-		return applyResult{}, err
-	}
 	st, err := exec.Lookup(ctx, s.probe, p.Release.Namespace, p.Release.Name)
 	if err != nil {
 		return applyResult{}, failErr(http.StatusBadGateway, err)
@@ -248,18 +245,23 @@ func (b helmBackend) Uninstall(ctx context.Context, ns, release string) (uninsta
 		// This is also the path a restart takes when the marker is set, nothing
 		// is inflight, and helm runs again.
 		s.deleteArchives(ctx, ns, release)
+		// With a plan, the autoscale ConfigMap goes in reapRelease, once the
+		// release is gone. Without one nothing keeps the release listed, so it
+		// goes now.
 		if hadPlan {
 			planErr = s.reapRelease(ctx, ns, release)
-		} else if err := s.writer.DeleteConfigMap(ctx, planRef(ns, release)); err != nil {
-			planErr = err.Error()
-			s.log.ErrorContext(ctx, "plan configmap not removed", "release", release, "err", err)
-		}
-		if err := s.removeAutoscale(ctx, ns, release); err != nil {
-			if planErr != "" {
-				planErr += "; "
+		} else {
+			if err := s.writer.DeleteConfigMap(ctx, planRef(ns, release)); err != nil {
+				planErr = err.Error()
+				s.log.ErrorContext(ctx, "plan configmap not removed", "release", release, "err", err)
 			}
-			planErr += err.Error()
-			s.log.ErrorContext(ctx, "autoscale configmap not removed", "release", release, "err", err)
+			if err := s.removeAutoscale(ctx, ns, release); err != nil {
+				if planErr != "" {
+					planErr += "; "
+				}
+				planErr += err.Error()
+				s.log.ErrorContext(ctx, "autoscale configmap not removed", "release", release, "err", err)
+			}
 		}
 	}
 	if !hadPlan {

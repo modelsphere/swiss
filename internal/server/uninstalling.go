@@ -2,8 +2,10 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
+	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -198,10 +200,19 @@ func (s *Server) finishUninstallFailed(ctx context.Context, ns, release string, 
 	return s.writer.PutConfigMap(ctx, ref, files, nil)
 }
 
-// refuseUninstalling is the 409 for install, upgrade and rollback.
+// errUninstalling is what refuseUninstalling wraps, so the autoscaler can tell
+// it from a failed apply.
+var errUninstalling = errors.New("release is uninstalling")
+
+func uninstallingFailure(ns, release string) error {
+	return &httpFailure{code: http.StatusConflict, msg: fmt.Sprintf("release %s/%s is uninstalling", ns, release), err: errUninstalling}
+}
+
+// refuseUninstalling is the 409 for install, upgrade, rollback and the
+// autoscaler. applyLocked calls it under the release's lock.
 func (s *Server) refuseUninstalling(ctx context.Context, ns, release string) error {
 	if s.planPhase(ctx, ns, release) == phaseUninstalling {
-		return fail(409, "release %s/%s is uninstalling", ns, release)
+		return uninstallingFailure(ns, release)
 	}
 	// A cached Forbidden hides the CRD the same way an unserved one does. Calling
 	// through it would turn every helm apply into another refused get.
@@ -216,7 +227,7 @@ func (s *Server) refuseUninstalling(ctx context.Context, ns, release string) err
 	if err != nil || u.GetDeletionTimestamp().IsZero() {
 		return nil
 	}
-	return fail(409, "release %s/%s is uninstalling", ns, release)
+	return uninstallingFailure(ns, release)
 }
 
 func (s *Server) reapUninstalling(ctx context.Context) {
@@ -275,11 +286,15 @@ func (s *Server) rebuildUninstalling(ctx context.Context) error {
 }
 
 // reapRelease drops the plan once helm no longer has the release and no pod
-// matches either selector. Once helm has dropped the release, archive Secrets
-// are removed even while pods remain, so a restart between the helm uninstall
-// and that delete does not leave them behind. A lookup or list error leaves
-// the release listed; a delete error is retried on the next check. The
-// returned string is the delete error, for the uninstall response.
+// matches either selector. The autoscale ConfigMap goes first, at the same
+// point: the autoscaler holds while the release is uninstalling, and its
+// config outlives the release only if that delete fails, which keeps the
+// release listed until a later check removes it. Once helm has dropped the
+// release, archive Secrets are removed even while pods remain, so a restart
+// between the helm uninstall and that delete does not leave them behind. A
+// lookup or list error leaves the release listed; a delete error is retried
+// on the next check. The returned string is the delete error, for the
+// uninstall response.
 func (s *Server) reapRelease(ctx context.Context, ns, release string) string {
 	if s.uninstallInflight(ns, release) {
 		return ""
@@ -327,6 +342,11 @@ func (s *Server) reapRelease(ctx context.Context, ns, release string) string {
 		s.trackUninstalling(ns, release)
 		return ""
 	}
+	if err := s.removeAutoscale(ctx, ns, release); err != nil {
+		s.log.ErrorContext(ctx, "autoscale configmap not removed", "release", release, "err", err)
+		s.trackUninstalling(ns, release)
+		return err.Error()
+	}
 	if err := s.writer.DeleteConfigMap(ctx, ref); err != nil {
 		s.log.ErrorContext(ctx, "plan configmap not removed", "release", release, "err", err)
 		s.trackUninstalling(ns, release)
@@ -341,7 +361,9 @@ func (s *Server) reapRelease(ctx context.Context, ns, release string) string {
 // Jobs leave them behind after the workload is gone. A pod that is being
 // deleted still counts during its grace period. It is ignored only once it is
 // stuck: now is past deletionTimestamp plus the grace period plus five
-// minutes, or its node is NotReady or not in the node list. Grace is
+// minutes, or the grace period is over and its node is NotReady or not in the
+// node list. A node that is NotReady for a moment does not end the uninstall
+// while its pods may still be shutting down. Grace is
 // metadata.deletionGracePeriodSeconds, else spec.terminationGracePeriodSeconds,
 // else 30s. An unscheduled pod has no node, so only the time rule applies.
 // Node readiness is listed only when a matched pod is terminating; if that
@@ -419,15 +441,21 @@ func podTerminating(p cluster.Pod) bool {
 }
 
 // podStuckTerminating reports whether a deleting pod should be treated as gone.
-// nodeReady is nil when the node list could not be read: only the time rule
-// applies, so a pod still inside its window counts as remaining. An empty node
-// name is unscheduled and is not treated as a missing node.
+// Inside its grace period it never is. After that, a NotReady or missing node
+// is enough; otherwise it takes the five extra minutes. nodeReady is nil when
+// the node list could not be read: only the time rule applies, so a pod still
+// inside its window counts as remaining. An empty node name is unscheduled and
+// is not treated as a missing node.
 func podStuckTerminating(p cluster.Pod, now time.Time, nodeReady func(string) (ready, found bool)) bool {
 	if !podTerminating(p) {
 		return false
 	}
-	if now.After(p.DeletionTimestamp.Add(podGrace(p) + stuckTerminatingExtra)) {
+	grace := podGrace(p)
+	if now.After(p.DeletionTimestamp.Add(grace + stuckTerminatingExtra)) {
 		return true
+	}
+	if !now.After(p.DeletionTimestamp.Add(grace)) {
+		return false
 	}
 	if p.Node == "" || nodeReady == nil {
 		return false

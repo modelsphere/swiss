@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -26,18 +28,22 @@ import (
 )
 
 type uninstallCase struct {
-	Kind                 string     `yaml:"kind"`
-	Release              string     `yaml:"release"`
-	Namespace            string     `yaml:"namespace"`
-	Chart                string     `yaml:"chart"`
-	HelmExit             int        `yaml:"helmExit"`
-	PodListError         bool       `yaml:"podListError"`
-	DeleteConfigMapFails int        `yaml:"deleteConfigMapFails"`
-	SeedArchive          bool       `yaml:"seedArchive"`
-	OperatorPhase        string     `yaml:"operatorPhase"`
-	Nodes                []nodeSpec `yaml:"nodes"`
-	Pods                 []podSpec  `yaml:"pods"`
-	Steps                []unstep   `yaml:"steps"`
+	Kind                 string `yaml:"kind"`
+	Release              string `yaml:"release"`
+	Namespace            string `yaml:"namespace"`
+	Chart                string `yaml:"chart"`
+	HelmExit             int    `yaml:"helmExit"`
+	PodListError         bool   `yaml:"podListError"`
+	DeleteConfigMapFails int    `yaml:"deleteConfigMapFails"`
+	SeedArchive          bool   `yaml:"seedArchive"`
+	SeedAutoscale        bool   `yaml:"seedAutoscale"`
+	// HelmBlocks makes helm uninstall wait for a releaseHelm step, so a case
+	// can act while an uninstall holds the release's lock.
+	HelmBlocks    bool       `yaml:"helmBlocks"`
+	OperatorPhase string     `yaml:"operatorPhase"`
+	Nodes         []nodeSpec `yaml:"nodes"`
+	Pods          []podSpec  `yaml:"pods"`
+	Steps         []unstep   `yaml:"steps"`
 }
 
 type nodeSpec struct {
@@ -72,8 +78,10 @@ type unstep struct {
 	Backend        string    `yaml:"backend"`
 	Pods           []podSpec `yaml:"pods"`
 	Archives       *int      `yaml:"archives"`
-	Now            time.Time `yaml:"now"`
-	HasRevision    *bool     `yaml:"hasRevision"`
+	// Autoscale is whether swiss-autoscale-<release> exists after the step.
+	Autoscale   *bool     `yaml:"autoscale"`
+	Now         time.Time `yaml:"now"`
+	HasRevision *bool     `yaml:"hasRevision"`
 }
 
 func runUninstallingCase(t *testing.T, path string) {
@@ -131,6 +139,33 @@ type helmHarness struct {
 	srv *httptest.Server
 	s   *Server
 	now time.Time
+	// gate is the file a blocked helm uninstall waits for.
+	gate string
+	// pending is the DELETE started by uninstallAsync.
+	pending chan asyncResult
+	locked  bool
+}
+
+// openGate lets a blocked helm return and waits for the DELETE it was part of.
+func (h *helmHarness) openGate() (asyncResult, bool) {
+	if h.gate != "" {
+		_ = os.WriteFile(h.gate, nil, 0o644)
+	}
+	if h.pending == nil {
+		return asyncResult{}, true
+	}
+	select {
+	case r := <-h.pending:
+		h.pending = nil
+		return r, true
+	case <-time.After(10 * time.Second):
+		return asyncResult{}, false
+	}
+}
+
+type asyncResult struct {
+	code int
+	body map[string]any
 }
 
 func (h *helmHarness) open(t *testing.T) {
@@ -142,6 +177,16 @@ func (h *helmHarness) open(t *testing.T) {
 	cfg := testConfig("prod-b300")
 	cfg.Server.AllowDeploy = true
 	cfg.Server.HelmBin = stubHelm(t, h.cs.HelmExit)
+	if h.cs.HelmBlocks {
+		if h.gate == "" {
+			h.gate = filepath.Join(t.TempDir(), "gate")
+			// Runs before the server closes and before the temp dir goes: a
+			// failed step must not leave helm, and with it the DELETE
+			// handler, waiting forever.
+			t.Cleanup(func() { h.openGate() })
+		}
+		cfg.Server.HelmBin = stubHelmGated(t, h.cs.HelmExit, h.gate)
+	}
 	s := New(cfg, h.c, discardLogger(), "test")
 	db, err := store.Open(filepath.Join(t.TempDir(), "swiss.db"))
 	if err != nil {
@@ -164,6 +209,54 @@ func (h *helmHarness) do(t *testing.T, step unstep) (int, map[string]any) {
 	switch step.Do {
 	case "uninstall":
 		return del(t, h.srv, "/api/releases/"+ns+"/"+rel)
+	case "uninstallAsync":
+		// Returns once helm is running: the lock is held, the plan is marked.
+		if !h.cs.HelmBlocks {
+			t.Fatal("uninstallAsync needs helmBlocks")
+		}
+		h.pending = make(chan asyncResult, 1)
+		srv := h.srv
+		go func() {
+			code, body := delNoFatal(srv, "/api/releases/"+ns+"/"+rel)
+			h.pending <- asyncResult{code, body}
+		}()
+		deadline := time.Now().Add(10 * time.Second)
+		for !h.s.uninstallInflight(ns, rel) {
+			if time.Now().After(deadline) {
+				t.Fatal("uninstall did not start")
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		return 0, nil
+	case "releaseHelm":
+		// Lets the blocked helm return; the step's status is the first DELETE's.
+		if h.pending == nil {
+			t.Fatal("releaseHelm without uninstallAsync")
+		}
+		r, ok := h.openGate()
+		if !ok {
+			t.Fatal("uninstall did not finish")
+		}
+		return r.code, r.body
+	case "holdLock":
+		// An apply in progress on this release, as far as the lock knows.
+		if !h.s.tryApplyLock(ns, rel) {
+			t.Fatal("lock already held")
+		}
+		h.locked = true
+		t.Cleanup(func() {
+			if h.locked {
+				h.s.unlockApply(ns, rel)
+			}
+		})
+		return 0, nil
+	case "releaseLock":
+		if !h.locked {
+			t.Fatal("releaseLock without holdLock")
+		}
+		h.locked = false
+		h.s.unlockApply(ns, rel)
+		return 0, nil
 	case "list":
 		return get(t, h.srv, "/api/deployments?perPage=100")
 	case "status":
@@ -350,6 +443,15 @@ func assertUnstep(t *testing.T, cs *uninstallCase, c *uninstallCluster, step uns
 			t.Fatalf("configMap present=%v, want %v", got, *step.ConfigMap)
 		}
 	}
+	if step.Autoscale != nil {
+		if c == nil {
+			t.Fatal("autoscale is a helm assertion")
+		}
+		got := c.hasConfigMap(autoscaleRef(cs.Namespace, cs.Release))
+		if got != *step.Autoscale {
+			t.Fatalf("autoscale configmap present=%v, want %v", got, *step.Autoscale)
+		}
+	}
 	if step.Archives != nil {
 		if c == nil {
 			t.Fatal("archives is a helm assertion")
@@ -464,7 +566,46 @@ func newUninstallCluster(t *testing.T, cs *uninstallCase) *uninstallCluster {
 			t.Fatal(err)
 		}
 	}
+	if cs.SeedAutoscale {
+		ref := autoscaleRef(cs.Namespace, cs.Release)
+		data := map[string]string{autoscaleConfigKey: "enabled: true\nminSlices: 1\nmaxSlices: 4\n"}
+		if err := c.PutLabeledConfigMap(ctx, ref, data, autoscaleLabels(cs.Release)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	return c
+}
+
+// stubHelmGated is stubHelm whose uninstall waits until gate exists.
+func stubHelmGated(t *testing.T, exitCode int, gate string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "helm")
+	script := "#!/bin/sh\n" +
+		"if [ \"$1\" = uninstall ]; then\n" +
+		"  while [ ! -f " + gate + " ]; do sleep 0.02; done\n" +
+		"fi\n" +
+		"echo \"helm $*\"\n" +
+		"exit " + strconv.Itoa(exitCode) + "\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// delNoFatal is del for a goroutine, where t.Fatal is not allowed.
+func delNoFatal(srv *httptest.Server, path string) (int, map[string]any) {
+	req, err := http.NewRequest(http.MethodDelete, srv.URL+path, nil)
+	if err != nil {
+		return 0, map[string]any{"error": err.Error()}
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, map[string]any{"error": err.Error()}
+	}
+	defer resp.Body.Close()
+	var out map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	return resp.StatusCode, out
 }
 
 func (c *uninstallCluster) seedArchive(ns, release string) error {

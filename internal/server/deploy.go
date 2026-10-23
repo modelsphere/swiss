@@ -646,7 +646,14 @@ func (s *Server) apply(ctx context.Context, p *plan.Plan, mode exec.Mode, applyW
 	return s.applyLocked(ctx, p, mode, applyWith, o)
 }
 
+// applyLocked is where install, upgrade, rollback and the autoscaler refuse an
+// uninstalling release. It runs under the release's lock, as the uninstall
+// marker is written, so an apply cannot write its applying phase over the
+// marker and an uninstall cannot start in the middle of an apply.
 func (s *Server) applyLocked(ctx context.Context, p *plan.Plan, mode exec.Mode, applyWith string, o applyOpts) (applyResult, error) {
+	if err := s.refuseUninstalling(ctx, p.Release.Namespace, p.Release.Name); err != nil {
+		return applyResult{}, err
+	}
 	b, err := s.backendForApply(ctx, p, mode, applyWith)
 	if err != nil {
 		return applyResult{}, err
@@ -657,10 +664,6 @@ func (s *Server) applyLocked(ctx context.Context, p *plan.Plan, mode exec.Mode, 
 // applyPlan is apply plus the HTTP response. Handlers stay here; the
 // autoscaler calls apply and records the error itself.
 func (s *Server) applyPlan(ctx context.Context, w http.ResponseWriter, p *plan.Plan, mode exec.Mode, applyWith string, expectRevision int, action, note string, forceConflicts bool) {
-	if err := s.refuseUninstalling(ctx, p.Release.Namespace, p.Release.Name); err != nil {
-		writeStatus(w, err, http.StatusConflict)
-		return
-	}
 	res, err := s.apply(ctx, p, mode, applyWith, applyOpts{
 		ExpectRevision: expectRevision,
 		Action:         action,
@@ -689,6 +692,18 @@ func (s *Server) handleUninstall(w http.ResponseWriter, r *http.Request) {
 
 	ns, release := r.PathValue("namespace"), r.PathValue("release")
 	if !s.tryApplyLock(ns, release) {
+		// The lock may be held by the uninstall itself, still running helm.
+		// Asking again is not a conflict: it is the same answer as a repeat
+		// DELETE that does get the lock.
+		if s.uninstallInflight(ns, release) || s.planPhase(ctx, ns, release) == phaseUninstalling {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"release":   release,
+				"namespace": ns,
+				"output":    uninstallInProgress,
+				"planError": "",
+			})
+			return
+		}
 		writeStatus(w, &applyBusyError{ns: ns, release: release}, http.StatusConflict)
 		return
 	}

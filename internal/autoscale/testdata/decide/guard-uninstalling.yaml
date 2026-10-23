@@ -1,0 +1,22 @@
+name: guard-uninstalling
+description: a plan marked uninstalling holds before any other guard
+config:
+  enabled: true
+  minSlices: 1
+  maxSlices: 4
+live:
+  backend: helm
+  helmStatus: deployed
+  planPhase: uninstalling
+  pd: true
+  planReplicaCount: 1
+  lockBusy: true
+decision:
+  ok: true
+  replicas: 2
+wantHold: "uninstalling"
+wantScale: false
+wantCurrent: 1
+want: 0
+wantFailed: false
+hasDecision: true

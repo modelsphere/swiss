@@ -1,0 +1,30 @@
+# The autoscale ConfigMap stays while the release is uninstalling and goes
+# with the plan, once helm has dropped the release and no pods remain.
+kind: helm
+release: glm-53
+namespace: models
+chart: vllm
+seedAutoscale: true
+pods:
+  - name: engine-0
+    phase: Running
+    labels:
+      app: glm-53-vllm
+      app.kubernetes.io/instance: glm-53
+steps:
+  - do: uninstall
+    status: 200
+    planError: false
+    autoscale: true
+  - do: dropHelm
+  - do: list
+    status: 200
+    present: true
+    phase: uninstalling
+    autoscale: true
+  - do: setPods
+  - do: list
+    status: 200
+    present: false
+    configMap: false
+    autoscale: false

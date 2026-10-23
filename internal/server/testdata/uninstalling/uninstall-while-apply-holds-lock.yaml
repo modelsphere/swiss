@@ -1,0 +1,29 @@
+# An uninstall cannot start in the middle of an apply. The apply holds the
+# release's lock; the DELETE is 409 and the plan is not marked.
+kind: helm
+release: glm-53
+namespace: models
+chart: vllm
+pods:
+  - name: engine-0
+    phase: Running
+    labels:
+      app: glm-53-vllm
+      app.kubernetes.io/instance: glm-53
+steps:
+  - do: holdLock
+  - do: uninstall
+    status: 409
+    errorContains: apply in progress
+    configMap: true
+  - do: list
+    status: 200
+    present: true
+    phase: applied
+  - do: releaseLock
+  - do: uninstall
+    status: 200
+  - do: list
+    status: 200
+    present: true
+    phase: uninstalling

@@ -1,0 +1,31 @@
+# A second DELETE while the first is still running helm finds the lock held by
+# that uninstall. It is 200, not 409, and does not run helm again.
+kind: helm
+release: glm-53
+namespace: models
+chart: vllm
+helmBlocks: true
+pods:
+  - name: engine-0
+    phase: Running
+    labels:
+      app: glm-53-vllm
+      app.kubernetes.io/instance: glm-53
+steps:
+  - do: uninstallAsync
+  - do: uninstall
+    status: 200
+    outputContains: uninstall already in progress
+    planError: false
+  - do: releaseHelm
+    status: 200
+    outputContains: helm uninstall
+  - do: dropHelm
+  - do: uninstall
+    status: 200
+    outputContains: uninstall already in progress
+  - do: setPods
+  - do: list
+    status: 200
+    present: false
+    configMap: false
