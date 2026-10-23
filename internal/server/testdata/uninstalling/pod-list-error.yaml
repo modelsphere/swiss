@@ -1,0 +1,20 @@
+kind: helm
+release: glm-53
+namespace: models
+chart: vllm
+podListError: true
+steps:
+  - do: uninstall
+    status: 200
+    planError: false
+  - do: list
+    status: 200
+    present: true
+    phase: uninstalling
+    configMap: true
+  - do: setPods
+  - do: list
+    status: 200
+    present: true
+    phase: uninstalling
+    configMap: true

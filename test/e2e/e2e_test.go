@@ -177,6 +177,35 @@ func deployCycle(backend string) {
 	_, _ = fmt.Fprintf(GinkgoWriter, "uninstall release=%s planError=%s\n", removed.Release, removed.PlanError)
 	Expect(removed.Release).To(Equal(rel))
 
+	// Helm returns before pods finish terminating. If they are already gone on
+	// the first poll, there is nothing left to list — that is success, not a miss.
+	if backend == "helm" {
+		By("[" + backend + "] staying listed while pods terminate")
+		Eventually(func(g Gomega) {
+			pods, err := vllmPods(rel)
+			g.Expect(err).NotTo(HaveOccurred())
+			if len(pods) == 0 {
+				return
+			}
+			var listed deploymentList
+			g.Expect(api.call(http.MethodGet, "/api/deployments?perPage=100", nil, &listed, apiTimeout)).To(Succeed())
+			phase, found := deploymentPhase(listed, rel)
+			if !found {
+				pods, err = vllmPods(rel)
+				g.Expect(err).NotTo(HaveOccurred())
+				if len(pods) == 0 {
+					return
+				}
+				g.Expect(found).To(BeTrue(), "pods still exist but %s is not listed", rel)
+			}
+			g.Expect(phase).To(Equal("uninstalling"))
+			var during releaseStatusBody
+			g.Expect(api.call(http.MethodGet, releasePath(rel)+"/status", nil, &during, apiTimeout)).To(Succeed())
+			g.Expect(during.Plan).NotTo(BeNil())
+			g.Expect(during.Plan.Phase).To(Equal("uninstalling"))
+		}).WithTimeout(time.Minute).WithPolling(gonePoll).Should(Succeed())
+	}
+
 	By(fmt.Sprintf("[%s] waiting for %s to be gone", backend, rel))
 	Eventually(func(g Gomega) {
 		pods, err := vllmPods(rel)
@@ -186,7 +215,20 @@ func deployCycle(backend string) {
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(exists).To(BeFalse())
 		g.Expect(helmReleasePresent(cfg.modelNS, rel)).To(BeFalse())
+		var listed deploymentList
+		g.Expect(api.call(http.MethodGet, "/api/deployments?perPage=100", nil, &listed, apiTimeout)).To(Succeed())
+		_, found := deploymentPhase(listed, rel)
+		g.Expect(found).To(BeFalse(), "%s is still listed after its pods are gone", rel)
 	}).WithTimeout(goneTimeout).WithPolling(gonePoll).Should(Succeed())
+}
+
+func deploymentPhase(list deploymentList, rel string) (string, bool) {
+	for _, d := range list.Deployments {
+		if d.Release == rel && d.Namespace == cfg.modelNS {
+			return d.Phase, true
+		}
+	}
+	return "", false
 }
 
 func engineAnswers(rel string) {
@@ -428,6 +470,9 @@ type releaseStatusBody struct {
 	Revision   int    `json:"revision"`
 	HelmStatus string `json:"helmStatus"`
 	Model      string `json:"model"`
+	Plan       *struct {
+		Phase string `json:"phase"`
+	} `json:"planStatus"`
 }
 
 type objectBody struct {
@@ -441,6 +486,7 @@ type deploymentList struct {
 		Release   string `json:"release"`
 		Namespace string `json:"namespace"`
 		Backend   string `json:"backend"`
+		Phase     string `json:"phase"`
 	} `json:"deployments"`
 }
 

@@ -154,6 +154,9 @@ func (b llmBackend) Apply(ctx context.Context, p *plan.Plan, mode exec.Mode, o a
 	if err := b.requirePlanSchemaV2(p); err != nil {
 		return applyResult{}, err
 	}
+	if err := b.s.refuseUninstalling(ctx, p.Release.Namespace, p.Release.Name); err != nil {
+		return applyResult{}, err
+	}
 	if p.Chart.Path != "" {
 		return applyResult{}, failErr(http.StatusBadRequest, llmsvc.ErrChartPath)
 	}

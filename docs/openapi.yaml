@@ -1890,7 +1890,7 @@ components:
         catalogRef: { type: string }
         catalog: { type: string, description: "The configured catalog it came from; absent when the site no longer lists it." }
         version: { type: string }
-        phase: { type: string, description: "swiss's apply phase: applying, applied, failed (or the operator's)." }
+        phase: { type: string, description: "swiss's apply phase: applying, applied, failed, uninstalling (or the operator's). uninstalling is also set on an LLMService while metadata.deletionTimestamp is set, whatever status.phase says." }
         drift: { type: string, description: "What a person should look at." }
         route: { type: string }
         backend: { $ref: "#/components/schemas/ApplyWith" }
@@ -1933,7 +1933,7 @@ components:
           description: Helm releases. The last apply as swiss recorded it.
           required: [phase]
           properties:
-            phase: { type: string, enum: [applying, applied, failed] }
+            phase: { type: string, enum: [applying, applied, failed, uninstalling] }
             action: { type: string }
             revision: { type: integer }
             startedAt: { type: string, format: date-time }
@@ -1947,7 +1947,7 @@ components:
           type: object
           description: LLMService releases. The operator's status.
           properties:
-            phase: { type: string, examples: [Applying, Applied, Failed] }
+            phase: { type: string, description: "The operator's phase, or uninstalling when metadata.deletionTimestamp is set, whatever that phase says.", examples: [Applying, Applied, Failed, uninstalling] }
             message: { type: string }
             revision: { type: integer }
             conditions:

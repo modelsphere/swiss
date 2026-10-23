@@ -214,6 +214,10 @@ func (s *Server) handleRollback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ns, release := r.PathValue("namespace"), r.PathValue("release")
+	if err := s.refuseUninstalling(ctx, ns, release); err != nil {
+		writeStatus(w, err, http.StatusConflict)
+		return
+	}
 	p, err := s.archivedPlan(ctx, ns, release, req.ToRevision)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())

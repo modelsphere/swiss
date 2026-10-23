@@ -121,6 +121,13 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		} else {
 			out.Exists = true
 		}
+		if !u.GetDeletionTimestamp().IsZero() {
+			out.Exists = true
+			if out.Service == nil {
+				out.Service = &llmStatusView{}
+			}
+			out.Service.Phase = phaseUninstalling
+		}
 		if decoded, err := llmsvc.ToPlan(u); err == nil {
 			p = decoded
 		}
@@ -164,6 +171,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		if p.Ready {
 			out.Ready++
 		}
+	}
+	if out.Plan != nil && out.Plan.Phase == phaseUninstalling {
+		s.reapRelease(ctx, ns, release)
 	}
 	writeJSON(w, http.StatusOK, out)
 }

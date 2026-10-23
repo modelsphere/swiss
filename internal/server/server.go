@@ -85,6 +85,14 @@ type Server struct {
 
 	// decisionHTTP is the client for decision-gen. Nil uses a 5s timeout.
 	decisionHTTP *http.Client
+
+	// uninst is namespace/release for plans marked uninstalling. A restart
+	// leaves it empty; the label on the ConfigMap is what fills it again.
+	// inflight is set while helm has not returned, so a list cannot drop the
+	// plan out from under that call.
+	uninstMu    sync.Mutex
+	uninst      map[string]*uninstState
+	uninstReady bool
 }
 
 type openCatalog struct {
@@ -459,7 +467,11 @@ func (s *Server) Handler() http.Handler {
 
 // Run serves until ctx is cancelled, then drains.
 func (s *Server) Run(ctx context.Context) error {
-	go s.runAutoscaler(ctx)
+	loopCtx, stopLoop := context.WithCancel(ctx)
+	defer stopLoop()
+	go s.runAutoscaler(loopCtx)
+	go s.uninstallLoop(loopCtx)
+
 	srv := &http.Server{
 		Addr:              s.cfg.Server.Addr,
 		Handler:           s.Handler(),

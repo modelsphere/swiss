@@ -65,6 +65,67 @@ func TestManagedRefsListsPlansAndNotTheProfile(t *testing.T) {
 	}
 }
 
+func TestManagedRefsReturnsThePhaseLabel(t *testing.T) {
+	md := metaClient(planMetaLabeled("models", PlanConfigMapPrefix+"glm-53", map[string]string{
+		LabelPhase: "uninstalling",
+	}))
+	k := NewKubeWithClients(fake.NewSimpleClientset(), md)
+
+	refs, err := k.ManagedRefs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 1 || refs[0].Namespace != "models" || refs[0].Name != "glm-53" {
+		t.Fatalf("got %+v", refs)
+	}
+	if refs[0].Labels[LabelPhase] != "uninstalling" {
+		t.Fatalf("the phase label is what a restart reads, got %+v", refs[0].Labels)
+	}
+}
+
+// PutConfigMap replaces the label set. A later write with no phase label has
+// to drop the uninstalling marker, or a finished release stays in that set.
+func TestPutConfigMapReplacesPhaseLabel(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+	k := NewKubeWithClient(cs)
+	ctx := context.Background()
+	ref := "models/" + PlanConfigMapPrefix + "glm-53"
+	data := map[string]string{planKey: "source:\n  model: glm\n"}
+
+	if err := k.PutConfigMap(ctx, ref, data, map[string]string{LabelPhase: "uninstalling"}); err != nil {
+		t.Fatal(err)
+	}
+	cm, err := cs.CoreV1().ConfigMaps("models").Get(ctx, PlanConfigMapPrefix+"glm-53", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cm.Labels["app.kubernetes.io/managed-by"] != "swiss" || cm.Labels[LabelPhase] != "uninstalling" {
+		t.Fatalf("labels %+v", cm.Labels)
+	}
+
+	if err := k.PutConfigMap(ctx, ref, data, nil); err != nil {
+		t.Fatal(err)
+	}
+	cm, err = cs.CoreV1().ConfigMaps("models").Get(ctx, PlanConfigMapPrefix+"glm-53", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cm.Labels["app.kubernetes.io/managed-by"] != "swiss" {
+		t.Fatalf("managed-by must stay, labels %+v", cm.Labels)
+	}
+	if _, ok := cm.Labels[LabelPhase]; ok {
+		t.Fatalf("nil labels must clear the phase marker, labels %+v", cm.Labels)
+	}
+}
+
+func planMetaLabeled(namespace, name string, extra map[string]string) *metav1.PartialObjectMetadata {
+	o := planMeta(namespace, name)
+	for k, v := range extra {
+		o.Labels[k] = v
+	}
+	return o
+}
+
 func TestManagedRefsNeedsAMetadataClient(t *testing.T) {
 	k := NewKubeWithClient(fake.NewSimpleClientset())
 	if _, err := k.ManagedRefs(context.Background()); err == nil {

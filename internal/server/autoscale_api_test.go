@@ -54,8 +54,8 @@ type mirrorWriter struct {
 	mapLabels map[string]map[string]string
 }
 
-func (m *mirrorWriter) PutConfigMap(ctx context.Context, ref string, data map[string]string) error {
-	if err := m.fakeWriter.PutConfigMap(ctx, ref, data); err != nil {
+func (m *mirrorWriter) PutConfigMap(ctx context.Context, ref string, data, labels map[string]string) error {
+	if err := m.fakeWriter.PutConfigMap(ctx, ref, data, labels); err != nil {
 		return err
 	}
 	m.remember(ref, m.written[ref], nil)

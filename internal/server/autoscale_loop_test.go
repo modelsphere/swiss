@@ -224,8 +224,10 @@ func runLLMLoop(t *testing.T, tc loopCase) {
 		t.Fatal(err)
 	}
 	if tc.Conflict {
-		if gotGets != 7 {
-			t.Errorf("Get calls %d, want 7", gotGets)
+		// One more than before uninstalling existed: Apply reads the
+		// LLMService once to refuse a release that is being deleted.
+		if gotGets != 8 {
+			t.Errorf("Get calls %d, want 8", gotGets)
 		}
 		if st.LastError == "" || !strings.Contains(st.LastError, tc.ErrorContains) {
 			t.Fatalf("lastError %q, want substring %q (gets %d)", st.LastError, tc.ErrorContains, gets.Load())

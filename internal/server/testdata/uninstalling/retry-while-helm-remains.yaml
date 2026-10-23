@@ -1,0 +1,21 @@
+kind: helm
+release: glm-53
+namespace: models
+chart: vllm
+pods:
+  - name: engine-0
+    phase: Running
+    labels:
+      app: glm-53-vllm
+steps:
+  - do: uninstall
+    status: 200
+    outputContains: helm uninstall
+  - do: uninstall
+    status: 200
+    outputContains: helm uninstall
+  - do: list
+    status: 200
+    present: true
+    phase: uninstalling
+    configMap: true

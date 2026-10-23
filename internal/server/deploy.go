@@ -657,6 +657,10 @@ func (s *Server) applyLocked(ctx context.Context, p *plan.Plan, mode exec.Mode, 
 // applyPlan is apply plus the HTTP response. Handlers stay here; the
 // autoscaler calls apply and records the error itself.
 func (s *Server) applyPlan(ctx context.Context, w http.ResponseWriter, p *plan.Plan, mode exec.Mode, applyWith string, expectRevision int, action, note string, forceConflicts bool) {
+	if err := s.refuseUninstalling(ctx, p.Release.Namespace, p.Release.Name); err != nil {
+		writeStatus(w, err, http.StatusConflict)
+		return
+	}
 	res, err := s.apply(ctx, p, mode, applyWith, applyOpts{
 		ExpectRevision: expectRevision,
 		Action:         action,
@@ -677,14 +681,8 @@ func (s *Server) applyPlan(ctx context.Context, w http.ResponseWriter, p *plan.P
 	})
 }
 
-// handleUninstall removes a release and the plan recorded beside it.
-//
-// The order is deliberate and is the write-ahead in reverse. An apply records
-// the plan first so a failure cannot leave a live release with nothing beside
-// it; an uninstall removes the release first for the same reason. Dropping the
-// ConfigMap up front and then failing to uninstall would turn a release swiss
-// deployed into an `untracked` row -- the one thing that is supposed to mean
-// somebody installed by hand.
+// handleUninstall removes a release. A plan ConfigMap is marked uninstalling
+// before helm runs and stays until that release's pods are gone.
 func (s *Server) handleUninstall(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := contextWithTimeout(r, 15*time.Minute)
 	defer cancel()
@@ -717,9 +715,10 @@ func (s *Server) handleUninstall(w http.ResponseWriter, r *http.Request) {
 }
 
 const (
-	phaseApplying = "applying"
-	phaseApplied  = "applied"
-	phaseFailed   = "failed"
+	phaseApplying     = "applying"
+	phaseApplied      = "applied"
+	phaseFailed       = "failed"
+	phaseUninstalling = "uninstalling"
 )
 
 // applyBudget bounds the cluster-changing half of an apply, which runs detached
@@ -857,7 +856,17 @@ func (s *Server) writePlan(ctx context.Context, p *plan.Plan, st planStatus) err
 		return err
 	}
 	files["status.yaml"] = string(status)
-	return s.writer.PutConfigMap(ctx, planRef(p.Release.Namespace, p.Release.Name), files)
+	return s.writer.PutConfigMap(ctx, planRef(p.Release.Namespace, p.Release.Name), files, phaseLabel(st.Phase))
+}
+
+// phaseLabel is the metadata marker for a phase the deployments list has to
+// see without reading status.yaml. Any other phase clears it: PutConfigMap
+// replaces labels.
+func phaseLabel(phase string) map[string]string {
+	if phase == phaseUninstalling {
+		return map[string]string{cluster.LabelPhase: phaseUninstalling}
+	}
+	return nil
 }
 
 func (s *Server) planFromRequest(ctx context.Context, r *http.Request) (*plan.Plan, error) {

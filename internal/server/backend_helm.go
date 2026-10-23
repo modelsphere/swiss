@@ -63,6 +63,9 @@ func (b helmBackend) Archived(ctx context.Context, ns, release string, rev int) 
 
 func (b helmBackend) Apply(ctx context.Context, p *plan.Plan, mode exec.Mode, o applyOpts) (applyResult, error) {
 	s := b.s
+	if err := s.refuseUninstalling(ctx, p.Release.Namespace, p.Release.Name); err != nil {
+		return applyResult{}, err
+	}
 	st, err := exec.Lookup(ctx, s.probe, p.Release.Namespace, p.Release.Name)
 	if err != nil {
 		return applyResult{}, failErr(http.StatusBadGateway, err)
@@ -165,12 +168,28 @@ func (b helmBackend) Apply(ctx context.Context, p *plan.Plan, mode exec.Mode, o 
 
 func (b helmBackend) Uninstall(ctx context.Context, ns, release string) (uninstallResult, error) {
 	s := b.s
+	if s.uninstallInflight(ns, release) {
+		return uninstallResult{Output: uninstallInProgress}, nil
+	}
 	st, err := exec.Lookup(ctx, s.probe, ns, release)
 	if err != nil {
 		return uninstallResult{}, failErr(http.StatusBadGateway, err)
 	}
-	if err := exec.CheckUninstall(st, ns, release); err != nil {
-		return uninstallResult{}, failErr(http.StatusNotFound, err)
+	// Already marked, and helm has deleted the release: pods may still be
+	// terminating. A second DELETE does not run helm again.
+	phase := s.planPhase(ctx, ns, release)
+	if phase == phaseUninstalling && !st.Exists {
+		s.trackUninstalling(ns, release)
+		var planErr string
+		if s.writer != nil {
+			planErr = s.reapRelease(ctx, ns, release)
+		}
+		return uninstallResult{Output: uninstallInProgress, PlanError: planErr}, nil
+	}
+	if phase != phaseUninstalling {
+		if err := exec.CheckUninstall(st, ns, release); err != nil {
+			return uninstallResult{}, failErr(http.StatusNotFound, err)
+		}
 	}
 
 	// Read the plan before the release goes, only to name it in the audit row.
@@ -180,8 +199,25 @@ func (b helmBackend) Uninstall(ctx context.Context, ns, release string) (uninsta
 		planHash = p.Hash
 	}
 
+	// Inflight before the marker so a list cannot drop the plan while helm is
+	// still running. A marker with no inflight is a destroy that did not finish
+	// (this process, or the one before a restart); helm runs again.
+	if !s.beginUninstall(ns, release) {
+		return uninstallResult{Output: uninstallInProgress}, nil
+	}
+	hadPlan := phase == phaseUninstalling
+	if !hadPlan {
+		var merr error
+		hadPlan, merr = s.markUninstalling(ctx, ns, release)
+		if merr != nil {
+			s.forgetUninstalling(ns, release)
+			return uninstallResult{}, fail(http.StatusInternalServerError, "plan not marked, nothing uninstalled: %s", merr.Error())
+		}
+	}
+
 	// The uninstall outlives the request, like an apply: a browser navigating
-	// away must not SIGKILL helm halfway through deleting a release.
+	// away must not SIGKILL helm halfway through deleting a release. It does
+	// not wait for pods to finish terminating.
 	started := time.Now()
 	ctx, cancel := detach(ctx)
 	defer cancel()
@@ -189,16 +225,23 @@ func (b helmBackend) Uninstall(ctx context.Context, ns, release string) (uninsta
 	res, uninstallErr := s.runner().Uninstall(ctx, ns, release)
 	s.recordRelease(ctx, "uninstall", ns, release, planHash, res, uninstallErr, started, "", 0)
 	if uninstallErr != nil {
+		if hadPlan {
+			if err := s.finishUninstallFailed(ctx, ns, release, uninstallErr); err != nil {
+				s.log.ErrorContext(ctx, "uninstalling phase not cleared", "release", release, "err", err)
+				s.endUninstall(ns, release)
+				return uninstallResult{}, failErr(http.StatusInternalServerError, uninstallErr)
+			}
+		}
+		s.forgetUninstalling(ns, release)
 		return uninstallResult{}, failErr(http.StatusInternalServerError, uninstallErr)
 	}
 
-	// Best effort, and reported rather than swallowed: the release is gone
-	// either way, and a stray plan ConfigMap shows up in the deployments view
-	// as a plan with no release rather than as anything dangerous.
+	s.endUninstall(ns, release)
 	var planErr string
 	if s.writer != nil {
 		// The history goes with it: one Secret per revision would otherwise be
-		// left behind for a release that no longer exists.
+		// left behind for a release that no longer exists. The plan ConfigMap
+		// stays until the pods are gone, which is what keeps the row listed.
 		if revs, err := s.archivedRevisions(ctx, ns, release); err == nil {
 			for _, r := range revs {
 				if err := s.writer.DeleteSecret(ctx, archiveRef(ns, release, r)); err != nil {
@@ -206,7 +249,9 @@ func (b helmBackend) Uninstall(ctx context.Context, ns, release string) (uninsta
 				}
 			}
 		}
-		if err := s.writer.DeleteConfigMap(ctx, planRef(ns, release)); err != nil {
+		if hadPlan {
+			planErr = s.reapRelease(ctx, ns, release)
+		} else if err := s.writer.DeleteConfigMap(ctx, planRef(ns, release)); err != nil {
 			planErr = err.Error()
 			s.log.ErrorContext(ctx, "plan configmap not removed", "release", release, "err", err)
 		}
@@ -217,6 +262,9 @@ func (b helmBackend) Uninstall(ctx context.Context, ns, release string) (uninsta
 			planErr += err.Error()
 			s.log.ErrorContext(ctx, "autoscale configmap not removed", "release", release, "err", err)
 		}
+	}
+	if !hadPlan {
+		s.forgetUninstalling(ns, release)
 	}
 	return uninstallResult{Output: res.Output, PlanError: planErr}, nil
 }

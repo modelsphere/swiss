@@ -455,7 +455,7 @@ func (s *Server) handleSaveProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := map[string]string{s.cfg.Cluster.Profile.Key: body}
-	if err := s.writer.PutConfigMap(ctx, ref, data); err != nil {
+	if err := s.writer.PutConfigMap(ctx, ref, data, nil); err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
@@ -669,15 +669,28 @@ func (s *Server) deploymentFromService(ctx context.Context, ref deployRef) *depl
 		Release: u.GetName(), Namespace: u.GetNamespace(),
 		Backend: backendLLMSVC, External: llmsvc.IsExternal(u), CleanupPending: ref.cleanup,
 	}
+	// deletionTimestamp wins over status.phase: the object is still listed
+	// while a finalizer keeps it, and that is the uninstall.
+	deleting := !u.GetDeletionTimestamp().IsZero()
+	if deleting {
+		d.Phase = phaseUninstalling
+		d.Drift = "uninstall in progress"
+	}
 	obj, err := llmsvc.FromUnstructured(u)
 	if err != nil {
 		s.log.WarnContext(ctx, "llmservice does not decode",
 			"namespace", u.GetNamespace(), "release", u.GetName(), "err", err)
 		d.Drift = "plan unreadable: " + err.Error()
+		if deleting {
+			d.Phase = phaseUninstalling
+			d.Drift = "uninstall in progress"
+		}
 		return d
 	}
 	if obj.Status != nil {
-		d.Phase = obj.Status.Phase
+		if !deleting {
+			d.Phase = obj.Status.Phase
+		}
 		if obj.Status.Helm != nil {
 			d.Revision = int(obj.Status.Helm.Revision)
 			d.Status = obj.Status.Helm.Status
@@ -685,12 +698,18 @@ func (s *Server) deploymentFromService(ctx context.Context, ref deployRef) *depl
 		if obj.Status.Chart != nil {
 			d.Chart = chartLabel(obj.Status.Chart.Name, obj.Status.Chart.Version)
 		}
-		switch obj.Status.Phase {
-		case llmsvc.PhaseFailed:
-			d.Drift = "last apply failed: " + obj.Status.Message
-		case llmsvc.PhaseApplying:
-			d.Drift = "an apply is in progress"
+		if !deleting {
+			switch obj.Status.Phase {
+			case llmsvc.PhaseFailed:
+				d.Drift = "last apply failed: " + obj.Status.Message
+			case llmsvc.PhaseApplying:
+				d.Drift = "an apply is in progress"
+			}
 		}
+	}
+	if deleting {
+		d.Phase = phaseUninstalling
+		d.Drift = "uninstall in progress"
 	}
 	if d.Chart == "" {
 		d.Chart = chartLabel(obj.Spec.Chart.Name, obj.Spec.Chart.Version)
@@ -700,6 +719,10 @@ func (s *Server) deploymentFromService(ctx context.Context, ref deployRef) *depl
 		s.log.WarnContext(ctx, "llmservice plan does not decode",
 			"namespace", u.GetNamespace(), "release", u.GetName(), "err", err)
 		d.Drift = "plan unreadable: " + err.Error()
+		if deleting {
+			d.Phase = phaseUninstalling
+			d.Drift = "uninstall in progress"
+		}
 		return d
 	}
 	d.Route = routeOf(p)
@@ -724,6 +747,10 @@ func (s *Server) deploymentFromService(ctx context.Context, ref deployRef) *depl
 func (s *Server) handleDeployments(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := contextWithTimeout(r, 30*time.Second)
 	defer cancel()
+
+	// A release whose pods have finished terminating drops out of this page
+	// rather than on the next poll interval.
+	s.reapUninstalling(ctx)
 
 	refs, err := s.deploymentRefs(ctx)
 	if err != nil {
@@ -845,6 +872,8 @@ func (s *Server) deploymentRow(ctx context.Context, rel cluster.Release) *deploy
 			d.Drift = "last apply failed: " + st.Error
 		case phaseApplying:
 			d.Drift = "an apply was started and never completed"
+		case phaseUninstalling:
+			d.Drift = "uninstall in progress"
 		}
 	}
 	// The route is read off the composed values rather than the summary: it is a
