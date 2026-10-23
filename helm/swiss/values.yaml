@@ -226,10 +226,12 @@ tmpSizeLimit: 1Gi
 # beside its release. Use a volume in production.
 #
 # Switching an existing release from the chart-created PVC to no persistence,
-# or to existingClaim naming that same PVC, makes helm delete that PVC and its
-# data. Back the data up or migrate it to a separately created PVC first, or
-# keep the PVC with `kubectl annotate pvc <fullname>-data
-# helm.sh/resource-policy=keep` before the upgrade.
+# or to existingClaim naming that same PVC, makes helm delete that PVC (and,
+# with the usual Delete reclaim policy, its data). Back the data up or migrate
+# it to a separately created PVC first, or keep the PVC by running this before
+# the upgrade:
+#
+#   kubectl -n <namespace> annotate pvc <fullname>-data helm.sh/resource-policy=keep
 persistence:
   enabled: true
   size: 10Gi
