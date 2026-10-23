@@ -384,6 +384,24 @@ func coerceInt(v any) (int, bool) {
 	}
 }
 
+// autoscaleServiceID is the id the decision server is queried with. An explicit
+// serviceId wins; otherwise the chart fullname, which is what the chart renders
+// when serviceId is unset. The upgrade check keeps serviceIDOf, the release name.
+func autoscaleServiceID(p *plan.Plan) string {
+	if p != nil {
+		if v, ok := values.Get(p.Values(), "serviceId"); ok {
+			if s, ok := v.(string); ok && s != "" {
+				return s
+			}
+		}
+	}
+	release := ""
+	if p != nil {
+		release = p.Release.Name
+	}
+	return fullnameOf(p, release)
+}
+
 // fullnameOf is the chart fullname: fullnameOverride, else the release name,
 // truncated to 63 characters, with one trailing "-" removed.
 func fullnameOf(p *plan.Plan, release string) string {

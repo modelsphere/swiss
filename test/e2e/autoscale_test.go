@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/modelsphere/swiss/internal/plan"
-	"github.com/modelsphere/swiss/internal/values"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
@@ -36,6 +35,14 @@ var dsGVR = schema.GroupVersionResource{
 // Its own Ordered container so -ginkgo.label-filter=autoscale logs in without
 // the helm/llmsvc specs. The DisaggregatedSet CRD has no controller behind it.
 var _ = Describe("PD autoscaling", Label("autoscale"), Ordered, func() {
+	AfterEach(func() {
+		if !CurrentSpecReport().Failed() {
+			return
+		}
+		dumpClusterState(CurrentSpecReport().FullText())
+		dumpAutoscale(cfg.modelNS, e2ePDRelease)
+	})
+
 	BeforeAll(func() {
 		user, pass := chartCredentials()
 		var resp struct {
@@ -48,7 +55,7 @@ var _ = Describe("PD autoscaling", Label("autoscale"), Ordered, func() {
 		api.token = resp.Token
 	})
 
-	It("records a decision for a seeded disaggregated release", func() {
+	It("installs a disaggregated release and scales it down", func() {
 		ns := cfg.modelNS
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
@@ -60,13 +67,15 @@ var _ = Describe("PD autoscaling", Label("autoscale"), Ordered, func() {
 			_, _ = cmd.CombinedOutput()
 		})
 
+		// active=1 against an install of 2 slices. Scale-down does not wait for
+		// routers, which stay unready on a CPU cluster.
 		decisionBody := fmt.Sprintf(`events {}
 http {
   server {
     listen 80;
     location = /decisions {
       default_type application/json;
-      return 200 '{"apiVersion":"llmscaling.inference.x-k8s.io/v1alpha1","decisions":[{"namespace":"%s","serviceId":"%s","replicas":{"active":2}}]}';
+      return 200 '{"apiVersion":"llmscaling.inference.x-k8s.io/v1alpha1","decisions":[{"namespace":"%s","serviceId":"%s","replicas":{"active":1}}]}';
     }
   }
 }
@@ -101,39 +110,49 @@ http {
 		text += fmt.Sprintf("scaler:\n  serverAddress: http://e2e-decisions.%s.svc:80\n  autoscalePeriod: 2s\n", ns)
 		api.must(http.MethodPut, "/api/profile", profilePut{YAML: text}, nil, apiTimeout)
 
-		planCM := e2ePlanConfigMap(ns)
-		_, err = kube.CoreV1().ConfigMaps(ns).Create(ctx, planCM, metav1.CreateOptions{})
-		Expect(err).NotTo(HaveOccurred())
-		DeferCleanup(func() {
-			_ = kube.CoreV1().ConfigMaps(ns).Delete(context.Background(), planCM.Name, metav1.DeleteOptions{})
-		})
+		By("planning a 2-slice PD release")
+		var planned plan.Plan
+		api.must(http.MethodPost, "/api/plans", planBody{
+			Model: cfg.model, Release: e2ePDRelease, Namespace: ns, ServiceID: e2ePDRelease,
+			EditsYAML: pdEdits(e2ePDRelease),
+		}, &planned, apiTimeout)
+		Expect(planned.Hash).NotTo(BeEmpty())
 
-		ds := &unstructured.Unstructured{Object: map[string]any{
-			"apiVersion": "disaggregatedset.x-k8s.io/v1",
-			"kind":       "DisaggregatedSet",
-			"metadata":   map[string]any{"name": e2ePDRelease},
-			"spec":       map[string]any{"slices": int64(1)},
-		}}
-		created, err := dynClient.Resource(dsGVR).Namespace(ns).Create(ctx, ds, metav1.CreateOptions{})
-		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(func() {
+			_ = api.call(http.MethodDelete, releasePath(e2ePDRelease), nil, nil, installTimeout)
 			_ = dynClient.Resource(dsGVR).Namespace(ns).Delete(context.Background(), e2ePDRelease, metav1.DeleteOptions{})
 		})
-		created.Object["status"] = map[string]any{
-			"observedGeneration": created.GetGeneration(),
-			"roleStatuses": []any{map[string]any{
-				"name": "prefill", "replicas": int64(1), "readyReplicas": int64(1), "updatedReplicas": int64(1),
-			}},
-		}
-		_, err = dynClient.Resource(dsGVR).Namespace(ns).UpdateStatus(ctx, created, metav1.UpdateOptions{})
-		Expect(err).NotTo(HaveOccurred())
 
-		router := nginxDeploy(e2ePDRelease+"-router-s0", e2ePDRelease+"-router", "")
-		_, err = kube.AppsV1().Deployments(ns).Create(ctx, router, metav1.CreateOptions{})
-		Expect(err).NotTo(HaveOccurred())
-		DeferCleanup(func() {
-			_ = kube.AppsV1().Deployments(ns).Delete(context.Background(), router.Name, metav1.DeleteOptions{})
-		})
+		By("installing through helm")
+		var installed installResult
+		api.must(http.MethodPost, "/api/install", installBody{PlanHash: planned.Hash, ApplyWith: "helm"}, &installed, installTimeout)
+		_, _ = fmt.Fprintf(GinkgoWriter, "install release=%s revision=%d statusError=%s\n", installed.Release, installed.Revision, installed.StatusError)
+		Expect(installed.Release).To(Equal(e2ePDRelease))
+		Expect(installed.StatusError).To(BeEmpty())
+		Expect(installed.Revision).To(BeNumerically(">", 0))
+
+		By("waiting for the DisaggregatedSet at 2 slices")
+		Eventually(func(g Gomega) {
+			var st releaseStatusBody
+			g.Expect(api.call(http.MethodGet, releasePath(e2ePDRelease)+"/status", nil, &st, apiTimeout)).To(Succeed())
+			g.Expect(st.Exists).To(BeTrue())
+			g.Expect(st.HelmStatus).To(Equal("deployed"))
+			g.Expect(st.Revision).To(Equal(installed.Revision))
+			obj, err := dynClient.Resource(dsGVR).Namespace(ns).Get(context.Background(), e2ePDRelease, metav1.GetOptions{})
+			g.Expect(err).NotTo(HaveOccurred())
+			slices, _, err := unstructured.NestedInt64(obj.Object, "spec", "slices")
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(slices).To(Equal(int64(2)))
+		}).WithTimeout(5 * time.Minute).WithPolling(2 * time.Second).Should(Succeed())
+
+		// No controller is installed. A stale observedGeneration is a rollout
+		// hold and would block the scale-down; unready roles would not.
+		markDSCurrent(ns, e2ePDRelease)
+		Eventually(func(g Gomega) {
+			dep, err := kube.AppsV1().Deployments(ns).Get(context.Background(), "e2e-decisions", metav1.GetOptions{})
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(dep.Status.AvailableReplicas).To(BeNumerically(">=", 1))
+		}).WithTimeout(4 * time.Minute).WithPolling(2 * time.Second).Should(Succeed())
 
 		api.must(http.MethodPut, releasePath(e2ePDRelease)+"/autoscaling", map[string]any{
 			"enabled": true, "minSlices": 1, "maxSlices": 4,
@@ -142,33 +161,142 @@ http {
 			_ = api.call(http.MethodDelete, releasePath(e2ePDRelease)+"/autoscaling", nil, nil, apiTimeout)
 		})
 
-		var view struct {
-			Found  bool `json:"found"`
-			Status struct {
-				LastDecision *int   `json:"lastDecision"`
-				HoldReason   string `json:"holdReason"`
-				LastError    string `json:"lastError"`
-			} `json:"status"`
-		}
+		By("scaling 2 to 1")
+		var view autoscaleBody
 		Eventually(func(g Gomega) {
+			obj, err := dynClient.Resource(dsGVR).Namespace(ns).Get(context.Background(), e2ePDRelease, metav1.GetOptions{})
+			g.Expect(err).NotTo(HaveOccurred())
+			slices, _, err := unstructured.NestedInt64(obj.Object, "spec", "slices")
+			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(api.call(http.MethodGet, releasePath(e2ePDRelease)+"/autoscaling", nil, &view, apiTimeout)).To(Succeed())
-			g.Expect(view.Found).To(BeTrue())
-			g.Expect(view.Status.LastDecision).NotTo(BeNil())
-			g.Expect(*view.Status.LastDecision).To(Equal(2))
-		}).WithTimeout(90 * time.Second).WithPolling(2 * time.Second).Should(Succeed())
-		_, _ = fmt.Fprintf(GinkgoWriter, "autoscale hold=%q err=%q decision=%d\n", view.Status.HoldReason, view.Status.LastError, *view.Status.LastDecision)
+			var st releaseStatusBody
+			g.Expect(api.call(http.MethodGet, releasePath(e2ePDRelease)+"/status", nil, &st, apiTimeout)).To(Succeed())
+			var cur plan.Plan
+			g.Expect(api.call(http.MethodGet, releasePath(e2ePDRelease)+"/plan", nil, &cur, apiTimeout)).To(Succeed())
+			g.Expect(slices).To(Equal(int64(1)), "hold=%s err=%s decision=%v helm=%s rev=%d autoscale=%v",
+				view.Status.HoldReason, view.Status.LastError, view.Status.LastDecision, st.HelmStatus, st.Revision, cur.Layers["autoscale"])
+			g.Expect(st.Revision).To(BeNumerically(">", installed.Revision))
+			g.Expect(view.Status.LastScaleFrom).NotTo(BeNil())
+			g.Expect(*view.Status.LastScaleFrom).To(Equal(2))
+			g.Expect(view.Status.LastScaleTo).NotTo(BeNil())
+			g.Expect(*view.Status.LastScaleTo).To(Equal(1))
+			layer := cur.Layers["autoscale"]
+			g.Expect(layer).NotTo(BeNil())
+			g.Expect(layer["replicaCount"]).To(BeNumerically("==", 1))
+		}).WithTimeout(10 * time.Minute).WithPolling(5 * time.Second).Should(Succeed())
+		_, _ = fmt.Fprintf(GinkgoWriter, "scaled hold=%q err=%q from=%d to=%d\n", view.Status.HoldReason, view.Status.LastError, *view.Status.LastScaleFrom, *view.Status.LastScaleTo)
+		markDSCurrent(ns, e2ePDRelease)
 
-		got, err := dynClient.Resource(dsGVR).Namespace(ns).Get(ctx, e2ePDRelease, metav1.GetOptions{})
-		Expect(err).NotTo(HaveOccurred())
-		slices, _, err := unstructured.NestedInt64(got.Object, "spec", "slices")
-		Expect(err).NotTo(HaveOccurred())
-		Expect(slices).To(Equal(int64(1)))
-
-		_, err = kube.AppsV1().Deployments(ns).Get(ctx, e2ePDRelease+"-router-s0", metav1.GetOptions{})
-		Expect(err).NotTo(HaveOccurred())
-		Expect(apierrors.IsNotFound(err)).To(BeFalse())
+		By("deleting autoscaling and uninstalling")
+		api.must(http.MethodDelete, releasePath(e2ePDRelease)+"/autoscaling", nil, nil, apiTimeout)
+		var removed uninstallResult
+		api.must(http.MethodDelete, releasePath(e2ePDRelease), nil, &removed, installTimeout)
+		Expect(removed.Release).To(Equal(e2ePDRelease))
+		Expect(removed.PlanError).To(BeEmpty())
+		Eventually(func() bool {
+			_, err := kube.CoreV1().ConfigMaps(ns).Get(context.Background(), "swiss-autoscale-"+e2ePDRelease, metav1.GetOptions{})
+			return apierrors.IsNotFound(err)
+		}).WithTimeout(2 * time.Minute).WithPolling(2 * time.Second).Should(BeTrue())
 	})
 })
+
+// pdEdits renders prefill/decode on a CPU cluster. commandOverride null clears
+// the mock catalog's empty list, which the chart rejects beside pd. Pods may
+// stay Pending; DirectoryOrCreate keeps the router hostPath valid.
+func pdEdits(release string) string {
+	return fmt.Sprintf(`replicaCount: 2
+serviceId: %s
+fullnameOverride: %s
+commandOverride: null
+model:
+  localPath: /tmp/e2e-pd
+  hostPathType: DirectoryOrCreate
+pd:
+  enabled: true
+  colocate: false
+  prefill:
+    gpus: 0
+  decode:
+    gpus: 0
+rdma:
+  enabled: true
+lws:
+  enabled: false
+scaler:
+  enabled: false
+modelRoute:
+  enabled: false
+cart:
+  enabled: false
+sloRequirement:
+  enabled: false
+serviceMonitor:
+  enabled: false
+`, release, release)
+}
+
+func dumpAutoscale(ns, release string) {
+	var view autoscaleBody
+	if err := api.call(http.MethodGet, releasePath(release)+"/autoscaling", nil, &view, apiTimeout); err != nil {
+		_, _ = fmt.Fprintf(GinkgoWriter, "autoscaling: %v\n", err)
+	} else {
+		_, _ = fmt.Fprintf(GinkgoWriter, "autoscaling found=%v status=%+v\n", view.Found, view.Status)
+	}
+	var st releaseStatusBody
+	if err := api.call(http.MethodGet, releasePath(release)+"/status", nil, &st, apiTimeout); err != nil {
+		_, _ = fmt.Fprintf(GinkgoWriter, "status: %v\n", err)
+	} else {
+		_, _ = fmt.Fprintf(GinkgoWriter, "release exists=%v helm=%s rev=%d\n", st.Exists, st.HelmStatus, st.Revision)
+	}
+	var cur plan.Plan
+	if err := api.call(http.MethodGet, releasePath(release)+"/plan", nil, &cur, apiTimeout); err != nil {
+		_, _ = fmt.Fprintf(GinkgoWriter, "plan: %v\n", err)
+	} else {
+		names := make([]string, 0, len(cur.Layers))
+		for name := range cur.Layers {
+			names = append(names, name)
+		}
+		_, _ = fmt.Fprintf(GinkgoWriter, "plan layers=%v autoscale=%v\n", names, cur.Layers["autoscale"])
+	}
+	if dynClient == nil {
+		return
+	}
+	obj, err := dynClient.Resource(dsGVR).Namespace(ns).Get(context.Background(), release, metav1.GetOptions{})
+	if err != nil {
+		_, _ = fmt.Fprintf(GinkgoWriter, "ds: %v\n", err)
+		return
+	}
+	slices, _, _ := unstructured.NestedInt64(obj.Object, "spec", "slices")
+	obs, _, _ := unstructured.NestedInt64(obj.Object, "status", "observedGeneration")
+	_, _ = fmt.Fprintf(GinkgoWriter, "ds generation=%d observed=%d slices=%d\n", obj.GetGeneration(), obs, slices)
+}
+
+type autoscaleBody struct {
+	Found  bool `json:"found"`
+	Status struct {
+		LastDecision  *int   `json:"lastDecision"`
+		HoldReason    string `json:"holdReason"`
+		LastError     string `json:"lastError"`
+		LastScaleFrom *int   `json:"lastScaleFrom"`
+		LastScaleTo   *int   `json:"lastScaleTo"`
+	} `json:"status"`
+}
+
+// markDSCurrent sets observedGeneration to the live generation and leaves the
+// roles unready. Scale-down is allowed to proceed; a rollout hold is not.
+func markDSCurrent(ns, name string) {
+	obj, err := dynClient.Resource(dsGVR).Namespace(ns).Get(context.Background(), name, metav1.GetOptions{})
+	Expect(err).NotTo(HaveOccurred())
+	obj.Object["status"] = map[string]any{
+		"observedGeneration": obj.GetGeneration(),
+		"roleStatuses": []any{
+			map[string]any{"name": "prefill", "replicas": int64(1), "readyReplicas": int64(0), "updatedReplicas": int64(0)},
+			map[string]any{"name": "decode", "replicas": int64(1), "readyReplicas": int64(0), "updatedReplicas": int64(0)},
+		},
+	}
+	_, err = dynClient.Resource(dsGVR).Namespace(ns).UpdateStatus(context.Background(), obj, metav1.UpdateOptions{})
+	Expect(err).NotTo(HaveOccurred())
+}
 
 func applyDSCRD() {
 	f, err := os.CreateTemp("", "disaggregatedset-crd-*.yaml")
@@ -180,6 +308,12 @@ func applyDSCRD() {
 	cmd := exec.Command(cfg.kubectlBin, "--context", cfg.context, "apply", "-f", f.Name())
 	out, err := cmd.CombinedOutput()
 	Expect(err).NotTo(HaveOccurred(), string(out))
+	Eventually(func(g Gomega) {
+		established, err := kubectl("get", "crd", "disaggregatedsets.disaggregatedset.x-k8s.io",
+			"-o", `jsonpath={.status.conditions[?(@.type=="Established")].status}`)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(established).To(Equal("True"))
+	}).WithTimeout(time.Minute).WithPolling(2 * time.Second).Should(Succeed())
 }
 
 func nginxDeploy(name, app, configMap string) *appsv1.Deployment {
@@ -214,32 +348,5 @@ func nginxDeploy(name, app, configMap string) *appsv1.Deployment {
 				Spec:       pod,
 			},
 		},
-	}
-}
-
-func e2ePlanConfigMap(ns string) *corev1.ConfigMap {
-	p := &plan.Plan{
-		APIVersion: plan.APIVersion,
-		Release:    plan.Release{Name: e2ePDRelease, Namespace: ns},
-		Source:     plan.SourceRef{Model: e2ePDRelease, Variant: "pd"},
-		Chart:      plan.ChartRef{Name: "sglang", Version: "0.0.0", Repo: "oci://example.invalid/charts"},
-		Engine:     "sglang",
-		Profile:    "kind-e2e",
-		Layers: map[string]values.Tree{
-			"form": {
-				"replicaCount":     1,
-				"serviceId":        e2ePDRelease,
-				"fullnameOverride": e2ePDRelease,
-				"pd":               values.Tree{"enabled": true, "colocate": false},
-			},
-		},
-	}
-	Expect(p.ComputeHash()).To(Succeed())
-	files, err := p.Files("")
-	Expect(err).NotTo(HaveOccurred())
-	files["status.yaml"] = "phase: applied\n"
-	return &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: "swiss-plan-" + e2ePDRelease, Namespace: ns},
-		Data:       files,
 	}
 }

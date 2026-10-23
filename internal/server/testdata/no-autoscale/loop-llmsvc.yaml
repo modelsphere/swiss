@@ -1,0 +1,4 @@
+name: loop-llmsvc
+description: the autoscale loop does not apply or write for an llmsvc release with no autoscale ConfigMap
+kind: loop
+backend: llmsvc

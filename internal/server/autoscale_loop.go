@@ -118,7 +118,7 @@ func (s *Server) autoscaleOne(ctx context.Context, ns, release string) {
 		return
 	}
 
-	d := s.queryDecision(ctx, ns, serviceIDOf(p))
+	d := s.queryDecision(ctx, ns, autoscaleServiceID(p))
 	var prev autoscale.Status
 	if view.Status != nil {
 		prev = *view.Status

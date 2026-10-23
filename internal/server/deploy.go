@@ -501,22 +501,18 @@ func (s *Server) recordedHF(ctx context.Context, prev *plan.Plan) (string, error
 	return m.Source.HF, nil
 }
 
-// serviceIDOf is the identity a release is deployed under, read from the
-// composed values. An explicit serviceId is kept as written. Otherwise the
-// chart fullname: fullnameOverride, else the release name.
+// serviceIDOf is the identity a release is deployed under. Read from the
+// composed values rather than the form layer alone: a plan whose form never set
+// one still runs under whatever the catalog or the chart named it, and that is
+// the name an upgrade has to keep. Falls back to the release name, which is
+// what a chart with no serviceId of its own uses.
 func serviceIDOf(p *plan.Plan) string {
-	if p != nil {
-		if v, ok := values.Get(p.Values(), "serviceId"); ok {
-			if s, ok := v.(string); ok && s != "" {
-				return s
-			}
+	if v, ok := values.Get(p.Values(), "serviceId"); ok {
+		if s, ok := v.(string); ok && s != "" {
+			return s
 		}
 	}
-	release := ""
-	if p != nil {
-		release = p.Release.Name
-	}
-	return fullnameOf(p, release)
+	return p.Release.Name
 }
 
 // currentPlan is the plan a release was last deployed from, read from the

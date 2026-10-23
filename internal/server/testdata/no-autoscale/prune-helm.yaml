@@ -1,0 +1,9 @@
+name: prune-helm
+description: plan history keeps the newest archives and writes no autoscale ConfigMap
+kind: prune
+backend: helm
+keep: 5
+liveRevision: 8
+archiveRevisions: [1, 2, 3, 4, 5, 6, 7]
+wantDeleted: [3, 2, 1]
+wantKept: [4, 5, 6, 7, 8]

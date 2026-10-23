@@ -406,6 +406,7 @@ type planBody struct {
 	Release   string `json:"release"`
 	Namespace string `json:"namespace"`
 	ServiceID string `json:"serviceId"`
+	EditsYAML string `json:"editsYAML,omitempty"`
 }
 
 type installBody struct {

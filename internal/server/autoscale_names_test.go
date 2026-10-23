@@ -36,6 +36,8 @@ func TestAutoscaleNames(t *testing.T) {
 			got = fullnameOf(p, tc.Release)
 		case "serviceId":
 			got = serviceIDOf(p)
+		case "autoscaleServiceId":
+			got = autoscaleServiceID(p)
 		default:
 			t.Fatalf("fn %q", tc.Fn)
 		}

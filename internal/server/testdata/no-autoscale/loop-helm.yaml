@@ -1,0 +1,4 @@
+name: loop-helm
+description: the autoscale loop does not apply or write for a helm release with no autoscale ConfigMap
+kind: loop
+backend: helm

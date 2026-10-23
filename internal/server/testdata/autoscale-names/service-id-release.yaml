@@ -1,5 +1,5 @@
 name: service-id-release
-description: a missing serviceId and fullnameOverride fall back to the chart fullname
-fn: serviceId
+description: the autoscale id falls back to the chart fullname of the release
+fn: autoscaleServiceId
 release: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-zzzz
 want: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa

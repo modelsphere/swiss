@@ -1,6 +1,6 @@
 name: service-id-fullname
-description: a missing serviceId falls back to fullnameOverride
-fn: serviceId
+description: the autoscale id falls back to fullnameOverride when serviceId is unset
+fn: autoscaleServiceId
 release: rel
 fullnameOverride: from-override
 want: from-override
