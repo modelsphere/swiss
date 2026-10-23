@@ -501,18 +501,22 @@ func (s *Server) recordedHF(ctx context.Context, prev *plan.Plan) (string, error
 	return m.Source.HF, nil
 }
 
-// serviceIDOf is the identity a release is deployed under. Read from the
-// composed values rather than the form layer alone: a plan whose form never set
-// one still runs under whatever the catalog or the chart named it, and that is
-// the name an upgrade has to keep. Falls back to the release name, which is
-// what a chart with no serviceId of its own uses.
+// serviceIDOf is the identity a release is deployed under, read from the
+// composed values. An explicit serviceId is kept as written. Otherwise the
+// chart fullname: fullnameOverride, else the release name.
 func serviceIDOf(p *plan.Plan) string {
-	if v, ok := values.Get(p.Values(), "serviceId"); ok {
-		if s, ok := v.(string); ok && s != "" {
-			return s
+	if p != nil {
+		if v, ok := values.Get(p.Values(), "serviceId"); ok {
+			if s, ok := v.(string); ok && s != "" {
+				return s
+			}
 		}
 	}
-	return p.Release.Name
+	release := ""
+	if p != nil {
+		release = p.Release.Name
+	}
+	return fullnameOf(p, release)
 }
 
 // currentPlan is the plan a release was last deployed from, read from the
@@ -633,9 +637,8 @@ func (s *Server) handleApply(mode exec.Mode) http.HandlerFunc {
 	}
 }
 
-// apply is the cluster-changing half, shared by apply, install, rollback and
-// the autoscaler. The per-release lock is taken here so those callers cannot
-// overlap in this process. A busy lock is 409; nobody waits.
+// apply takes the per-release lock and calls applyLocked. scaleTo holds that
+// lock already and calls applyLocked directly. A busy lock is 409; nobody waits.
 func (s *Server) apply(ctx context.Context, p *plan.Plan, mode exec.Mode, applyWith string, o applyOpts) (applyResult, error) {
 	if p == nil || p.Release.Name == "" {
 		return applyResult{}, fail(http.StatusBadRequest, "no plan")
@@ -644,6 +647,10 @@ func (s *Server) apply(ctx context.Context, p *plan.Plan, mode exec.Mode, applyW
 		return applyResult{}, &applyBusyError{ns: p.Release.Namespace, release: p.Release.Name}
 	}
 	defer s.unlockApply(p.Release.Namespace, p.Release.Name)
+	return s.applyLocked(ctx, p, mode, applyWith, o)
+}
+
+func (s *Server) applyLocked(ctx context.Context, p *plan.Plan, mode exec.Mode, applyWith string, o applyOpts) (applyResult, error) {
 	b, err := s.backendForApply(ctx, p, mode, applyWith)
 	if err != nil {
 		return applyResult{}, err

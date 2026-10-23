@@ -1,0 +1,12 @@
+name: status-one-key
+description: status write changes only status.yaml
+kind: write
+wantEnabled: true
+wantPresent: true
+wantKeyWrites: 1
+wantConflicts: 0
+wantVersion: "2"
+wantConfig: |
+  enabled: true
+  minSlices: 1
+  maxSlices: 4

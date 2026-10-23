@@ -1,0 +1,6 @@
+name: service-id-fullname
+description: a missing serviceId falls back to fullnameOverride
+fn: serviceId
+release: rel
+fullnameOverride: from-override
+want: from-override

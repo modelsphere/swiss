@@ -124,13 +124,10 @@ func (s *Server) autoscaleOne(ctx context.Context, ns, release string) {
 		s.recordAutoscale(ctx, ns, release, res, nil, 0, 0, false)
 		return
 	}
-	if gone, err := s.autoscaleGone(ctx, ns, release); err != nil {
-		s.noteAutoscaleError(ctx, ns, release, err)
-		return
-	} else if gone {
+	produced, scaleErr := s.scaleTo(ctx, ns, release, res.Current, res.Want, rev)
+	if errors.Is(scaleErr, errAutoscaleInactive) {
 		return
 	}
-	produced, scaleErr := s.scaleTo(ctx, ns, release, res.Current, res.Want, rev)
 	s.recordAutoscale(ctx, ns, release, res, scaleErr, res.Current, produced, scaleErr == nil)
 }
 
@@ -181,17 +178,6 @@ func (s *Server) recordAutoscale(ctx context.Context, ns, release string, res au
 	if err != nil {
 		s.log.WarnContext(ctx, "autoscale status", "release", release, "err", err)
 	}
-}
-
-func (s *Server) autoscaleGone(ctx context.Context, ns, release string) (bool, error) {
-	data, err := s.probe.ConfigMap(ctx, autoscaleRef(ns, release))
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return true, nil
-		}
-		return false, err
-	}
-	return data == nil || data[autoscaleConfigKey] == "", nil
 }
 
 func (s *Server) queryDecision(ctx context.Context, ns, serviceID string) autoscale.Decision {
@@ -298,9 +284,25 @@ func (s *Server) autoscaleLive(ctx context.Context, ns, release, backend string,
 	return live, rev, nil
 }
 
+// errAutoscaleInactive is a config that was disabled or deleted after Decide.
+// The tick stops. It is not a failure and it does not write status.
+var errAutoscaleInactive = errors.New("autoscale inactive")
+
 func (s *Server) scaleTo(ctx context.Context, ns, release string, from, want, expectRev int) (int, error) {
 	if s.store == nil {
 		return 0, fmt.Errorf("no database: autoscale needs a stored plan")
+	}
+	if !s.tryApplyLock(ns, release) {
+		return 0, &applyBusyError{ns: ns, release: release}
+	}
+	defer s.unlockApply(ns, release)
+	// Re-read under the lock. A disable or delete after Decide must not apply.
+	on, err := s.autoscalingEnabled(ctx, ns, release)
+	if err != nil {
+		return 0, err
+	}
+	if !on {
+		return 0, errAutoscaleInactive
 	}
 	b, _, err := s.backendFor(ctx, ns, release)
 	if err != nil {
@@ -324,7 +326,7 @@ func (s *Server) scaleTo(ctx context.Context, ns, release string, from, want, ex
 	if err := s.store.PutPlan(ctx, p); err != nil {
 		return 0, err
 	}
-	res, err := s.apply(ctx, p, exec.Upgrade, "", applyOpts{
+	res, err := s.applyLocked(ctx, p, exec.Upgrade, "", applyOpts{
 		ExpectRevision: expectRev,
 		Action:         "autoscale",
 		Note:           fmt.Sprintf("autoscale %d -> %d (decision-gen)", from, want),

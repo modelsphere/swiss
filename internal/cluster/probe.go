@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -127,6 +128,9 @@ type Probe interface {
 	// detected from its key set before a write, rather than after two models are
 	// fighting over one openresty key; site profiles are read from one whole.
 	ConfigMap(ctx context.Context, ref string) (map[string]string, error)
+	// ConfigMapWithVersion is ConfigMap plus the resourceVersion a later
+	// UpdateConfigMapKey must send. NotFound when the map is gone.
+	ConfigMapWithVersion(ctx context.Context, ref string) (data map[string]string, resourceVersion string, err error)
 	// SecretNames lists the Secrets in a namespace matching a label selector.
 	// Plan history is one Secret per revision, labelled the way helm labels its
 	// own, so enumerating what a release can roll back to is a cluster listing
@@ -226,6 +230,9 @@ type Fake struct {
 	ObjErr map[string]error
 	// MapLabels is keyed like Maps.
 	MapLabels map[string]map[string]string
+	// MapVersions is the resourceVersion of each ConfigMap, keyed like Maps.
+	// Empty means "1" until the first UpdateConfigMapKey.
+	MapVersions map[string]string
 	// Deps and DSs are keyed "namespace/name". A missing key is a missing object.
 	Deps   map[string]Deployment
 	DepErr map[string]error
@@ -271,6 +278,53 @@ func (f Fake) Nodes(context.Context) ([]Node, error) {
 }
 func (f Fake) ConfigMap(_ context.Context, ref string) (map[string]string, error) {
 	return f.Maps[ref], nil
+}
+
+func (f Fake) ConfigMapWithVersion(_ context.Context, ref string) (map[string]string, string, error) {
+	data, ok := f.Maps[ref]
+	if !ok || data == nil {
+		return nil, "", apierrors.NewNotFound(schema.GroupResource{Resource: "configmaps"}, ref)
+	}
+	rv := "1"
+	if f.MapVersions != nil && f.MapVersions[ref] != "" {
+		rv = f.MapVersions[ref]
+	}
+	return cloneStringMap(data), rv, nil
+}
+
+// UpdateConfigMapKey sets one key. A missing map is NotFound and is not
+// created. resourceVersion must match; a stale one is a Conflict and writes nothing.
+func (f *Fake) UpdateConfigMapKey(_ context.Context, ref, key, value, resourceVersion string) error {
+	if f == nil || f.Maps == nil {
+		return apierrors.NewNotFound(schema.GroupResource{Resource: "configmaps"}, ref)
+	}
+	data, ok := f.Maps[ref]
+	if !ok || data == nil {
+		return apierrors.NewNotFound(schema.GroupResource{Resource: "configmaps"}, ref)
+	}
+	if f.MapVersions == nil {
+		f.MapVersions = map[string]string{}
+	}
+	cur := f.MapVersions[ref]
+	if cur == "" {
+		cur = "1"
+	}
+	if resourceVersion != cur {
+		return apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, ref, fmt.Errorf("resourceVersion %q is stale", resourceVersion))
+	}
+	next := cloneStringMap(data)
+	next[key] = value
+	f.Maps[ref] = next
+	f.MapVersions[ref] = nextRV(cur)
+	return nil
+}
+
+func nextRV(cur string) string {
+	n, err := strconv.Atoi(cur)
+	if err != nil || n < 1 {
+		return "2"
+	}
+	return strconv.Itoa(n + 1)
 }
 
 func (f Fake) ConfigMapList(_ context.Context, namespace, selector string) ([]ConfigMapObj, error) {
@@ -404,6 +458,10 @@ type Writer interface {
 	// PutLabeledConfigMap creates or replaces a ConfigMap, keeping the caller's
 	// labels. app.kubernetes.io/managed-by=swiss is set as well.
 	PutLabeledConfigMap(ctx context.Context, ref string, data, labels map[string]string) error
+	// UpdateConfigMapKey sets one data key. resourceVersion is the one
+	// ConfigMapWithVersion returned; a stale value is a Conflict. NotFound
+	// when the map is gone, and the map is not created.
+	UpdateConfigMapKey(ctx context.Context, ref, key, value, resourceVersion string) error
 	// EnsureNamespace creates a namespace, and succeeds when it already exists.
 	//
 	// swiss records a release's plan in the release's own namespace, before it

@@ -1,0 +1,5 @@
+name: fullname-trim-suffix
+description: truncation that ends in one hyphen drops that hyphen
+fn: fullname
+release: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-zzzz
+want: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa

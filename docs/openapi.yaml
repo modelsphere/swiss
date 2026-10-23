@@ -1183,7 +1183,7 @@ paths:
       tags: [autoscaling]
       summary: Enable or edit PD autoscaling
       description: |
-        Stores `{enabled, minSlices, maxSlices}`. Requires `1 <= minSlices <= maxSlices`,
+        Stores `{enabled, minSlices, maxSlices}`. Requires `1 <= minSlices <= maxSlices <= 64`,
         a release swiss manages, and a disaggregated plan (`pd.enabled` true and
         `pd.colocate` not true). `enabled: false` keeps the ConfigMap. 403 when
         deploys are off.
@@ -2097,8 +2097,8 @@ components:
       required: [enabled, minSlices, maxSlices]
       properties:
         enabled: { type: boolean }
-        minSlices: { type: integer, minimum: 1 }
-        maxSlices: { type: integer, minimum: 1 }
+        minSlices: { type: integer, minimum: 1, maximum: 64 }
+        maxSlices: { type: integer, minimum: 1, maximum: 64 }
 
     AutoscaleStatus:
       type: object
@@ -2107,7 +2107,7 @@ components:
         a present 0 is a real zero. The API owns `config.yaml`; the loop owns
         `status.yaml`.
       properties:
-        lastTickAt: { type: string, format: date-time }
+        lastTickAt: { type: string, format: date-time, description: "Time of the last status write. A tick that changes nothing leaves it as it was." }
         lastDecision: { type: integer, description: "decision-gen's recommendation before clamping. Omitted when the query failed." }
         current: { type: integer }
         desired: { type: integer }

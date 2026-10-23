@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -17,9 +18,11 @@ import (
 )
 
 const (
-	autoscalePrefix    = "swiss-autoscale-"
-	autoscaleConfigKey = "config.yaml"
-	autoscaleStatusKey = "status.yaml"
+	autoscalePrefix         = "swiss-autoscale-"
+	autoscaleConfigKey      = "config.yaml"
+	autoscaleStatusKey      = "status.yaml"
+	maxAutoscaleSlices      = 64
+	autoscaleStatusAttempts = 5
 )
 
 func autoscaleRef(namespace, release string) string {
@@ -70,6 +73,10 @@ func (s *Server) putAutoscale(ctx context.Context, w http.ResponseWriter, r *htt
 	}
 	if cfg.MinSlices < 1 {
 		writeError(w, http.StatusBadRequest, "minSlices must be >= 1")
+		return
+	}
+	if cfg.MaxSlices > maxAutoscaleSlices {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("maxSlices must be <= %d", maxAutoscaleSlices))
 		return
 	}
 	if cfg.MinSlices > cfg.MaxSlices {
@@ -184,33 +191,62 @@ func (s *Server) writeAutoscaleStatus(ctx context.Context, ns, release string, f
 		return fmt.Errorf("no cluster writer")
 	}
 	ref := autoscaleRef(ns, release)
-	data, err := s.probe.ConfigMap(ctx, ref)
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
-		}
-		return err
-	}
-	if data == nil || data[autoscaleConfigKey] == "" {
-		return nil
-	}
-	next := map[string]string{}
-	for k, v := range data {
-		next[k] = v
-	}
-	var st autoscale.Status
-	if raw := data[autoscaleStatusKey]; raw != "" {
-		if err := yaml.Unmarshal([]byte(raw), &st); err != nil {
+	var last error
+	for attempt := 0; attempt < autoscaleStatusAttempts; attempt++ {
+		data, rv, err := s.probe.ConfigMapWithVersion(ctx, ref)
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil
+			}
 			return err
 		}
-	}
-	fn(&st)
-	b, err := yaml.Marshal(&st)
-	if err != nil {
+		var st autoscale.Status
+		if raw := data[autoscaleStatusKey]; raw != "" {
+			if err := yaml.Unmarshal([]byte(raw), &st); err != nil {
+				return err
+			}
+		}
+		prev := st
+		fn(&st)
+		// lastTickAt is the time of the last write. A tick that changes nothing else skips the update.
+		if statusSame(prev, st) {
+			return nil
+		}
+		b, err := yaml.Marshal(&st)
+		if err != nil {
+			return err
+		}
+		err = s.writer.UpdateConfigMapKey(ctx, ref, autoscaleStatusKey, string(b), rv)
+		if err == nil || apierrors.IsNotFound(err) {
+			return nil
+		}
+		if apierrors.IsConflict(err) {
+			last = err
+			continue
+		}
 		return err
 	}
-	next[autoscaleStatusKey] = string(b)
-	return s.writer.PutLabeledConfigMap(ctx, ref, next, autoscaleLabels(release))
+	return fmt.Errorf("autoscale status for %s/%s: %w", ns, release, last)
+}
+
+func statusSame(a, b autoscale.Status) bool {
+	a.LastTickAt, b.LastTickAt = "", ""
+	return sameInt(a.LastDecision, b.LastDecision) &&
+		sameInt(a.Current, b.Current) &&
+		sameInt(a.Desired, b.Desired) &&
+		a.HoldReason == b.HoldReason &&
+		a.LastScaleAt == b.LastScaleAt &&
+		sameInt(a.LastScaleFrom, b.LastScaleFrom) &&
+		sameInt(a.LastScaleTo, b.LastScaleTo) &&
+		sameInt(a.LastRevision, b.LastRevision) &&
+		a.LastError == b.LastError
+}
+
+func sameInt(a, b *int) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
 }
 
 func (s *Server) autoscalingEnabled(ctx context.Context, ns, release string) (bool, error) {
@@ -344,19 +380,21 @@ func coerceInt(v any) (int, bool) {
 	}
 }
 
+// fullnameOf is the chart fullname: fullnameOverride, else the release name,
+// truncated to 63 characters, with one trailing "-" removed.
 func fullnameOf(p *plan.Plan, release string) string {
-	if p == nil {
-		return release
+	name := release
+	if p != nil {
+		if v, ok := values.Get(p.Values(), "fullnameOverride"); ok {
+			if s, ok := v.(string); ok && s != "" {
+				name = s
+			}
+		}
 	}
-	v, ok := values.Get(p.Values(), "fullnameOverride")
-	if !ok {
-		return release
+	if len(name) > 63 {
+		name = name[:63]
 	}
-	s, ok := v.(string)
-	if !ok || s == "" {
-		return release
-	}
-	return s
+	return strings.TrimSuffix(name, "-")
 }
 
 func cloneTree(t values.Tree) values.Tree {

@@ -303,8 +303,39 @@ func newLoopServer(t *testing.T, probe cluster.Probe, helm, helmfile string) (*S
 	t.Cleanup(func() { db.Close() })
 	s.SetStore(db)
 	w := &fakeWriter{}
+	if f := configMapFake(probe); f != nil {
+		initMapVersions(f)
+		w.cm = f
+	}
 	s.SetWriter(w)
 	return s, w
+}
+
+func configMapFake(p cluster.Probe) *cluster.Fake {
+	switch x := p.(type) {
+	case *cluster.Fake:
+		return x
+	case *revProbe:
+		return &x.Fake
+	case *gateProbe:
+		return &x.Fake
+	default:
+		return nil
+	}
+}
+
+func initMapVersions(f *cluster.Fake) {
+	if f == nil {
+		return
+	}
+	if f.MapVersions == nil {
+		f.MapVersions = map[string]string{}
+	}
+	for ref := range f.Maps {
+		if f.MapVersions[ref] == "" {
+			f.MapVersions[ref] = "1"
+		}
+	}
 }
 
 func decisionServer(t *testing.T, ns, serviceID string, active int) *httptest.Server {

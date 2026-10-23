@@ -1,0 +1,5 @@
+name: fullname-release
+description: an empty fullnameOverride falls back to the release name
+fn: fullname
+release: my-release
+want: my-release

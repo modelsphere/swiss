@@ -1,0 +1,5 @@
+name: service-id-release
+description: a missing serviceId and fullnameOverride fall back to the chart fullname
+fn: serviceId
+release: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-zzzz
+want: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa

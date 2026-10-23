@@ -159,3 +159,26 @@ func (k *Kube) PutLabeledConfigMap(ctx context.Context, ref string, data, labels
 	_, err = k.client.CoreV1().ConfigMaps(ns).Update(ctx, existing, metav1.UpdateOptions{})
 	return err
 }
+
+// UpdateConfigMapKey sets one data key and leaves every other key and the
+// labels alone. A missing map is returned as NotFound and is not created.
+// resourceVersion must be the one just read; the apiserver rejects a stale one.
+func (k *Kube) UpdateConfigMapKey(ctx context.Context, ref, key, value, resourceVersion string) error {
+	ns, name, err := SplitRef(ref)
+	if err != nil {
+		return err
+	}
+	existing, err := k.client.CoreV1().ConfigMaps(ns).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+	if existing.ResourceVersion != resourceVersion {
+		return apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, name, fmt.Errorf("resourceVersion changed"))
+	}
+	if existing.Data == nil {
+		existing.Data = map[string]string{}
+	}
+	existing.Data[key] = value
+	_, err = k.client.CoreV1().ConfigMaps(ns).Update(ctx, existing, metav1.UpdateOptions{})
+	return err
+}

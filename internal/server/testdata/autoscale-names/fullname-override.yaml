@@ -1,0 +1,6 @@
+name: fullname-override
+description: fullnameOverride is the chart fullname
+fn: fullname
+release: rel
+fullnameOverride: custom-name
+want: custom-name
