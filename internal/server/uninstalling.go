@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"github.com/modelsphere/swiss/internal/cluster"
@@ -325,8 +326,10 @@ func (s *Server) reapRelease(ctx context.Context, ns, release string) string {
 }
 
 // podsRemain is true when any pod matches the chart label or the helm instance
-// label. Engine pods carry app=<release>-<chart> and need not carry the instance
-// label, so either selector still having a pod keeps the release.
+// label. Finished pods (Succeeded or Failed) are ignored: helm test and hook
+// Jobs leave them behind after the workload is gone. Engine pods carry
+// app=<release>-<chart> and need not carry the instance label, so either
+// selector still having a pod keeps the release.
 func (s *Server) podsRemain(ctx context.Context, ns, release string, files map[string]string) (bool, error) {
 	sels, err := podSelectors(release, files)
 	if err != nil {
@@ -338,8 +341,12 @@ func (s *Server) podsRemain(ctx context.Context, ns, release string, files map[s
 		if err != nil {
 			return true, err
 		}
-		if len(pods) > 0 {
+		for _, pod := range pods {
+			if pod.Phase == string(corev1.PodSucceeded) || pod.Phase == string(corev1.PodFailed) {
+				continue
+			}
 			remain = true
+			break
 		}
 	}
 	return remain, nil
