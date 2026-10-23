@@ -1,0 +1,10 @@
+name: headers
+description: namespace, serviceId and caller headers are sent
+namespace: models
+serviceId: pd
+status: 200
+body: '{"apiVersion":"llmscaling.inference.x-k8s.io/v1alpha1","decisions":[{"namespace":"models","serviceId":"pd","replicas":{"active": 4}}]}'
+headers:
+  X-Test: from-swiss
+want: 4
+wantHeader: from-swiss

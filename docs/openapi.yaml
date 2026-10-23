@@ -107,6 +107,8 @@ tags:
     description: Releases swiss manages, by namespace and name.
   - name: slo
     description: The release's LLMSLORequirement, through the SLO server.
+  - name: autoscaling
+    description: Prefill/decode slice bounds for one release. The loop in swissd applies them.
   - name: runs
     description: The operation log in swissd's database.
   - name: secrets
@@ -1157,6 +1159,70 @@ paths:
         "502": { $ref: "#/components/responses/BadGateway" }
         "503": { $ref: "#/components/responses/Unavailable" }
 
+  /api/releases/{namespace}/{release}/autoscaling:
+    parameters:
+      - $ref: "#/components/parameters/namespace"
+      - $ref: "#/components/parameters/release"
+    get:
+      tags: [autoscaling]
+      summary: Read PD autoscaling
+      description: |
+        The ConfigMap `swiss-autoscale-<release>` when it exists. `found` is false
+        when it does not, including for a release swiss does not manage. Allowed
+        when deploys are off.
+      operationId: getAutoscaling
+      responses:
+        "200":
+          description: The config and the loop's last status.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AutoscaleView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+    put:
+      tags: [autoscaling]
+      summary: Enable or edit PD autoscaling
+      description: |
+        Stores `{enabled, minSlices, maxSlices}`. Requires `1 <= minSlices <= maxSlices`,
+        a release swiss manages, and a disaggregated plan (`pd.enabled` true and
+        `pd.colocate` not true). `enabled: false` keeps the ConfigMap. 403 when
+        deploys are off.
+      operationId: saveAutoscaling
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AutoscaleConfig" }
+      responses:
+        "200":
+          description: The config as stored.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AutoscaleView" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+    delete:
+      tags: [autoscaling]
+      summary: Delete PD autoscaling
+      description: |
+        Deletes the ConfigMap only. The live plan's `autoscale` layer stays, so
+        the slice count stays, until the next user upgrade (which does not carry
+        the layer once autoscaling is gone). Idempotent. 403 when deploys are off.
+      operationId: deleteAutoscaling
+      responses:
+        "200":
+          description: "`found` false."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AutoscaleView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
   /api/runs:
     get:
       tags: [runs]
@@ -1172,7 +1238,7 @@ paths:
           schema: { type: string }
         - name: action
           in: query
-          schema: { type: string, enum: [install, apply, rollback, uninstall] }
+          schema: { type: string, enum: [install, apply, rollback, uninstall, autoscale] }
         - name: limit
           in: query
           schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
@@ -1519,6 +1585,7 @@ components:
             sloTokenSecret: { type: string }
             sloTokenKey: { type: string }
             serverHeaders: { type: object, additionalProperties: { type: string } }
+            autoscalePeriod: { type: string, description: "How often swissd asks decision-gen for a PD slice count. A Go duration. Empty, invalid, or <= 0 is 30s." }
         defaults:
           type: object
           description: The site's preferences, composed beneath the catalog as the `defaults` layer, so a variant overrides them. Every other section is a site fact, composed above the catalog.
@@ -1718,7 +1785,7 @@ components:
         forceGpuProducts: { type: boolean, description: "Accept products the variant does not list, if this cluster has them." }
         overrides: { type: object, description: "Form-layer values. On an upgrade, merged over the release's form layer." }
         overridesYAML: { type: string, description: "Form-layer values as YAML text." }
-        editsYAML: { type: string, description: "The edit layer, applied last and exempt from ownership." }
+        editsYAML: { type: string, description: "The edit layer, exempt from ownership. The autoscale layer is applied after it." }
         createNamespace: { type: boolean }
         chartVersion: { type: string, description: "Must fall in the variant's chart range. Empty is the newest it allows (or the running one on upgrade)." }
 
@@ -1761,7 +1828,7 @@ components:
         profile: { type: string }
         layers:
           type: object
-          description: "One values document per layer, applied in order: `defaults`, `catalog`, `site`, `derived`, `form`, `edit`."
+          description: "One values document per layer, applied in order: `defaults`, `catalog`, `site`, `derived`, `form`, `edit`, `autoscale`. `autoscale` is applied last and wins `replicaCount`."
           properties:
             defaults: { type: object }
             catalog: { type: object }
@@ -1769,6 +1836,7 @@ components:
             derived: { type: object }
             form: { type: object }
             edit: { type: object }
+            autoscale: { type: object, description: "Only `replicaCount`, written by PD autoscaling." }
         createNamespace: { type: boolean }
         helmfile: { type: string, description: "The helmfile these values are applied through. Not hashed." }
         warnings: { type: array, items: { type: string }, description: "Accepted but worth seeing. Not hashed." }
@@ -2024,6 +2092,40 @@ components:
           properties:
             found: { type: boolean }
 
+    AutoscaleConfig:
+      type: object
+      required: [enabled, minSlices, maxSlices]
+      properties:
+        enabled: { type: boolean }
+        minSlices: { type: integer, minimum: 1 }
+        maxSlices: { type: integer, minimum: 1 }
+
+    AutoscaleStatus:
+      type: object
+      description: |
+        What the loop last did. Counts are omitted until that tick has a value;
+        a present 0 is a real zero. The API owns `config.yaml`; the loop owns
+        `status.yaml`.
+      properties:
+        lastTickAt: { type: string, format: date-time }
+        lastDecision: { type: integer, description: "decision-gen's recommendation before clamping. Omitted when the query failed." }
+        current: { type: integer }
+        desired: { type: integer }
+        holdReason: { type: string }
+        lastScaleAt: { type: string, format: date-time }
+        lastScaleFrom: { type: integer }
+        lastScaleTo: { type: integer }
+        lastRevision: { type: integer }
+        lastError: { type: string }
+
+    AutoscaleView:
+      type: object
+      required: [found]
+      properties:
+        found: { type: boolean }
+        config: { $ref: "#/components/schemas/AutoscaleConfig" }
+        status: { $ref: "#/components/schemas/AutoscaleStatus" }
+
     Run:
       type: object
       required: [id, namespace, release, action, planHash, changed, startedAt, endedAt]
@@ -2031,7 +2133,7 @@ components:
         id: { type: integer, format: int64 }
         namespace: { type: string }
         release: { type: string }
-        action: { type: string, enum: [install, apply, rollback, uninstall] }
+        action: { type: string, enum: [install, apply, rollback, uninstall, autoscale] }
         planHash: { type: string, description: "Empty for an uninstall with no plan." }
         actor: { type: string }
         changed: { type: boolean }

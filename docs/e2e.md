@@ -24,10 +24,11 @@ make test-e2e
 KEEP_CLUSTER=1 make test-e2e
 SKIP_BUILD=true make test-e2e          # kind-load an image that is already built
 make test-e2e E2E_ARGS='-ginkgo.label-filter=helm'
+make test-e2e E2E_ARGS='-ginkgo.label-filter=autoscale'
 make cleanup-test-e2e
 ```
 
-`-ginkgo.label-filter=helm` runs the setup specs and the helm deploy. `-ginkgo.label-filter=llmsvc` runs setup and the llmsvc deploy. An empty filter runs both deploys. Setup specs carry both labels; each deploy spec carries its own.
+`-ginkgo.label-filter=helm` runs the setup specs and the helm deploy. `-ginkgo.label-filter=llmsvc` runs setup and the llmsvc deploy. `-ginkgo.label-filter=autoscale` runs only the PD autoscaling spec, which logs in itself. An empty filter runs the deploys and the autoscaling spec. Setup specs carry both deploy labels; each deploy spec carries its own.
 
 The node image and kube-proxy mode live in `test/e2e/kind-config.yaml`. `make setup-test-e2e KIND_NODE_IMAGE=...` passes `--image` and overrides the pin. A cluster that already exists is left as it is: delete it before a config change takes effect.
 
@@ -51,6 +52,9 @@ The node image and kube-proxy mode live in `test/e2e/kind-config.yaml`. `make se
 | CART | off in the profile |
 | registry mirror, Harbor | none: images come straight from ghcr.io and Docker Hub |
 | GPUs | none: `mock-llm` requests no `nvidia.com/gpu` |
+| DisaggregatedSet | CRD only (`test/e2e/testdata/disaggregatedset-crd.yaml`), applied by the autoscale spec. No LWS controller, so nothing reconciles a DisaggregatedSet |
+| PD helm install | not done. `mock-llm` is a vllm chart, not a prefill/decode sglang chart, so a full helm install does not render a DisaggregatedSet. The spec seeds the plan ConfigMap, the DisaggregatedSet and one router Deployment |
+| decision-gen | an in-cluster `nginx:1.27-alpine` stub returning one static `/decisions` document. Not the real decision server |
 
 ## The flow
 
@@ -65,6 +69,8 @@ The node image and kube-proxy mode live in `test/e2e/kind-config.yaml`. `make se
 | service proxy `/v1/models`, `/v1/chat/completions` | the mock is the thing answering |
 | `GET /api/releases/{ns}/{release}/objects`, `GET /api/deployments` | the rendered objects are readable; the release is listed under the backend that installed it |
 | `DELETE /api/releases/{ns}/{release}` | pods, the helm release and the LLMService are gone |
+
+The `autoscale` spec does not install a model. It applies the DisaggregatedSet CRD, runs an nginx stub for decision-gen, points `scaler.serverAddress` and `scaler.autoscalePeriod` (2s) at that Service, and seeds a plan ConfigMap plus a DisaggregatedSet and a real nginx router. `PUT /api/releases/.../autoscaling` then waits until `lastDecision` is 2. The first loop wait can still be the process's initial 30s, so the poll is 90s. There is no helm release, so a scale apply may record `no release`; `spec.slices` stays 1. That is the check that the decision was recorded, not that helm upgraded a PD chart.
 
 ## Settings
 

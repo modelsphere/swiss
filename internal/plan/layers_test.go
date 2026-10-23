@@ -115,3 +115,53 @@ func TestOverriddenValuesSurviveInTheirOwnLayer(t *testing.T) {
 		}
 	}
 }
+
+// An absent autoscale layer must not change the hash. Values merges only
+// layers the plan actually has, so naming the layer in Layers is not a value.
+func TestHashIgnoresAbsentAutoscaleLayer(t *testing.T) {
+	p := testPlan()
+	if err := p.ComputeHash(); err != nil {
+		t.Fatal(err)
+	}
+	before := []string{values.LayerDefaults, values.LayerCatalog, values.LayerSite, values.LayerDerived, values.LayerForm, values.LayerEdit}
+	merged := values.Tree{}
+	for _, layer := range before {
+		if tree, ok := p.Layers[layer]; ok {
+			values.Merge(merged, tree, layer, nil)
+		}
+	}
+	if canonicalTree(p.Values()) != canonicalTree(merged) {
+		t.Fatalf("values\n got %s\nwant %s", canonicalTree(p.Values()), canonicalTree(merged))
+	}
+
+	other := testPlan()
+	if err := other.ComputeHash(); err != nil {
+		t.Fatal(err)
+	}
+	if p.Hash != other.Hash {
+		t.Fatal("two plans without the layer hashed differently")
+	}
+
+	scaled := testPlan()
+	scaled.Layers[values.LayerAutoscale] = values.Tree{"replicaCount": 4}
+	if err := scaled.ComputeHash(); err != nil {
+		t.Fatal(err)
+	}
+	if scaled.Hash == p.Hash {
+		t.Fatal("autoscale replicaCount must change the hash")
+	}
+	if got := scaled.LayerOf("replicaCount"); got != values.LayerAutoscale {
+		t.Fatalf("LayerOf = %q, want autoscale", got)
+	}
+	if got, _ := values.Get(scaled.Values(), "replicaCount"); got != 4 {
+		t.Fatalf("autoscale must win: %v", got)
+	}
+}
+
+func canonicalTree(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err.Error()
+	}
+	return string(b)
+}

@@ -1,0 +1,17 @@
+name: read-only
+description: a read-only swissd refuses writes and still answers GET
+backend: helm
+allowDeploy: false
+managed: true
+pd: true
+steps:
+  - method: PUT
+    body: {enabled: true, minSlices: 1, maxSlices: 2}
+    wantStatus: 403
+    errorContains: read-only
+  - method: GET
+    wantStatus: 200
+    wantFound: false
+  - method: DELETE
+    wantStatus: 403
+    errorContains: read-only

@@ -1,0 +1,9 @@
+name: upgrade-enabled
+description: an upgrade keeps the autoscale layer while autoscaling is enabled
+kind: upgrade
+enabled: true
+hasConfig: true
+overrides: true
+liveAutoscale: 2
+wantLayer: true
+wantReplicaCount: 2

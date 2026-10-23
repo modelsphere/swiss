@@ -75,6 +75,16 @@ type Server struct {
 
 	// secretsMu orders read-modify-writes of the unified Secret.
 	secretsMu sync.Mutex
+
+	// locksMu guards locks. The mutex itself is the per-release apply lock:
+	// a user apply and the autoscaler must not run helm against one release
+	// at the same time. TryLock only; a busy lock is 409 for a request and
+	// a skipped tick for the autoscaler.
+	locksMu sync.Mutex
+	locks   map[string]*sync.Mutex
+
+	// decisionHTTP is the client for decision-gen. Nil uses a 5s timeout.
+	decisionHTTP *http.Client
 }
 
 type openCatalog struct {
@@ -416,6 +426,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/releases/{namespace}/{release}/slo", s.handleSLO)
 	mux.HandleFunc("PUT /api/releases/{namespace}/{release}/slo", s.handleSLO)
 	mux.HandleFunc("DELETE /api/releases/{namespace}/{release}/slo", s.handleSLO)
+	// Same gate as /slo: registered either way, PUT and DELETE refuse inside
+	// the handler when deploys are off. GET is a read.
+	mux.HandleFunc("GET /api/releases/{namespace}/{release}/autoscaling", s.handleAutoscaling)
+	mux.HandleFunc("PUT /api/releases/{namespace}/{release}/autoscaling", s.handleAutoscaling)
+	mux.HandleFunc("DELETE /api/releases/{namespace}/{release}/autoscaling", s.handleAutoscaling)
 
 	if s.cfg.Server.AllowDeploy {
 		mux.HandleFunc("POST /api/plans", s.handlePlan)
@@ -444,6 +459,7 @@ func (s *Server) Handler() http.Handler {
 
 // Run serves until ctx is cancelled, then drains.
 func (s *Server) Run(ctx context.Context) error {
+	go s.runAutoscaler(ctx)
 	srv := &http.Server{
 		Addr:              s.cfg.Server.Addr,
 		Handler:           s.Handler(),

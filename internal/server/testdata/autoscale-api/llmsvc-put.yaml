@@ -1,0 +1,11 @@
+name: llmsvc-put
+description: an LLMService release accepts a config
+backend: llmsvc
+managed: true
+pd: true
+steps:
+  - method: PUT
+    body: {enabled: true, minSlices: 1, maxSlices: 4}
+    wantStatus: 200
+    wantFound: true
+    wantEnabled: true

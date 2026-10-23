@@ -1,0 +1,12 @@
+name: helm-scale-up
+description: helm apply changes only the autoscale layer
+backend: helm
+decision: 2
+slices: 1
+min: 1
+max: 4
+revision: 2
+conflict: false
+wantApplies: 1
+wantFrom: 1
+wantTo: 2

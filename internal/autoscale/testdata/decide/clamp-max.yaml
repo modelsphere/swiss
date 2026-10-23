@@ -1,0 +1,32 @@
+name: clamp-max
+description: a decision above maxSlices clamps down
+config:
+  enabled: true
+  minSlices: 1
+  maxSlices: 3
+live:
+  backend: helm
+  helmStatus: deployed
+  pd: true
+  dsGeneration: 1
+  dsObservedGeneration: 1
+  dsSlices: 1
+  planReplicaCount: 1
+  roles:
+    - replicas: 1
+      readyReplicas: 1
+      updatedReplicas: 1
+  routers:
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
+decision:
+  ok: true
+  replicas: 9
+wantHold: ""
+wantScale: true
+wantCurrent: 1
+want: 3
+wantFailed: false
+hasDecision: true

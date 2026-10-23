@@ -210,6 +210,13 @@ func (b helmBackend) Uninstall(ctx context.Context, ns, release string) (uninsta
 			planErr = err.Error()
 			s.log.ErrorContext(ctx, "plan configmap not removed", "release", release, "err", err)
 		}
+		if err := s.removeAutoscale(ctx, ns, release); err != nil {
+			if planErr != "" {
+				planErr += "; "
+			}
+			planErr += err.Error()
+			s.log.ErrorContext(ctx, "autoscale configmap not removed", "release", release, "err", err)
+		}
 	}
 	return uninstallResult{Output: res.Output, PlanError: planErr}, nil
 }

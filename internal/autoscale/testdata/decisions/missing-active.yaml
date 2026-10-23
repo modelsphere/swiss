@@ -1,0 +1,7 @@
+name: missing-active
+description: replicas.active omitted is not zero
+namespace: models
+serviceId: pd
+status: 200
+body: '{"apiVersion":"llmscaling.inference.x-k8s.io/v1alpha1","decisions":[{"namespace":"models","serviceId":"pd","replicas":{}}]}'
+errorContains: no replicas.active

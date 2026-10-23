@@ -140,6 +140,9 @@ type Scaler struct {
 	SLOTokenSecret string            `yaml:"sloTokenSecret,omitempty" json:"sloTokenSecret,omitempty"`
 	SLOTokenKey    string            `yaml:"sloTokenKey,omitempty" json:"sloTokenKey,omitempty"`
 	ServerHeaders  map[string]string `yaml:"serverHeaders,omitempty" json:"serverHeaders,omitempty"`
+	// AutoscalePeriod is how often swissd asks decision-gen for a PD slice
+	// count. A Go duration. Empty is 30s.
+	AutoscalePeriod string `yaml:"autoscalePeriod,omitempty" json:"autoscalePeriod,omitempty"`
 }
 
 type Defaults struct {
@@ -169,6 +172,18 @@ func (f FeatureDefaults) Resolve() map[string]bool {
 
 // DefaultSLOAddress is the in-cluster SLO API when the profile names none.
 const DefaultSLOAddress = "http://slo-api.llm-scaler.svc:80"
+
+// DefaultDecisionAddress is the in-cluster decision server when the profile
+// names none.
+const DefaultDecisionAddress = "http://decision-gen.llm-scaler.svc:80"
+
+// DecisionServer is the address swissd calls for PD slice decisions.
+func (sc Scaler) DecisionServer() string {
+	if a := strings.TrimRight(strings.TrimSpace(sc.ServerAddress), "/"); a != "" {
+		return a
+	}
+	return DefaultDecisionAddress
+}
 
 // SLOServer is the address swissd calls, defaulted.
 func (sc Scaler) SLOServer() string {

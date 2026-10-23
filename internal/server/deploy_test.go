@@ -66,8 +66,35 @@ func (f *fakeWriter) PutConfigMap(_ context.Context, ref string, data map[string
 	if f.written == nil {
 		f.written = map[string]map[string]string{}
 	}
-	f.written[ref] = data
+	f.written[ref] = cloneData(data)
 	return nil
+}
+
+func (f *fakeWriter) PutLabeledConfigMap(_ context.Context, ref string, data, labels map[string]string) error {
+	if err := f.missingNS(ref); err != nil {
+		return err
+	}
+	if f.written == nil {
+		f.written = map[string]map[string]string{}
+		f.labels = map[string]map[string]string{}
+	}
+	if f.labels == nil {
+		f.labels = map[string]map[string]string{}
+	}
+	f.written[ref] = cloneData(data)
+	f.labels[ref] = cloneData(labels)
+	return nil
+}
+
+func cloneData(m map[string]string) map[string]string {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 func (f *fakeWriter) PutSecret(_ context.Context, ref string, data, labels map[string]string) error {
@@ -433,6 +460,10 @@ func (failingWriter) EnsureNamespace(context.Context, string) error {
 }
 
 func (failingWriter) PutConfigMap(context.Context, string, map[string]string) error {
+	return errors.New("forbidden")
+}
+
+func (failingWriter) PutLabeledConfigMap(context.Context, string, map[string]string, map[string]string) error {
 	return errors.New("forbidden")
 }
 

@@ -1,0 +1,10 @@
+name: rollback-disabled
+description: rollback while disabled reapplies the archived plan as stored
+kind: rollback
+enabled: false
+hasConfig: true
+liveAutoscale: 4
+archivedAutoscale: 2
+archivedForm: 1
+wantLayer: true
+wantReplicaCount: 2

@@ -1,0 +1,20 @@
+name: guard-lock-busy
+description: a busy apply lock holds the tick
+config:
+  enabled: true
+  minSlices: 1
+  maxSlices: 4
+live:
+  backend: helm
+  pd: true
+  planReplicaCount: 1
+  lockBusy: true
+decision:
+  ok: true
+  replicas: 2
+wantHold: "apply in progress"
+wantScale: false
+wantCurrent: 1
+want: 0
+wantFailed: false
+hasDecision: true

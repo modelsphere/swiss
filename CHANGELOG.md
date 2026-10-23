@@ -9,6 +9,7 @@ under it.
 ## [Unreleased]
 
 ### Added
+- PD slice autoscaling in swissd. An `autoscale` plan layer, applied last, holds `replicaCount` for a disaggregated release. `GET/PUT/DELETE /api/releases/{namespace}/{release}/autoscaling` stores the bounds in ConfigMap `swiss-autoscale-<release>`. A loop asks decision-gen and upgrades the release when the slice count should change. Deleting that ConfigMap leaves the live layer in place until the next user upgrade; a rollback while autoscaling is enabled keeps the current slice count.
 - CI on every pull request: `gofmt`, `go vet` and `go test` against a pinned
   model catalog, plus a gate for the license text and committed credentials.
 - Dependabot for Go modules, GitHub Actions, base images and the `web/console`

@@ -1,0 +1,9 @@
+name: rollback-enabled
+description: rollback while enabled overlays the live autoscale layer
+kind: rollback
+enabled: true
+hasConfig: true
+liveAutoscale: 4
+archivedForm: 1
+wantLayer: true
+wantReplicaCount: 4

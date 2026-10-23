@@ -1,0 +1,6 @@
+name: uninstall-helm
+description: helm uninstall deletes the autoscale ConfigMap when it exists
+backend: helm
+uninstall: true
+release: glm-53
+namespace: models

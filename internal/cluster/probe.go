@@ -143,6 +143,46 @@ type Probe interface {
 	GPUAllocations(ctx context.Context) (map[string][]GPUPod, error)
 	// Object reads one custom resource a release rendered. Nil when it is gone.
 	Object(ctx context.Context, ref ObjectRef) (*Object, error)
+	// ConfigMapList lists ConfigMaps in one namespace (empty is all) matching
+	// a label selector of the form k=v[,k=v].
+	ConfigMapList(ctx context.Context, namespace, selector string) ([]ConfigMapObj, error)
+	// Deployment reads one Deployment. Nil, nil when it is gone.
+	Deployment(ctx context.Context, ref string) (*Deployment, error)
+	// DisaggregatedSet reads one DisaggregatedSet. Nil, nil when it is gone.
+	DisaggregatedSet(ctx context.Context, ref string) (*DisaggregatedSet, error)
+}
+
+// ConfigMapObj is one ConfigMap's data and labels.
+type ConfigMapObj struct {
+	Namespace string
+	Name      string
+	Data      map[string]string
+	Labels    map[string]string
+}
+
+// Deployment is the readiness slice of a Deployment.
+type Deployment struct {
+	Generation         int64
+	ObservedGeneration int64
+	SpecReplicas       int
+	ReadyReplicas      int
+}
+
+// DisaggregatedSet is the slice count and role readiness of a DisaggregatedSet.
+type DisaggregatedSet struct {
+	Generation         int64
+	ObservedGeneration int64
+	// Slices is nil when spec.slices is unset. Negative is ignored by the caller.
+	Slices *int
+	Roles  []RoleStatus
+}
+
+// RoleStatus is one status.roleStatuses entry.
+type RoleStatus struct {
+	Name            string
+	Replicas        int
+	ReadyReplicas   int
+	UpdatedReplicas int
 }
 
 // ConfigMapKeys is the key set of a ConfigMap, sorted.
@@ -184,6 +224,13 @@ type Fake struct {
 	// Objs is keyed "Kind/namespace/name".
 	Objs   map[string]Object
 	ObjErr map[string]error
+	// MapLabels is keyed like Maps.
+	MapLabels map[string]map[string]string
+	// Deps and DSs are keyed "namespace/name". A missing key is a missing object.
+	Deps   map[string]Deployment
+	DepErr map[string]error
+	DSs    map[string]DisaggregatedSet
+	DSErr  map[string]error
 }
 
 func (f Fake) Ping(context.Context) error                          { return f.PingErr }
@@ -224,6 +271,69 @@ func (f Fake) Nodes(context.Context) ([]Node, error) {
 }
 func (f Fake) ConfigMap(_ context.Context, ref string) (map[string]string, error) {
 	return f.Maps[ref], nil
+}
+
+func (f Fake) ConfigMapList(_ context.Context, namespace, selector string) ([]ConfigMapObj, error) {
+	var out []ConfigMapObj
+	for ref, data := range f.Maps {
+		ns, name, err := SplitRef(ref)
+		if err != nil {
+			continue
+		}
+		if namespace != "" && ns != namespace {
+			continue
+		}
+		labels := f.MapLabels[ref]
+		if !matchSelector(labels, selector) {
+			continue
+		}
+		out = append(out, ConfigMapObj{
+			Namespace: ns,
+			Name:      name,
+			Data:      cloneStringMap(data),
+			Labels:    cloneStringMap(labels),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Namespace != out[j].Namespace {
+			return out[i].Namespace < out[j].Namespace
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out, nil
+}
+
+func (f Fake) Deployment(_ context.Context, ref string) (*Deployment, error) {
+	if err := f.DepErr[ref]; err != nil {
+		return nil, err
+	}
+	d, ok := f.Deps[ref]
+	if !ok {
+		return nil, nil
+	}
+	return &d, nil
+}
+
+func (f Fake) DisaggregatedSet(_ context.Context, ref string) (*DisaggregatedSet, error) {
+	if err := f.DSErr[ref]; err != nil {
+		return nil, err
+	}
+	d, ok := f.DSs[ref]
+	if !ok {
+		return nil, nil
+	}
+	return &d, nil
+}
+
+func cloneStringMap(m map[string]string) map[string]string {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 // SecretNames matches on the labels the fake was seeded with. Good enough for
@@ -291,6 +401,9 @@ type Writer interface {
 	// one Secret per revision, the way helm stores its own.
 	PutSecret(ctx context.Context, ref string, data, labels map[string]string) error
 	DeleteSecret(ctx context.Context, ref string) error
+	// PutLabeledConfigMap creates or replaces a ConfigMap, keeping the caller's
+	// labels. app.kubernetes.io/managed-by=swiss is set as well.
+	PutLabeledConfigMap(ctx context.Context, ref string, data, labels map[string]string) error
 	// EnsureNamespace creates a namespace, and succeeds when it already exists.
 	//
 	// swiss records a release's plan in the release's own namespace, before it

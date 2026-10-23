@@ -1,0 +1,6 @@
+name: uninstall-llmsvc
+description: llmsvc uninstall deletes the autoscale ConfigMap when it exists
+backend: llmsvc
+uninstall: true
+release: qwen-new
+namespace: models

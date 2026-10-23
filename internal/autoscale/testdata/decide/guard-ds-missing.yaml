@@ -1,0 +1,21 @@
+name: guard-ds-missing
+description: a missing DisaggregatedSet holds the tick
+config:
+  enabled: true
+  minSlices: 1
+  maxSlices: 4
+live:
+  backend: helm
+  helmStatus: deployed
+  pd: true
+  dsMissing: true
+  planReplicaCount: 1
+decision:
+  ok: true
+  replicas: 2
+wantHold: "disaggregatedset missing"
+wantScale: false
+wantCurrent: 1
+want: 0
+wantFailed: false
+hasDecision: true
