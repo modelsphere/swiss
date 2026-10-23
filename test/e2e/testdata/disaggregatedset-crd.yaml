@@ -22,24 +22,7 @@ spec:
           properties:
             spec:
               type: object
-              properties:
-                slices:
-                  type: integer
+              x-kubernetes-preserve-unknown-fields: true
             status:
               type: object
-              properties:
-                observedGeneration:
-                  type: integer
-                roleStatuses:
-                  type: array
-                  items:
-                    type: object
-                    properties:
-                      name:
-                        type: string
-                      replicas:
-                        type: integer
-                      readyReplicas:
-                        type: integer
-                      updatedReplicas:
-                        type: integer
+              x-kubernetes-preserve-unknown-fields: true

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/modelsphere/swiss/internal/plan"
@@ -314,7 +315,27 @@ func applyDSCRD() {
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(established).To(Equal("True"))
 	}).WithTimeout(time.Minute).WithPolling(2 * time.Second).Should(Succeed())
+	// Established comes before the apiserver serves the schema to server-side
+	// apply, which is what helm uses; probe it with the chart's shape.
+	Eventually(func(g Gomega) {
+		cmd := exec.Command(cfg.kubectlBin, "--context", cfg.context, "apply", "--server-side",
+			"--dry-run=server", "--field-manager=e2e-probe", "-f", "-")
+		cmd.Stdin = strings.NewReader(dsProbe)
+		out, err := cmd.CombinedOutput()
+		g.Expect(err).NotTo(HaveOccurred(), string(out))
+	}).WithTimeout(time.Minute).WithPolling(2 * time.Second).Should(Succeed())
 }
+
+const dsProbe = `apiVersion: disaggregatedset.x-k8s.io/v1
+kind: DisaggregatedSet
+metadata:
+  name: e2e-probe
+  namespace: default
+spec:
+  slices: 1
+  roles:
+    - name: prefill
+`
 
 func nginxDeploy(name, app, configMap string) *appsv1.Deployment {
 	pod := corev1.PodSpec{
