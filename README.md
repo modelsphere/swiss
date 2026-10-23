@@ -99,10 +99,14 @@ LLMService), or `llmsvc` (LLMService writes and the read grants, without Secret,
 Role or workload writes). Anything else is refused. The new-install backend is
 `applyWith` on the site profile, which an operator edits without a helm upgrade.
 
-Deploy mode needs a volume and one replica: the database holds the audit log and
-the rollback history, neither of which is cluster state. Upgrades do not depend
-on it -- the whole plan is written beside every release, and swissd falls back to
-reading it from there.
+Deploy mode recommends a volume, and runs one replica. The database holds the
+audit log (who applied or upgraded what, with the output) and the stored plans
+(the release -> plan history used to roll back or revert to an earlier plan).
+Neither is cluster state: each applied plan is also written beside its release,
+so what is deployed stays visible and upgradable without the database. The chart
+defaults to a PVC. With persistence off and no existingClaim, the database is an
+emptyDir, and a pod restart or reschedule loses it. Use a volume in production.
+One replica either way: sqlite is a single writer.
 
 One instance per cluster, inside the cluster it manages. Read the RBAC section of
 the design doc before installing: `rbac.scope` decides whether swissd can read
