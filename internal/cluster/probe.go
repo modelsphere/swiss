@@ -95,6 +95,10 @@ type GPUPod struct {
 
 // Pod is enough to tell loading from broken: on this workload a pod that is
 // scheduled and not ready has usually been reading weights for twenty minutes.
+//
+// The deletion fields are how an uninstall tells a pod that is still finishing
+// from one that is stuck. They are not part of the status JSON, so a pod that
+// is not being deleted looks the same as it did before they existed.
 type Pod struct {
 	Name      string `json:"name"`
 	Phase     string `json:"phase"`
@@ -103,6 +107,10 @@ type Pod struct {
 	Node      string `json:"node,omitempty"`
 	Message   string `json:"message,omitempty"`
 	AgeSecond int64  `json:"ageSeconds"`
+
+	DeletionTimestamp             *time.Time `json:"-"`
+	DeletionGracePeriodSeconds    *int64     `json:"-"`
+	TerminationGracePeriodSeconds *int64     `json:"-"`
 }
 
 type Probe interface {

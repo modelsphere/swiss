@@ -1877,13 +1877,13 @@ components:
 
     Deployment:
       type: object
-      required: [release, namespace, revision, backend]
+      required: [release, namespace, backend]
       properties:
         release: { type: string }
         namespace: { type: string }
         chart: { type: string, description: "`name-version`." }
         status: { type: string, description: "helm's status." }
-        revision: { type: integer }
+        revision: { type: integer, description: "helm's revision. Omitted when there is no revision." }
         updated: { type: string, format: date-time }
         model: { type: string }
         variant: { type: string }

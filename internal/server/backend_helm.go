@@ -176,12 +176,15 @@ func (b helmBackend) Uninstall(ctx context.Context, ns, release string) (uninsta
 		return uninstallResult{}, failErr(http.StatusBadGateway, err)
 	}
 	// Already marked, and helm has deleted the release: pods may still be
-	// terminating. A second DELETE does not run helm again.
+	// terminating. A second DELETE does not run helm again. Archive Secrets
+	// are removed here too: the first DELETE may have stopped before it
+	// reached them.
 	phase := s.planPhase(ctx, ns, release)
 	if phase == phaseUninstalling && !st.Exists {
 		s.trackUninstalling(ns, release)
 		var planErr string
 		if s.writer != nil {
+			s.deleteArchives(ctx, ns, release)
 			planErr = s.reapRelease(ctx, ns, release)
 		}
 		return uninstallResult{Output: uninstallInProgress, PlanError: planErr}, nil
@@ -242,13 +245,9 @@ func (b helmBackend) Uninstall(ctx context.Context, ns, release string) (uninsta
 		// The history goes with it: one Secret per revision would otherwise be
 		// left behind for a release that no longer exists. The plan ConfigMap
 		// stays until the pods are gone, which is what keeps the row listed.
-		if revs, err := s.archivedRevisions(ctx, ns, release); err == nil {
-			for _, r := range revs {
-				if err := s.writer.DeleteSecret(ctx, archiveRef(ns, release, r)); err != nil {
-					s.log.WarnContext(ctx, "archived plan not removed", "release", release, "revision", r, "err", err)
-				}
-			}
-		}
+		// This is also the path a restart takes when the marker is set, nothing
+		// is inflight, and helm runs again.
+		s.deleteArchives(ctx, ns, release)
 		if hadPlan {
 			planErr = s.reapRelease(ctx, ns, release)
 		} else if err := s.writer.DeleteConfigMap(ctx, planRef(ns, release)); err != nil {

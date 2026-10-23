@@ -86,6 +86,10 @@ type Server struct {
 	// decisionHTTP is the client for decision-gen. Nil uses a 5s timeout.
 	decisionHTTP *http.Client
 
+	// now is the clock stuck-terminating pods are judged against. New installs
+	// time.Now; tests replace it.
+	now func() time.Time
+
 	// uninst is namespace/release for plans marked uninstalling. A restart
 	// leaves it empty; the label on the ConfigMap is what fills it again.
 	// inflight is set while helm has not returned, so a list cannot drop the
@@ -110,6 +114,7 @@ func New(cfg *config.Config, probe cluster.Probe, log *slog.Logger, version stri
 		catCache:  catalog.NewCache(cfg.Server.CatalogCacheDir()),
 		cats:      map[string]openCatalog{},
 		charts:    map[string]chartListing{},
+		now:       time.Now,
 	}
 }
 

@@ -26,6 +26,14 @@ const uninstallInProgress = "uninstall already in progress"
 // same check when they are read, so a poll is not the only way a row drops.
 const uninstallPoll = 5 * time.Second
 
+// stuckTerminatingExtra is how long past a pod's grace period a deleting pod
+// still counts as remaining. Past that it is treated as gone.
+const stuckTerminatingExtra = 5 * time.Minute
+
+// defaultTerminationGrace is what Kubernetes uses when a pod sets neither
+// deletionGracePeriodSeconds nor terminationGracePeriodSeconds.
+const defaultTerminationGrace = 30 * time.Second
+
 // statusFile is the key writePlan stores beside the plan files.
 const statusFile = "status.yaml"
 
@@ -267,9 +275,11 @@ func (s *Server) rebuildUninstalling(ctx context.Context) error {
 }
 
 // reapRelease drops the plan once helm no longer has the release and no pod
-// matches either selector. A lookup or list error leaves the release listed;
-// a delete error is retried on the next check. The returned string is the
-// delete error, for the uninstall response.
+// matches either selector. Once helm has dropped the release, archive Secrets
+// are removed even while pods remain, so a restart between the helm uninstall
+// and that delete does not leave them behind. A lookup or list error leaves
+// the release listed; a delete error is retried on the next check. The
+// returned string is the delete error, for the uninstall response.
 func (s *Server) reapRelease(ctx context.Context, ns, release string) string {
 	if s.uninstallInflight(ns, release) {
 		return ""
@@ -295,20 +305,21 @@ func (s *Server) reapRelease(ctx context.Context, ns, release string) string {
 		s.trackUninstalling(ns, release)
 		return ""
 	}
-	if remain {
-		s.trackUninstalling(ns, release)
-		return ""
-	}
 	// Helm still recording the release means uninstall did not finish. Dropping
 	// the plan here would make a swiss release look hand-installed. A lookup
-	// that fails is the same as a pod list that fails: keep the row.
+	// that fails is the same as a pod list that fails: keep the row. The lookup
+	// happens even when pods remain, because the archive Secrets go as soon as
+	// helm has dropped the release and do not wait for those pods.
 	st, err := exec.Lookup(ctx, s.probe, ns, release)
 	if err != nil {
 		s.log.WarnContext(ctx, "helm release not read, release stays listed", "namespace", ns, "release", release, "err", err)
 		s.trackUninstalling(ns, release)
 		return ""
 	}
-	if st.Exists {
+	if !st.Exists {
+		s.deleteArchives(ctx, ns, release)
+	}
+	if remain || st.Exists {
 		s.trackUninstalling(ns, release)
 		return ""
 	}
@@ -327,15 +338,23 @@ func (s *Server) reapRelease(ctx context.Context, ns, release string) string {
 
 // podsRemain is true when any pod matches the chart label or the helm instance
 // label. Finished pods (Succeeded or Failed) are ignored: helm test and hook
-// Jobs leave them behind after the workload is gone. Engine pods carry
-// app=<release>-<chart> and need not carry the instance label, so either
-// selector still having a pod keeps the release.
+// Jobs leave them behind after the workload is gone. A pod that is being
+// deleted still counts during its grace period. It is ignored only once it is
+// stuck: now is past deletionTimestamp plus the grace period plus five
+// minutes, or its node is NotReady or not in the node list. Grace is
+// metadata.deletionGracePeriodSeconds, else spec.terminationGracePeriodSeconds,
+// else 30s. An unscheduled pod has no node, so only the time rule applies.
+// Node readiness is listed only when a matched pod is terminating; if that
+// list fails, a terminating pod stays counted unless the time rule already
+// says it is stuck. Engine pods carry app=<release>-<chart> and need not carry
+// the instance label, so either selector still having a pod keeps the release.
 func (s *Server) podsRemain(ctx context.Context, ns, release string, files map[string]string) (bool, error) {
 	sels, err := podSelectors(release, files)
 	if err != nil {
 		return true, err
 	}
-	var remain bool
+	var matched []cluster.Pod
+	terminating := false
 	for _, sel := range sels {
 		pods, err := s.probe.Pods(ctx, ns, sel)
 		if err != nil {
@@ -345,11 +364,86 @@ func (s *Server) podsRemain(ctx context.Context, ns, release string, files map[s
 			if pod.Phase == string(corev1.PodSucceeded) || pod.Phase == string(corev1.PodFailed) {
 				continue
 			}
-			remain = true
-			break
+			matched = append(matched, pod)
+			if podTerminating(pod) {
+				terminating = true
+			}
 		}
 	}
-	return remain, nil
+	if len(matched) == 0 {
+		return false, nil
+	}
+	// A node list is cluster-wide. Skip it unless a terminating pod needs it.
+	var nodeReady func(string) (ready, found bool)
+	if terminating {
+		nodeReady = s.nodeReady(ctx, ns, release)
+	}
+	now := s.clock()
+	for _, pod := range matched {
+		if podStuckTerminating(pod, now, nodeReady) {
+			continue
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+func (s *Server) clock() time.Time {
+	if s.now != nil {
+		return s.now()
+	}
+	return time.Now()
+}
+
+// nodeReady is nil when the node list cannot be read. Callers then apply only
+// the time rule, which keeps a terminating pod that is still inside its window.
+func (s *Server) nodeReady(ctx context.Context, ns, release string) func(string) (ready, found bool) {
+	nodes, err := s.probe.Nodes(ctx)
+	if err != nil {
+		s.log.WarnContext(ctx, "nodes not listed, only the grace rule can ignore a terminating pod",
+			"namespace", ns, "release", release, "err", err)
+		return nil
+	}
+	ready := make(map[string]bool, len(nodes))
+	for _, n := range nodes {
+		ready[n.Name] = n.Ready
+	}
+	return func(name string) (bool, bool) {
+		r, ok := ready[name]
+		return r, ok
+	}
+}
+
+func podTerminating(p cluster.Pod) bool {
+	return p.DeletionTimestamp != nil && !p.DeletionTimestamp.IsZero()
+}
+
+// podStuckTerminating reports whether a deleting pod should be treated as gone.
+// nodeReady is nil when the node list could not be read: only the time rule
+// applies, so a pod still inside its window counts as remaining. An empty node
+// name is unscheduled and is not treated as a missing node.
+func podStuckTerminating(p cluster.Pod, now time.Time, nodeReady func(string) (ready, found bool)) bool {
+	if !podTerminating(p) {
+		return false
+	}
+	if now.After(p.DeletionTimestamp.Add(podGrace(p) + stuckTerminatingExtra)) {
+		return true
+	}
+	if p.Node == "" || nodeReady == nil {
+		return false
+	}
+	ready, found := nodeReady(p.Node)
+	return !found || !ready
+}
+
+func podGrace(p cluster.Pod) time.Duration {
+	if p.DeletionGracePeriodSeconds != nil {
+		return time.Duration(*p.DeletionGracePeriodSeconds) * time.Second
+	}
+	if p.TerminationGracePeriodSeconds != nil {
+		return time.Duration(*p.TerminationGracePeriodSeconds) * time.Second
+	}
+	return defaultTerminationGrace
 }
 
 func podSelectors(release string, files map[string]string) ([]string, error) {

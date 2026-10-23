@@ -821,6 +821,26 @@ func (s *Server) pruneArchives(ctx context.Context, namespace, release string, n
 	return nil
 }
 
+// deleteArchives removes every archived plan for the release. Best effort, the
+// same as the uninstall that first deletes them: a list error is left for the
+// next attempt, and a delete error is logged. DeleteSecret succeeds when the
+// Secret is already gone. The plan ConfigMap is a different object and stays
+// until the pods are gone.
+func (s *Server) deleteArchives(ctx context.Context, ns, release string) {
+	if s.writer == nil {
+		return
+	}
+	revs, err := s.archivedRevisions(ctx, ns, release)
+	if err != nil {
+		return
+	}
+	for _, r := range revs {
+		if err := s.writer.DeleteSecret(ctx, archiveRef(ns, release, r)); err != nil {
+			s.log.WarnContext(ctx, "archived plan not removed", "release", release, "revision", r, "err", err)
+		}
+	}
+}
+
 // archivedRevisions is every revision with a plan beside it, newest first.
 func (s *Server) archivedRevisions(ctx context.Context, namespace, release string) ([]int, error) {
 	names, err := s.probe.SecretNames(ctx, namespace, archiveSelector(release))

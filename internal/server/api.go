@@ -563,11 +563,13 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 }
 
 type deployment struct {
-	Release    string `json:"release"`
-	Namespace  string `json:"namespace"`
-	Chart      string `json:"chart,omitempty"`
-	Status     string `json:"status,omitempty"`
-	Revision   int    `json:"revision"`
+	Release   string `json:"release"`
+	Namespace string `json:"namespace"`
+	Chart     string `json:"chart,omitempty"`
+	Status    string `json:"status,omitempty"`
+	// Revision is helm's. Omitted when there is none, so an uninstalling row
+	// whose release is already gone does not report 0.
+	Revision   int    `json:"revision,omitempty"`
 	Updated    string `json:"updated,omitempty"`
 	Model      string `json:"model,omitempty"`
 	Variant    string `json:"variant,omitempty"`

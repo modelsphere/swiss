@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -25,24 +26,34 @@ import (
 )
 
 type uninstallCase struct {
-	Kind                 string    `yaml:"kind"`
-	Release              string    `yaml:"release"`
-	Namespace            string    `yaml:"namespace"`
-	Chart                string    `yaml:"chart"`
-	HelmExit             int       `yaml:"helmExit"`
-	PodListError         bool      `yaml:"podListError"`
-	DeleteConfigMapFails int       `yaml:"deleteConfigMapFails"`
-	SeedArchive          bool      `yaml:"seedArchive"`
-	OperatorPhase        string    `yaml:"operatorPhase"`
-	Pods                 []podSpec `yaml:"pods"`
-	Steps                []unstep  `yaml:"steps"`
+	Kind                 string     `yaml:"kind"`
+	Release              string     `yaml:"release"`
+	Namespace            string     `yaml:"namespace"`
+	Chart                string     `yaml:"chart"`
+	HelmExit             int        `yaml:"helmExit"`
+	PodListError         bool       `yaml:"podListError"`
+	DeleteConfigMapFails int        `yaml:"deleteConfigMapFails"`
+	SeedArchive          bool       `yaml:"seedArchive"`
+	OperatorPhase        string     `yaml:"operatorPhase"`
+	Nodes                []nodeSpec `yaml:"nodes"`
+	Pods                 []podSpec  `yaml:"pods"`
+	Steps                []unstep   `yaml:"steps"`
+}
+
+type nodeSpec struct {
+	Name  string `yaml:"name"`
+	Ready bool   `yaml:"ready"`
 }
 
 type podSpec struct {
-	Name      string            `yaml:"name"`
-	Phase     string            `yaml:"phase"`
-	Namespace string            `yaml:"namespace"`
-	Labels    map[string]string `yaml:"labels"`
+	Name                          string            `yaml:"name"`
+	Phase                         string            `yaml:"phase"`
+	Namespace                     string            `yaml:"namespace"`
+	Node                          string            `yaml:"node"`
+	DeletionTimestamp             time.Time         `yaml:"deletionTimestamp"`
+	DeletionGracePeriodSeconds    *int64            `yaml:"deletionGracePeriodSeconds"`
+	TerminationGracePeriodSeconds *int64            `yaml:"terminationGracePeriodSeconds"`
+	Labels                        map[string]string `yaml:"labels"`
 }
 
 type unstep struct {
@@ -61,6 +72,8 @@ type unstep struct {
 	Backend        string    `yaml:"backend"`
 	Pods           []podSpec `yaml:"pods"`
 	Archives       *int      `yaml:"archives"`
+	Now            time.Time `yaml:"now"`
+	HasRevision    *bool     `yaml:"hasRevision"`
 }
 
 func runUninstallingCase(t *testing.T, path string) {
@@ -117,6 +130,7 @@ type helmHarness struct {
 	c   *uninstallCluster
 	srv *httptest.Server
 	s   *Server
+	now time.Time
 }
 
 func (h *helmHarness) open(t *testing.T) {
@@ -137,6 +151,10 @@ func (h *helmHarness) open(t *testing.T) {
 	s.SetStore(db)
 	s.SetWriter(h.c)
 	h.s = s
+	if !h.now.IsZero() {
+		frozen := h.now
+		s.now = func() time.Time { return frozen }
+	}
 	h.srv = httptest.NewServer(s.Handler())
 }
 
@@ -152,6 +170,21 @@ func (h *helmHarness) do(t *testing.T, step unstep) (int, map[string]any) {
 		return get(t, h.srv, "/api/releases/"+ns+"/"+rel+"/status")
 	case "setPods":
 		h.c.setPods(ns, step.Pods)
+		return 0, nil
+	case "setNow":
+		if step.Now.IsZero() {
+			t.Fatal("setNow requires now")
+		}
+		h.now = step.Now
+		if h.s != nil {
+			frozen := h.now
+			h.s.now = func() time.Time { return frozen }
+		}
+		return 0, nil
+	case "seedArchives":
+		if err := h.c.seedArchive(ns, rel); err != nil {
+			t.Fatal(err)
+		}
 		return 0, nil
 	case "dropHelm":
 		h.c.dropHelm(ns, rel)
@@ -255,9 +288,9 @@ func assertUnstep(t *testing.T, cs *uninstallCase, c *uninstallCluster, step uns
 			t.Fatalf("%s: unexpected planError %q", step.Do, pe)
 		}
 	}
-	if step.Present != nil || step.Phase != "" || step.Backend != "" {
+	if step.Present != nil || step.Phase != "" || step.Backend != "" || step.HasRevision != nil {
 		if step.Do != "list" {
-			t.Fatalf("%s sets present, phase, or backend; those are read from a list step", step.Do)
+			t.Fatalf("%s sets present, phase, backend, or hasRevision; those are read from a list step", step.Do)
 		}
 		row, found := deploymentRowIn(body, cs.Namespace, cs.Release)
 		if step.Present != nil && *step.Present != found {
@@ -273,6 +306,15 @@ func assertUnstep(t *testing.T, cs *uninstallCase, c *uninstallCluster, step uns
 		}
 		if step.Backend != "" && (!found || row["backend"] != step.Backend) {
 			t.Fatalf("backend %v, want %s", row, step.Backend)
+		}
+		if step.HasRevision != nil {
+			if !found {
+				t.Fatalf("no row for %s/%s in %v", cs.Namespace, cs.Release, body["deployments"])
+			}
+			_, ok := row["revision"]
+			if ok != *step.HasRevision {
+				t.Fatalf("revision key present=%v, want %v, row %v", ok, *step.HasRevision, row)
+			}
 		}
 	}
 	if step.PlanPhase != "" || step.ServicePhase != "" || step.MinPods != nil || step.TotalPods != nil {
@@ -353,8 +395,11 @@ type cmRec struct {
 }
 
 type podFix struct {
-	name, phase, namespace string
-	labels                 map[string]string
+	name, phase, namespace, node string
+	deletion                     time.Time
+	deletionGrace                *int64
+	terminationGrace             *int64
+	labels                       map[string]string
 }
 
 type helmRec struct {
@@ -373,6 +418,12 @@ func newUninstallCluster(t *testing.T, cs *uninstallCase) *uninstallCluster {
 	c := &uninstallCluster{Fake: fakeProbe()}
 	c.Nod = []cluster.Node{
 		{Name: "gpu-1", GPUProduct: "NVIDIA-B300-SXM6-AC", GPUs: 8, Schedulable: true, Ready: true},
+	}
+	if len(cs.Nodes) > 0 {
+		c.Nod = nil
+		for _, n := range cs.Nodes {
+			c.Nod = append(c.Nod, cluster.Node{Name: n.Name, Ready: n.Ready, Schedulable: true})
+		}
 	}
 	c.cms = map[string]*cmRec{}
 	c.helm = map[string]*helmRec{}
@@ -409,15 +460,20 @@ func newUninstallCluster(t *testing.T, cs *uninstallCase) *uninstallCluster {
 	c.helm[cs.Namespace+"/"+cs.Release] = &helmRec{revision: 4, status: "deployed", chart: cs.Chart + "-0.7.1"}
 	c.setPods(cs.Namespace, cs.Pods)
 	if cs.SeedArchive {
-		data, err := c.ConfigMap(ctx, planRef(cs.Namespace, cs.Release))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := c.PutSecret(ctx, archiveRef(cs.Namespace, cs.Release, 3), data, archiveLabels(cs.Release, 3)); err != nil {
+		if err := c.seedArchive(cs.Namespace, cs.Release); err != nil {
 			t.Fatal(err)
 		}
 	}
 	return c
+}
+
+func (c *uninstallCluster) seedArchive(ns, release string) error {
+	ctx := context.Background()
+	data, err := c.ConfigMap(ctx, planRef(ns, release))
+	if err != nil {
+		return err
+	}
+	return c.PutSecret(ctx, archiveRef(ns, release, 3), data, archiveLabels(release, 3))
 }
 
 func (c *uninstallCluster) setPods(ns string, pods []podSpec) {
@@ -433,8 +489,20 @@ func (c *uninstallCluster) setPods(ns string, pods []podSpec) {
 		if phase == "" {
 			phase = "Running"
 		}
-		c.pods = append(c.pods, podFix{name: p.Name, phase: phase, namespace: n, labels: maps.Clone(p.Labels)})
+		c.pods = append(c.pods, podFix{
+			name: p.Name, phase: phase, namespace: n, node: p.Node,
+			deletion: p.DeletionTimestamp, deletionGrace: cloneInt64(p.DeletionGracePeriodSeconds),
+			terminationGrace: cloneInt64(p.TerminationGracePeriodSeconds), labels: maps.Clone(p.Labels),
+		})
 	}
+}
+
+func cloneInt64(p *int64) *int64 {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
 }
 
 func (c *uninstallCluster) dropHelm(ns, release string) {
@@ -571,7 +639,14 @@ func (c *uninstallCluster) Pods(_ context.Context, namespace, selector string) (
 		if p.namespace != namespace || !selectorMatches(p.labels, selector) {
 			continue
 		}
-		out = append(out, cluster.Pod{Name: p.name, Phase: p.phase})
+		pod := cluster.Pod{Name: p.name, Phase: p.phase, Node: p.node}
+		if !p.deletion.IsZero() {
+			ts := p.deletion
+			pod.DeletionTimestamp = &ts
+		}
+		pod.DeletionGracePeriodSeconds = p.deletionGrace
+		pod.TerminationGracePeriodSeconds = p.terminationGrace
+		out = append(out, pod)
 	}
 	return out, nil
 }

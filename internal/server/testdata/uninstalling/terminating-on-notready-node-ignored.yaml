@@ -1,0 +1,26 @@
+kind: helm
+release: glm-53
+namespace: models
+chart: vllm
+nodes:
+  - name: gpu-1
+    ready: false
+pods:
+  - name: engine-0
+    phase: Running
+    node: gpu-1
+    deletionTimestamp: 2026-10-22T12:00:00Z
+    deletionGracePeriodSeconds: 600
+    labels:
+      app: glm-53-vllm
+      app.kubernetes.io/instance: glm-53
+steps:
+  - do: setNow
+    now: 2026-10-22T12:00:30Z
+  - do: uninstall
+    status: 200
+  - do: dropHelm
+  - do: list
+    status: 200
+    present: false
+    configMap: false

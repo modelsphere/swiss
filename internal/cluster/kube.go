@@ -741,6 +741,18 @@ func (k *Kube) Pods(ctx context.Context, namespace, selector string) ([]Pod, err
 			Phase: string(p.Status.Phase),
 			Node:  p.Spec.NodeName,
 		}
+		if p.DeletionTimestamp != nil && !p.DeletionTimestamp.IsZero() {
+			t := p.DeletionTimestamp.Time
+			pod.DeletionTimestamp = &t
+		}
+		if p.DeletionGracePeriodSeconds != nil {
+			v := *p.DeletionGracePeriodSeconds
+			pod.DeletionGracePeriodSeconds = &v
+		}
+		if p.Spec.TerminationGracePeriodSeconds != nil {
+			v := *p.Spec.TerminationGracePeriodSeconds
+			pod.TerminationGracePeriodSeconds = &v
+		}
 		if !p.CreationTimestamp.IsZero() {
 			pod.AgeSecond = int64(time.Since(p.CreationTimestamp.Time).Seconds())
 		}
