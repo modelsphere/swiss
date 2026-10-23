@@ -1,0 +1,5 @@
+name: upgrade-llmsvc
+description: upgrading an llmsvc release with no autoscale layer leaves that layer out
+kind: upgrade
+backend: llmsvc
+wantReplicaCount: 3

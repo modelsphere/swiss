@@ -1,0 +1,4 @@
+name: layers-llmsvc
+description: an LLMService spec lists the pre-autoscale layers and no autoscale entry
+kind: layers
+backend: llmsvc

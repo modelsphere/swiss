@@ -1,0 +1,5 @@
+name: service-id-release
+description: the autoscale id falls back to the chart fullname of the release
+fn: autoscaleServiceId
+release: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-zzzz
+want: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa

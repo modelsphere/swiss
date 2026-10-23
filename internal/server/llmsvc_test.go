@@ -126,18 +126,19 @@ func startRig(t *testing.T, probe cluster.Fake, served, operator bool, applyWith
 		probe.SecretLabels = map[string]map[string]string{}
 	}
 	profileApplyWith(probe, applyWith)
+	initMapVersions(&probe)
 	cfg := testConfig("prod-b300")
 	cfg.Server.AllowDeploy = true
 	cfg.Server.HelmBin = failBin(t, "helm")
 	cfg.Server.HelmfileBin = failBin(t, "helmfile")
-	s := New(cfg, probe, discardLogger(), "test")
+	s := New(cfg, &probe, discardLogger(), "test")
 	db, err := store.Open(filepath.Join(t.TempDir(), "swiss.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
 	s.SetStore(db)
-	w := &fakeWriter{}
+	w := &fakeWriter{cm: &probe}
 	s.SetWriter(w)
 
 	dyn := newDyn()

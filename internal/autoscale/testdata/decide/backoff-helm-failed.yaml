@@ -1,0 +1,50 @@
+name: backoff-helm-failed
+description: a helm failure recorded by autoscale waits out its backoff
+config:
+  enabled: true
+  minSlices: 1
+  maxSlices: 4
+now: "2026-10-23T00:00:00Z"
+status:
+  lastFailedWant: 1
+  lastFailedAt: "2026-10-23T00:00:00Z"
+  failures: 1
+  retryAfter: "2026-10-23T00:01:00Z"
+live:
+  backend: helm
+  helmStatus: failed
+  pd: true
+  dsGeneration: 1
+  dsObservedGeneration: 1
+  dsSlices: 3
+  planReplicaCount: 3
+  roles:
+    - replicas: 1
+      readyReplicas: 1
+      updatedReplicas: 1
+  routers:
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
+decision:
+  ok: true
+  replicas: 1
+wantHold: "backing off"
+wantScale: false
+wantCurrent: 3
+want: 0
+wantFailed: false
+hasDecision: true
+wantFailures: 1
+wantRetryAfter: "2026-10-23T00:01:00Z"
+wantLastFailedAt: "2026-10-23T00:00:00Z"
+wantLastFailedWant: 1

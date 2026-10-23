@@ -1,0 +1,4 @@
+name: hash-llmsvc
+description: an llmsvc plan with no autoscale layer hashes like the pre-autoscale layer list
+kind: hash
+backend: llmsvc

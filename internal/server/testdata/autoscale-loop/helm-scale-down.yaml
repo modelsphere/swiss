@@ -1,0 +1,13 @@
+name: helm-scale-down
+description: helm apply scales the slice count down
+backend: helm
+decision: 1
+slices: 3
+min: 1
+max: 4
+revision: 2
+conflict: false
+wantApplies: 1
+wantFrom: 3
+wantTo: 1
+wantCleared: true

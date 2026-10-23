@@ -75,6 +75,44 @@ func TestRoundTripKeepsThePlanHash(t *testing.T) {
 	}
 }
 
+func TestAutoscaleLayerRoundTripsLast(t *testing.T) {
+	p := realistic(t)
+	p.Layers[values.LayerAutoscale] = values.Tree{"replicaCount": 3}
+	if err := p.ComputeHash(); err != nil {
+		t.Fatal(err)
+	}
+	u := assertRoundTrip(t, p, "autoscale", "autoscale 2 -> 3 (decision-gen)")
+	names := layerNames(t, u)
+	if len(names) == 0 || names[len(names)-1] != values.LayerAutoscale {
+		t.Fatalf("autoscale must be last, got %v", names)
+	}
+	back, err := ToPlan(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := back.Layers[values.LayerAutoscale]["replicaCount"]
+	if !ok {
+		t.Fatal("autoscale layer missing after round trip")
+	}
+	n, ok := asWhole(got)
+	if !ok || n != 3 {
+		t.Fatalf("replicaCount = %v", got)
+	}
+}
+
+func asWhole(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), n == float64(int(n))
+	default:
+		return 0, false
+	}
+}
+
 func TestEmptyLayersAreLeftOut(t *testing.T) {
 	p := &plan.Plan{
 		APIVersion: plan.APIVersion,

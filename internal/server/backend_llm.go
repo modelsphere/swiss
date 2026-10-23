@@ -250,7 +250,7 @@ func (b llmBackend) Apply(ctx context.Context, p *plan.Plan, mode exec.Mode, o a
 		cur.SetAnnotations(mergeReleaseAnnotations(cur.GetAnnotations(), fresh.GetAnnotations(), force))
 		wrote, err = s.llms.Update(ctx, cur)
 		if apierrors.IsConflict(err) {
-			return applyResult{}, fail(http.StatusConflict, "the release moved under you; diff again")
+			return applyResult{}, failErr(http.StatusConflict, &exec.RevisionConflictError{Msg: "the release moved under you; diff again"})
 		}
 	}
 	if err != nil {
@@ -335,7 +335,14 @@ func (b llmBackend) Uninstall(ctx context.Context, ns, release string) (uninstal
 	if uninstallErr != nil {
 		return uninstallResult{}, failErr(http.StatusInternalServerError, uninstallErr)
 	}
-	return uninstallResult{Output: out}, nil
+	var planErr string
+	if s.writer != nil {
+		if err := s.removeAutoscale(ctx, ns, release); err != nil {
+			planErr = err.Error()
+			s.log.ErrorContext(ctx, "autoscale configmap not removed", "release", release, "err", err)
+		}
+	}
+	return uninstallResult{Output: out, PlanError: planErr}, nil
 }
 
 func (b llmBackend) helmRevision(ctx context.Context, ns, name string) int {

@@ -1,0 +1,7 @@
+name: upgrade-deleted
+description: a missing ConfigMap drops the layer on the next upgrade
+kind: upgrade
+hasConfig: false
+overrides: true
+liveAutoscale: 2
+wantLayer: false

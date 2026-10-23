@@ -1,0 +1,23 @@
+name: guard-llm-applying
+description: an LLMService in Applying holds the tick
+config:
+  enabled: true
+  minSlices: 1
+  maxSlices: 4
+live:
+  backend: llmsvc
+  helmStatus: deployed
+  llmPhase: Applying
+  llmGeneration: 2
+  llmObservedGeneration: 2
+  pd: true
+  planReplicaCount: 1
+decision:
+  ok: true
+  replicas: 2
+wantHold: "llmservice applying"
+wantScale: false
+wantCurrent: 1
+want: 0
+wantFailed: false
+hasDecision: true

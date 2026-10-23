@@ -59,12 +59,16 @@ type uninstallResult struct {
 }
 
 // httpFailure is an error whose text and status are the HTTP response.
+// err is the cause, when there is one, so errors.As can still see it.
 type httpFailure struct {
 	code int
 	msg  string
+	err  error
 }
 
 func (e *httpFailure) Error() string { return e.msg }
+
+func (e *httpFailure) Unwrap() error { return e.err }
 
 func fail(code int, format string, args ...any) error {
 	return &httpFailure{code: code, msg: fmt.Sprintf(format, args...)}
@@ -74,7 +78,7 @@ func failErr(code int, err error) error {
 	if err == nil {
 		return nil
 	}
-	return &httpFailure{code: code, msg: err.Error()}
+	return &httpFailure{code: code, msg: err.Error(), err: err}
 }
 
 func writeStatus(w http.ResponseWriter, err error, fallback int) {

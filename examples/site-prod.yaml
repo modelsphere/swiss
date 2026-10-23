@@ -56,6 +56,8 @@ cache:
 scaler:
   serverAddress: http://decision-gen.llm-scaler.svc:80
   sloAddress: http://slo-api.llm-scaler.svc:80
+  # How often swissd asks decision-gen for a PD slice count. Empty is 30s.
+  # autoscalePeriod: 30s
   # sloTokenSecret: llm-scaler/slo-api
   # sloTokenKey: token
 

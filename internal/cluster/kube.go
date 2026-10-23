@@ -572,6 +572,18 @@ func (k *Kube) ConfigMap(ctx context.Context, ref string) (map[string]string, er
 	return cm.Data, nil
 }
 
+func (k *Kube) ConfigMapWithVersion(ctx context.Context, ref string) (map[string]string, string, error) {
+	ns, name, err := SplitRef(ref)
+	if err != nil {
+		return nil, "", err
+	}
+	cm, err := k.client.CoreV1().ConfigMaps(ns).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, "", err
+	}
+	return cloneStringMap(cm.Data), cm.ResourceVersion, nil
+}
+
 // Secret reads a Secret given as "namespace/name". client-go has already
 // base64-decoded Data by the time it arrives here.
 func (k *Kube) Secret(ctx context.Context, ref string) (map[string]string, error) {

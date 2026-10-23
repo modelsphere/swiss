@@ -72,6 +72,9 @@ type planRequest struct {
 	// Set by carryForward, never by the caller.
 	runningChart plan.ChartRef
 	movedFrom    *plan.Plan
+	// autoscale is the live replicaCount layer, copied while autoscaling is
+	// enabled. Unexported so a request body cannot set it.
+	autoscale values.Tree
 }
 
 type applyRequest struct {
@@ -237,6 +240,7 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 		Overrides:       overrides,
 		Edits:           edits,
 		CreateNamespace: req.CreateNamespace,
+		Autoscale:       req.autoscale,
 	})
 	if err != nil {
 		return nil, err
@@ -298,7 +302,7 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 		if edits := prev.Layers[values.LayerEdit]; len(edits) > 0 {
 			out.EditsYAML = mustYAML(edits)
 		}
-		return out, nil
+		return s.withAutoscale(ctx, prev, out)
 	}
 	values.Merge(out.Overrides, req.Overrides, values.LayerForm, nil)
 	out.EditsYAML = req.EditsYAML
@@ -319,6 +323,28 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 		out.GPUProducts = req.GPUProducts
 		out.ForceGPUProducts = req.ForceGPUProducts
 	}
+	return s.withAutoscale(ctx, prev, out)
+}
+
+// withAutoscale copies the live autoscale layer onto an upgrade while that
+// release has autoscaling enabled. Otherwise the layer is left behind and
+// replicaCount falls back to form and edit.
+func (s *Server) withAutoscale(ctx context.Context, prev *plan.Plan, out planRequest) (planRequest, error) {
+	if prev == nil {
+		return out, nil
+	}
+	layer := prev.Layers[values.LayerAutoscale]
+	if len(layer) == 0 {
+		return out, nil
+	}
+	on, err := s.autoscalingEnabled(ctx, prev.Release.Namespace, prev.Release.Name)
+	if err != nil {
+		return planRequest{}, err
+	}
+	if !on {
+		return out, nil
+	}
+	out.autoscale = cloneTree(layer)
 	return out, nil
 }
 
@@ -607,15 +633,31 @@ func (s *Server) handleApply(mode exec.Mode) http.HandlerFunc {
 	}
 }
 
-// applyPlan is the cluster-changing half, shared by apply, install and
-// rollback. They differ in where the plan came from and in nothing after that.
-func (s *Server) applyPlan(ctx context.Context, w http.ResponseWriter, p *plan.Plan, mode exec.Mode, applyWith string, expectRevision int, action, note string, forceConflicts bool) {
+// apply takes the per-release lock and calls applyLocked. scaleTo holds that
+// lock already and calls applyLocked directly. A busy lock is 409; nobody waits.
+func (s *Server) apply(ctx context.Context, p *plan.Plan, mode exec.Mode, applyWith string, o applyOpts) (applyResult, error) {
+	if p == nil || p.Release.Name == "" {
+		return applyResult{}, fail(http.StatusBadRequest, "no plan")
+	}
+	if !s.tryApplyLock(p.Release.Namespace, p.Release.Name) {
+		return applyResult{}, &applyBusyError{ns: p.Release.Namespace, release: p.Release.Name}
+	}
+	defer s.unlockApply(p.Release.Namespace, p.Release.Name)
+	return s.applyLocked(ctx, p, mode, applyWith, o)
+}
+
+func (s *Server) applyLocked(ctx context.Context, p *plan.Plan, mode exec.Mode, applyWith string, o applyOpts) (applyResult, error) {
 	b, err := s.backendForApply(ctx, p, mode, applyWith)
 	if err != nil {
-		writeStatus(w, err, http.StatusBadGateway)
-		return
+		return applyResult{}, err
 	}
-	res, err := b.Apply(ctx, p, mode, applyOpts{
+	return b.Apply(ctx, p, mode, o)
+}
+
+// applyPlan is apply plus the HTTP response. Handlers stay here; the
+// autoscaler calls apply and records the error itself.
+func (s *Server) applyPlan(ctx context.Context, w http.ResponseWriter, p *plan.Plan, mode exec.Mode, applyWith string, expectRevision int, action, note string, forceConflicts bool) {
+	res, err := s.apply(ctx, p, mode, applyWith, applyOpts{
 		ExpectRevision: expectRevision,
 		Action:         action,
 		Note:           note,
@@ -648,6 +690,11 @@ func (s *Server) handleUninstall(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	ns, release := r.PathValue("namespace"), r.PathValue("release")
+	if !s.tryApplyLock(ns, release) {
+		writeStatus(w, &applyBusyError{ns: ns, release: release}, http.StatusConflict)
+		return
+	}
+	defer s.unlockApply(ns, release)
 	b, _, err := s.backendFor(ctx, ns, release)
 	if err != nil {
 		writeStatus(w, err, http.StatusBadGateway)

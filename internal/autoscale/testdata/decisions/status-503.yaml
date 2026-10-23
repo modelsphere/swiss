@@ -1,0 +1,7 @@
+name: status-503
+description: a non-200 is a hold, not zero replicas
+namespace: models
+serviceId: pd
+status: 503
+body: unavailable
+errorContains: "status 503"

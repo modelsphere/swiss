@@ -1,0 +1,43 @@
+name: scale-down-llm-applying
+description: a scale-down still holds while the LLMService is Applying
+config:
+  enabled: true
+  minSlices: 1
+  maxSlices: 5
+live:
+  backend: llmsvc
+  helmStatus: deployed
+  llmPhase: Applying
+  llmGeneration: 2
+  llmObservedGeneration: 2
+  pd: true
+  dsGeneration: 1
+  dsObservedGeneration: 1
+  dsSlices: 3
+  planReplicaCount: 3
+  roles:
+    - replicas: 1
+      readyReplicas: 1
+      updatedReplicas: 1
+  routers:
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
+decision:
+  ok: true
+  replicas: 1
+wantHold: "llmservice applying"
+wantScale: false
+wantCurrent: 3
+want: 0
+wantFailed: false
+hasDecision: true

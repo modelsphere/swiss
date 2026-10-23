@@ -1,0 +1,4 @@
+name: rollback-helm
+description: rollback with no autoscale config reapplies the archive unchanged
+kind: rollback
+backend: helm

@@ -1,0 +1,21 @@
+name: guard-plan-applying
+description: a plan ConfigMap still applying holds the tick
+config:
+  enabled: true
+  minSlices: 1
+  maxSlices: 4
+live:
+  backend: helm
+  helmStatus: deployed
+  planPhase: applying
+  pd: true
+  planReplicaCount: 1
+decision:
+  ok: true
+  replicas: 2
+wantHold: "plan applying"
+wantScale: false
+wantCurrent: 1
+want: 0
+wantFailed: false
+hasDecision: true

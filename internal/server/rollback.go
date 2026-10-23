@@ -224,6 +224,10 @@ func (s *Server) handleRollback(w http.ResponseWriter, r *http.Request) {
 			"expectRevision is required: send the revision you were looking at, so a rollback cannot overwrite an apply that landed in between")
 		return
 	}
+	if err := s.overlayAutoscale(ctx, ns, release, p); err != nil {
+		writeStatus(w, err, http.StatusBadGateway)
+		return
+	}
 	// No force here: a rollback restores a plan that was applied cleanly once,
 	// and taking fields from another manager during one would be a second
 	// surprise on top of the one being undone.

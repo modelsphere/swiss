@@ -1,0 +1,23 @@
+name: guard-llm-pending
+description: an LLMService in Pending holds the tick
+config:
+  enabled: true
+  minSlices: 1
+  maxSlices: 4
+live:
+  backend: llmsvc
+  helmStatus: deployed
+  llmPhase: Pending
+  llmGeneration: 2
+  llmObservedGeneration: 2
+  pd: true
+  planReplicaCount: 1
+decision:
+  ok: true
+  replicas: 2
+wantHold: "llmservice pending"
+wantScale: false
+wantCurrent: 1
+want: 0
+wantFailed: false
+hasDecision: true

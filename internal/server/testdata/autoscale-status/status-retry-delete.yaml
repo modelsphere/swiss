@@ -1,0 +1,7 @@
+name: status-retry-delete
+description: status write does not recreate a ConfigMap deleted concurrently
+kind: write
+mutate: delete
+wantPresent: false
+wantKeyWrites: 0
+wantConflicts: 0

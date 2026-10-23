@@ -1,0 +1,9 @@
+name: unmanaged
+description: a release swiss does not manage is 404
+backend: helm
+managed: false
+steps:
+  - method: PUT
+    body: {enabled: true, minSlices: 1, maxSlices: 2}
+    wantStatus: 404
+    errorContains: not managed

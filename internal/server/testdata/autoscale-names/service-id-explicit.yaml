@@ -1,0 +1,7 @@
+name: service-id-explicit
+description: an explicit serviceId is kept as written
+fn: serviceId
+release: rel
+serviceId: explicit-service-id-
+fullnameOverride: other-name
+want: explicit-service-id-

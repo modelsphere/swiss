@@ -1,0 +1,12 @@
+name: helm-failed-user
+description: a helm failure with no autoscale failure holds instead of applying
+backend: helm
+decision: 2
+slices: 1
+min: 1
+max: 4
+revision: 2
+helmStatus: failed
+wantApplies: 0
+wantHold: release failed
+wantCleared: true

@@ -1,0 +1,4 @@
+name: hash-helm
+description: a helm plan with no autoscale layer hashes like the pre-autoscale layer list
+kind: hash
+backend: helm

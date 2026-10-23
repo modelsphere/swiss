@@ -1,0 +1,7 @@
+name: out-of-range
+description: a count above MaxInt32 is refused
+namespace: models
+serviceId: pd
+status: 200
+body: '{"apiVersion":"llmscaling.inference.x-k8s.io/v1alpha1","decisions":[{"namespace":"models","serviceId":"pd","replicas":{"active": 2147483648}}]}'
+errorContains: out of range

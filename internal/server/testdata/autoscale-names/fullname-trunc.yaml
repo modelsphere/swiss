@@ -1,0 +1,6 @@
+name: fullname-trunc
+description: a fullname longer than 63 characters is truncated
+fn: fullname
+release: rel
+fullnameOverride: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+want: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb

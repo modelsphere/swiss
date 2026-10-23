@@ -1,0 +1,7 @@
+name: upgrade-helm
+description: upgrading a release with no autoscale config keeps the release name as serviceId and drops the layer
+kind: upgrade
+backend: helm
+serviceId: plain
+fullnameOverride: from-override
+wantReplicaCount: 3

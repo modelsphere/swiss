@@ -1,0 +1,17 @@
+name: fail-hold
+description: the same count is not applied again before retryAfter
+backend: helm
+decision: 2
+slices: 1
+min: 1
+max: 4
+revision: 2
+wantApplies: 0
+wantHold: backing off
+wantFailures: 1
+wantLastFailedWant: 2
+seedStatus:
+  lastFailedWant: 2
+  lastFailedAt: "2026-10-23T00:00:00Z"
+  failures: 1
+  retryAfter: "2099-01-01T00:00:00Z"

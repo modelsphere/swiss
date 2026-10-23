@@ -1,0 +1,4 @@
+name: rollback-llmsvc
+description: rollback of an llmsvc release with no autoscale layer restores the archived spec
+kind: rollback
+backend: llmsvc

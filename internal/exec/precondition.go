@@ -61,12 +61,20 @@ func CheckUninstall(st State, namespace, release string) error {
 	return nil
 }
 
+// RevisionConflictError means the release changed since the caller looked.
+// An autoscale retry does not count it: somebody else moved the release.
+type RevisionConflictError struct {
+	Msg string
+}
+
+func (e *RevisionConflictError) Error() string { return e.Msg }
+
 // CheckRevision fails when the live release moved since the diff was computed.
 // Zero means no diff was run and nothing is asserted: the diff is optional, and
 // an apply without one carries no revision to check.
 func CheckRevision(st State, diffedAt int) error {
 	if diffedAt > 0 && st.Revision != diffedAt {
-		return fmt.Errorf("release moved from revision %d to %d since you looked; re-check it before applying", diffedAt, st.Revision)
+		return &RevisionConflictError{Msg: fmt.Sprintf("release moved from revision %d to %d since you looked; re-check it before applying", diffedAt, st.Revision)}
 	}
 	return nil
 }

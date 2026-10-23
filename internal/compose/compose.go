@@ -45,6 +45,9 @@ type Input struct {
 	// Schema is the catalog's SchemaVersion. Recorded on a v2 plan only, so a
 	// v1 plan stays byte for byte what it was.
 	Schema string
+	// Autoscale is the replicaCount layer carried while PD autoscaling is
+	// enabled. Empty is omitted, so a plan without it hashes as before.
+	Autoscale values.Tree
 }
 
 // Compose resolves an entry, a variant, a profile and a set of overrides into a
@@ -110,6 +113,9 @@ func Compose(in Input) (*plan.Plan, error) {
 		if len(tree) > 0 {
 			layers[name] = tree
 		}
+	}
+	if len(in.Autoscale) > 0 {
+		layers[values.LayerAutoscale] = in.Autoscale
 	}
 
 	p := &plan.Plan{

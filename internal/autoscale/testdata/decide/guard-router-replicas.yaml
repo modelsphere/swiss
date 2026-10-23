@@ -1,0 +1,32 @@
+name: guard-router-replicas
+description: a router whose ready count lags its spec holds the tick
+config:
+  enabled: true
+  minSlices: 1
+  maxSlices: 4
+live:
+  backend: helm
+  helmStatus: deployed
+  pd: true
+  dsGeneration: 1
+  dsObservedGeneration: 1
+  dsSlices: 1
+  planReplicaCount: 1
+  roles:
+    - replicas: 1
+      readyReplicas: 1
+      updatedReplicas: 1
+  routers:
+    - specReplicas: 2
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
+decision:
+  ok: true
+  replicas: 2
+wantHold: "router not ready"
+wantScale: false
+wantCurrent: 1
+want: 0
+wantFailed: false
+hasDecision: true

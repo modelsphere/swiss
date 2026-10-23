@@ -1,0 +1,17 @@
+name: fail-want-changed
+description: a different count clears a future backoff and applies
+backend: helm
+decision: 2
+slices: 1
+min: 1
+max: 4
+revision: 2
+wantApplies: 1
+wantFrom: 1
+wantTo: 2
+wantCleared: true
+seedStatus:
+  lastFailedWant: 4
+  lastFailedAt: "2026-10-23T00:00:00Z"
+  failures: 2
+  retryAfter: "2099-01-01T00:00:00Z"

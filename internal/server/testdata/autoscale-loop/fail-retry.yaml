@@ -1,0 +1,17 @@
+name: fail-retry
+description: after retryAfter a successful apply clears the backoff
+backend: helm
+decision: 2
+slices: 1
+min: 1
+max: 4
+revision: 2
+wantApplies: 1
+wantFrom: 1
+wantTo: 2
+wantCleared: true
+seedStatus:
+  lastFailedWant: 2
+  lastFailedAt: "2026-10-22T00:00:00Z"
+  failures: 1
+  retryAfter: "2026-10-22T00:00:00Z"

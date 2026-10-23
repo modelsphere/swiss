@@ -1,0 +1,8 @@
+name: upgrade-disabled
+description: enabled false keeps the ConfigMap and drops the layer on upgrade
+kind: upgrade
+enabled: false
+hasConfig: true
+overrides: false
+liveAutoscale: 2
+wantLayer: false
