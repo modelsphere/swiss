@@ -239,7 +239,11 @@ func statusSame(a, b autoscale.Status) bool {
 		sameInt(a.LastScaleFrom, b.LastScaleFrom) &&
 		sameInt(a.LastScaleTo, b.LastScaleTo) &&
 		sameInt(a.LastRevision, b.LastRevision) &&
-		a.LastError == b.LastError
+		a.LastError == b.LastError &&
+		sameInt(a.LastFailedWant, b.LastFailedWant) &&
+		a.LastFailedAt == b.LastFailedAt &&
+		a.Failures == b.Failures &&
+		a.RetryAfter == b.RetryAfter
 }
 
 func sameInt(a, b *int) bool {

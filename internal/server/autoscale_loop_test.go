@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/modelsphere/swiss/internal/autoscale"
 	"github.com/modelsphere/swiss/internal/cluster"
@@ -20,22 +21,31 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8stesting "k8s.io/client-go/testing"
+	"sigs.k8s.io/yaml"
 )
 
 type loopCase struct {
-	Name          string `json:"name"`
-	Description   string `json:"description,omitempty"`
-	Backend       string `json:"backend"`
-	Decision      int    `json:"decision"`
-	Slices        int    `json:"slices"`
-	Min           int    `json:"min"`
-	Max           int    `json:"max"`
-	Revision      int    `json:"revision"`
-	Conflict      bool   `json:"conflict,omitempty"`
-	WantApplies   int    `json:"wantApplies"`
-	WantFrom      *int   `json:"wantFrom,omitempty"`
-	WantTo        *int   `json:"wantTo,omitempty"`
-	ErrorContains string `json:"errorContains,omitempty"`
+	Name               string            `json:"name"`
+	Description        string            `json:"description,omitempty"`
+	Backend            string            `json:"backend"`
+	Decision           int               `json:"decision"`
+	Slices             int               `json:"slices"`
+	Min                int               `json:"min"`
+	Max                int               `json:"max"`
+	Revision           int               `json:"revision"`
+	Conflict           bool              `json:"conflict,omitempty"`
+	WantApplies        int               `json:"wantApplies"`
+	WantFrom           *int              `json:"wantFrom,omitempty"`
+	WantTo             *int              `json:"wantTo,omitempty"`
+	ErrorContains      string            `json:"errorContains,omitempty"`
+	HelmStatus         string            `json:"helmStatus,omitempty"`
+	FailApply          bool              `json:"failApply,omitempty"`
+	SeedStatus         *autoscale.Status `json:"seedStatus,omitempty"`
+	WantHold           string            `json:"wantHold,omitempty"`
+	WantFailures       *int              `json:"wantFailures,omitempty"`
+	WantRetryDelta     string            `json:"wantRetryDelta,omitempty"`
+	WantLastFailedWant *int              `json:"wantLastFailedWant,omitempty"`
+	WantCleared        bool              `json:"wantCleared,omitempty"`
 }
 
 func TestAutoscaleLoop(t *testing.T) {
@@ -63,18 +73,32 @@ func runHelmLoop(t *testing.T, tc loopCase) {
 	probe.Deps = readyRouters(ns, release, tc.Slices)
 	probe.DSs = map[string]cluster.DisaggregatedSet{ns + "/" + release: readyDS(tc.Slices)}
 	seedAutoscaleCM(&probe, ns, release, true, tc.Min, tc.Max)
+	if tc.SeedStatus != nil {
+		b, err := yaml.Marshal(tc.SeedStatus)
+		if err != nil {
+			t.Fatal(err)
+		}
+		probe.Maps[autoscaleRef(ns, release)][autoscaleStatusKey] = string(b)
+	}
 	probe.Maps[planRef(ns, release)] = seed
 	rev := tc.Revision
 	if rev < 1 {
 		rev = 2
 	}
+	helmStatus := "deployed"
+	if tc.HelmStatus != "" {
+		helmStatus = tc.HelmStatus
+	}
 	probe.Rel = []cluster.Release{{
-		Name: release, Namespace: ns, Status: "deployed", Revision: rev,
+		Name: release, Namespace: ns, Status: helmStatus, Revision: rev,
 		Chart: "sglang-0.7.0", SwissFiles: seed,
 	}}
 
 	logPath := filepath.Join(t.TempDir(), "helmfile.log")
 	bin := countBin(t, logPath)
+	if tc.FailApply {
+		bin = failCountBin(t, logPath)
+	}
 	cp := &revProbe{Fake: probe}
 	if tc.Conflict {
 		cp.flipAt = 4
@@ -94,9 +118,21 @@ func runHelmLoop(t *testing.T, tc loopCase) {
 		if st.LastError == "" || !strings.Contains(st.LastError, tc.ErrorContains) {
 			t.Fatalf("lastError %q, want substring %q (calls %d)", st.LastError, tc.ErrorContains, cp.calls.Load())
 		}
+		assertLoopBackoff(t, st, tc)
+		return
+	}
+	if tc.FailApply || tc.WantHold != "" {
+		if tc.ErrorContains != "" && (st.LastError == "" || !strings.Contains(st.LastError, tc.ErrorContains)) {
+			t.Fatalf("lastError %q, want substring %q", st.LastError, tc.ErrorContains)
+		}
+		if st.HoldReason != tc.WantHold {
+			t.Fatalf("hold %q, want %q", st.HoldReason, tc.WantHold)
+		}
+		assertLoopBackoff(t, st, tc)
 		return
 	}
 	assertScale(t, st, tc, w.written[planRef(ns, release)], seed)
+	assertLoopBackoff(t, st, tc)
 }
 
 func runLLMLoop(t *testing.T, tc loopCase) {
@@ -197,6 +233,7 @@ func runLLMLoop(t *testing.T, tc loopCase) {
 		if got.GetAnnotations()[llmsvc.AnnAction] == "autoscale" {
 			t.Fatalf("conflict updated the object: %v", got.GetAnnotations())
 		}
+		assertLoopBackoff(t, st, tc)
 		return
 	}
 	if got.GetAnnotations()[llmsvc.AnnAction] != "autoscale" {
@@ -237,6 +274,7 @@ func runLLMLoop(t *testing.T, tc loopCase) {
 	if st.LastScaleFrom == nil || *st.LastScaleFrom != *tc.WantFrom || st.LastScaleTo == nil || *st.LastScaleTo != *tc.WantTo {
 		t.Fatalf("scale %v -> %v, want %d -> %d", st.LastScaleFrom, st.LastScaleTo, *tc.WantFrom, *tc.WantTo)
 	}
+	assertLoopBackoff(t, st, tc)
 }
 
 func assertScale(t *testing.T, st autoscale.Status, tc loopCase, written, seed map[string]string) {
@@ -352,10 +390,50 @@ func decisionServer(t *testing.T, ns, serviceID string, active int) *httptest.Se
 	return srv
 }
 
+func assertLoopBackoff(t *testing.T, st autoscale.Status, tc loopCase) {
+	t.Helper()
+	if tc.WantFailures != nil && st.Failures != *tc.WantFailures {
+		t.Fatalf("failures %d, want %d (%+v)", st.Failures, *tc.WantFailures, st)
+	}
+	if tc.WantLastFailedWant != nil && (st.LastFailedWant == nil || *st.LastFailedWant != *tc.WantLastFailedWant) {
+		t.Fatalf("lastFailedWant %v, want %d", st.LastFailedWant, *tc.WantLastFailedWant)
+	}
+	if tc.WantRetryDelta != "" {
+		d, err := time.ParseDuration(tc.WantRetryDelta)
+		if err != nil {
+			t.Fatal(err)
+		}
+		at, err := time.Parse(time.RFC3339, st.LastFailedAt)
+		if err != nil {
+			t.Fatalf("lastFailedAt %q: %v", st.LastFailedAt, err)
+		}
+		rt, err := time.Parse(time.RFC3339, st.RetryAfter)
+		if err != nil {
+			t.Fatalf("retryAfter %q: %v", st.RetryAfter, err)
+		}
+		if rt.Sub(at) != d {
+			t.Fatalf("retry delta %s, want %s (at %s after %s)", rt.Sub(at), d, st.RetryAfter, st.LastFailedAt)
+		}
+	}
+	if tc.WantCleared && (st.Failures != 0 || st.RetryAfter != "" || st.LastFailedAt != "" || st.LastFailedWant != nil) {
+		t.Fatalf("backoff not cleared: %+v", st)
+	}
+}
+
 func countBin(t *testing.T, logPath string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "bin")
 	script := "#!/bin/sh\necho called >> '" + logPath + "'\nexit 0\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func failCountBin(t *testing.T, logPath string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "bin")
+	script := "#!/bin/sh\necho called >> '" + logPath + "'\nexit 1\n"
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}

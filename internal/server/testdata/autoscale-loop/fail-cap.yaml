@@ -1,0 +1,19 @@
+name: fail-cap
+description: further consecutive failures cap the backoff at 30m
+backend: helm
+decision: 2
+slices: 1
+min: 1
+max: 4
+revision: 2
+failApply: true
+wantApplies: 1
+errorContains: helmfile
+wantFailures: 6
+wantRetryDelta: 30m
+wantLastFailedWant: 2
+seedStatus:
+  lastFailedWant: 2
+  lastFailedAt: "2026-10-22T00:00:00Z"
+  failures: 5
+  retryAfter: "2026-10-22T00:00:00Z"

@@ -119,7 +119,12 @@ func (s *Server) autoscaleOne(ctx context.Context, ns, release string) {
 	}
 
 	d := s.queryDecision(ctx, ns, serviceIDOf(p))
-	res := autoscale.Decide(cfg, live, d)
+	var prev autoscale.Status
+	if view.Status != nil {
+		prev = *view.Status
+	}
+	now := time.Now()
+	res := autoscale.Decide(now, cfg, prev, live, d)
 	if !res.Scale {
 		s.recordAutoscale(ctx, ns, release, res, nil, 0, 0, false)
 		return
@@ -128,7 +133,26 @@ func (s *Server) autoscaleOne(ctx context.Context, ns, release string) {
 	if errors.Is(scaleErr, errAutoscaleInactive) {
 		return
 	}
+	res = autoscale.NoteApply(now, res, applyKind(scaleErr))
 	s.recordAutoscale(ctx, ns, release, res, scaleErr, res.Current, produced, scaleErr == nil)
+}
+
+func applyKind(err error) autoscale.ApplyKind {
+	switch {
+	case err == nil:
+		return autoscale.ApplyOK
+	case errors.Is(err, errApplyBusy):
+		return autoscale.ApplyBusy
+	case revisionConflict(err):
+		return autoscale.ApplyConflict
+	default:
+		return autoscale.ApplyFailed
+	}
+}
+
+func revisionConflict(err error) bool {
+	var rc *exec.RevisionConflictError
+	return errors.As(err, &rc)
 }
 
 func (s *Server) noteAutoscaleError(ctx context.Context, ns, release string, err error) {
@@ -151,6 +175,10 @@ func (s *Server) recordAutoscale(ctx context.Context, ns, release string, res au
 		st.Current = intPtr(res.Current)
 		st.HoldReason = ""
 		st.LastError = ""
+		st.LastFailedWant = res.LastFailedWant
+		st.LastFailedAt = res.LastFailedAt
+		st.Failures = res.Failures
+		st.RetryAfter = res.RetryAfter
 		if scaleErr != nil {
 			st.Desired = intPtr(res.Want)
 			if errors.Is(scaleErr, errApplyBusy) {

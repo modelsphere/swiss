@@ -250,7 +250,7 @@ func (b llmBackend) Apply(ctx context.Context, p *plan.Plan, mode exec.Mode, o a
 		cur.SetAnnotations(mergeReleaseAnnotations(cur.GetAnnotations(), fresh.GetAnnotations(), force))
 		wrote, err = s.llms.Update(ctx, cur)
 		if apierrors.IsConflict(err) {
-			return applyResult{}, fail(http.StatusConflict, "the release moved under you; diff again")
+			return applyResult{}, failErr(http.StatusConflict, &exec.RevisionConflictError{Msg: "the release moved under you; diff again"})
 		}
 	}
 	if err != nil {

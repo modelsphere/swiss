@@ -9,3 +9,4 @@ revision: 2
 conflict: true
 wantApplies: 0
 errorContains: moved
+wantCleared: true

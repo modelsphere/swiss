@@ -1,0 +1,19 @@
+name: fail-second
+description: a second consecutive failure records a 2m backoff
+backend: helm
+decision: 2
+slices: 1
+min: 1
+max: 4
+revision: 2
+failApply: true
+wantApplies: 1
+errorContains: helmfile
+wantFailures: 2
+wantRetryDelta: 2m
+wantLastFailedWant: 2
+seedStatus:
+  lastFailedWant: 2
+  lastFailedAt: "2026-10-22T00:00:00Z"
+  failures: 1
+  retryAfter: "2026-10-22T00:00:00Z"
