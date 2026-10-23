@@ -29,6 +29,15 @@ against the old password stops working, which is the only way to end one early.
 FIRST RUN: there is no site profile yet -- this chart no longer writes one.
 Log in and the setup page asks for it, pre-filled with a working default.
 {{- end }}
+{{- if and (not .Values.persistence.enabled) (not .Values.persistence.existingClaim) }}
+
+NO PERSISTENT VOLUME. The database is on an emptyDir, so a pod restart or
+reschedule loses it: the audit log (who applied or upgraded what, with the
+output) and the stored plans (the release -> plan history used to roll back or
+revert to an earlier plan). What is deployed stays visible and upgradable --
+each applied plan is also written beside its release. Set persistence.enabled
+or persistence.existingClaim for production.
+{{- end }}
 
 Check what it can actually see -- /readyz reports the cluster, the profile and
 the catalog separately, so a failure names the dependency:

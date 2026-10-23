@@ -1,6 +1,6 @@
 # swissd runs one replica. The read path is stateless, so more would work -- but
-# persistence lands next (drafts, the audit log) as SQLite on a PVC, which is a
-# single writer. Scaling out is a Postgres decision, not a replica-count one.
+# the database is SQLite, a single writer, on a PVC or an emptyDir. Scaling out
+# is a Postgres decision, not a replica-count one.
 replicaCount: 1
 
 image:
@@ -95,7 +95,7 @@ auth:
 # RBAC. Read the comments before widening this.
 # ---------------------------------------------------------------------------
 # swissd deploys, and writes its own site profile and the Secret beside it: the
-# chart always grants both. Deploying needs persistence and one replica.
+# chart always grants both. One replica: sqlite is a single writer.
 #
 # The deploy grant is everything the sglang and vllm charts render, in the
 # namespaces rbac.scope selects, and nothing else:
@@ -187,8 +187,8 @@ podSecurityContext:
 
 securityContext:
   allowPrivilegeEscalation: false
-  # The binary and its embedded UI are all swissd needs; nothing is written to
-  # disk until the database lands, and that will be a mounted volume.
+  # The binary and its embedded UI are all swissd needs. Writes (the database,
+  # helm's caches) go to mounted volumes, so the root filesystem stays read-only.
   readOnlyRootFilesystem: true
   capabilities:
     drop: ["ALL"]
@@ -216,11 +216,22 @@ logLevel: info
 # Scratch space for helm caches and the per-operation workspace.
 tmpSizeLimit: 1Gi
 
+# SQLite: the audit log and the stored plans. enabled creates a PVC.
+# existingClaim names one you already have, and no PVC is rendered. When
+# enabled is false and existingClaim is empty, the database is an emptyDir and
+# a pod restart or reschedule loses it -- the audit log (who applied or
+# upgraded what, with the output) and the stored plans (the release -> plan
+# history used to roll back or revert to an earlier plan). What is deployed
+# stays visible and upgradable, because each applied plan is also written
+# beside its release. Use a volume in production.
 persistence:
   enabled: true
   size: 10Gi
   storageClass: ""
   existingClaim: ""
+  # Only the emptyDir fallback reads this. Empty renders no sizeLimit.
+  emptyDir:
+    sizeLimit: ""
 
 updateStrategy: {}
 
