@@ -35,6 +35,7 @@ const (
 	apiTimeout     = 60 * time.Second
 	installTimeout = 16 * time.Minute
 	goneTimeout    = 180 * time.Second
+	llmGoneTimeout = 6 * time.Minute
 	readyPoll      = 5 * time.Second
 	gonePoll       = 3 * time.Second
 )
@@ -206,6 +207,30 @@ func deployCycle(backend string) {
 		}).WithTimeout(time.Minute).WithPolling(gonePoll).Should(Succeed())
 	}
 
+	// An llmsvc delete returns as soon as the API accepts it. An old operator
+	// drops the object before the first poll; a staged one keeps it, phase
+	// Deleting, through route settle and pod termination.
+	if backend == "llmsvc" {
+		By("[" + backend + "] staying listed while the operator deletes")
+		Eventually(func(g Gomega) {
+			exists, err := llmServiceExists(rel)
+			g.Expect(err).NotTo(HaveOccurred())
+			if !exists {
+				return
+			}
+			var listed deploymentList
+			g.Expect(api.call(http.MethodGet, "/api/deployments?perPage=100", nil, &listed, apiTimeout)).To(Succeed())
+			phase, found := deploymentPhase(listed, rel)
+			g.Expect(found).To(BeTrue(), "%s still exists but is not listed", rel)
+			g.Expect(phase).To(Equal("uninstalling"))
+			g.Expect(api.call(http.MethodDelete, releasePath(rel), nil, &uninstallResult{}, apiTimeout)).To(Succeed())
+		}).WithTimeout(time.Minute).WithPolling(gonePoll).Should(Succeed())
+	}
+
+	timeout := goneTimeout
+	if backend == "llmsvc" {
+		timeout = llmGoneTimeout
+	}
 	By(fmt.Sprintf("[%s] waiting for %s to be gone", backend, rel))
 	Eventually(func(g Gomega) {
 		pods, err := vllmPods(rel)
@@ -219,7 +244,7 @@ func deployCycle(backend string) {
 		g.Expect(api.call(http.MethodGet, "/api/deployments?perPage=100", nil, &listed, apiTimeout)).To(Succeed())
 		_, found := deploymentPhase(listed, rel)
 		g.Expect(found).To(BeFalse(), "%s is still listed after its pods are gone", rel)
-	}).WithTimeout(goneTimeout).WithPolling(gonePoll).Should(Succeed())
+	}).WithTimeout(timeout).WithPolling(gonePoll).Should(Succeed())
 }
 
 func deploymentPhase(list deploymentList, rel string) (string, bool) {
