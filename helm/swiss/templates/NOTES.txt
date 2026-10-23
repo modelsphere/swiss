@@ -37,6 +37,12 @@ output) and the stored plans (the release -> plan history used to roll back or
 revert to an earlier plan). What is deployed stays visible and upgradable --
 each applied plan is also written beside its release. Set persistence.enabled
 or persistence.existingClaim for production.
+
+Switching an existing release from the chart-created PVC to no persistence, or
+to persistence.existingClaim naming that same PVC, makes helm delete that PVC
+and its data. Back the data up or migrate it to a separately created PVC first,
+or keep the PVC with `kubectl annotate pvc {{ include "swiss.fullname" . }}-data
+helm.sh/resource-policy=keep` before the upgrade.
 {{- end }}
 
 Check what it can actually see -- /readyz reports the cluster, the profile and
