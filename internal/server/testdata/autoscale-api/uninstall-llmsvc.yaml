@@ -1,5 +1,5 @@
 name: uninstall-llmsvc
-description: llmsvc uninstall deletes the autoscale ConfigMap when it exists
+description: llmsvc uninstall deletes the autoscale ConfigMap once the LLMService is gone
 backend: llmsvc
 uninstall: true
 release: qwen-new

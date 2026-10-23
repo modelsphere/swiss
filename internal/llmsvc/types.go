@@ -26,9 +26,11 @@ const (
 	PhaseApplying = "Applying"
 	PhaseApplied  = "Applied"
 	PhaseFailed   = "Failed"
+	PhaseDeleting = "Deleting"
 
-	ConditionApplied = "Applied"
-	ConditionAdopted = "Adopted"
+	ConditionApplied  = "Applied"
+	ConditionAdopted  = "Adopted"
+	ConditionDeleting = "Deleting"
 
 	SwissAnnotationPrefix = "swiss.modelsphere.dev/"
 
@@ -98,6 +100,35 @@ type Status struct {
 	AppliedHash        string             `json:"appliedHash,omitempty"`
 	Helm               *HelmStatus        `json:"helm,omitempty"`
 	History            []HistoryEntry     `json:"history,omitempty"`
+	// Deletion is the operator's staged teardown. Swiss reports it and does
+	// not choose the stages.
+	Deletion *DeletionStatus `json:"deletion,omitempty"`
+}
+
+// DeletionStatus is status.deletion while the operator is removing an
+// LLMService. Times are omitempty; a zero time is not a real instant.
+type DeletionStatus struct {
+	Stage          string        `json:"stage,omitempty"`
+	Outcome        string        `json:"outcome,omitempty"`
+	StartedAt      metav1.Time   `json:"startedAt,omitempty,omitzero"`
+	Deadline       metav1.Time   `json:"deadline,omitempty,omitzero"`
+	RouteRemovedAt metav1.Time   `json:"routeRemovedAt,omitempty,omitzero"`
+	UninstalledAt  metav1.Time   `json:"uninstalledAt,omitempty,omitzero"`
+	PodsGoneAt     metav1.Time   `json:"podsGoneAt,omitempty,omitzero"`
+	PodsRemaining  int           `json:"podsRemaining,omitempty"`
+	Pods           []DeletionPod `json:"pods,omitempty"`
+	ForceDeleted   []string      `json:"forceDeleted,omitempty"`
+	Message        string        `json:"message,omitempty"`
+}
+
+// DeletionPod is one pod the operator still sees during teardown.
+type DeletionPod struct {
+	Name              string      `json:"name,omitempty"`
+	Phase             string      `json:"phase,omitempty"`
+	Node              string      `json:"node,omitempty"`
+	DeletionTimestamp metav1.Time `json:"deletionTimestamp,omitempty,omitzero"`
+	Grace             int         `json:"grace,omitempty"`
+	Stuck             bool        `json:"stuck,omitempty"`
 }
 
 type ChartStatus struct {

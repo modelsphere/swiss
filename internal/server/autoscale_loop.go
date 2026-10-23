@@ -261,10 +261,6 @@ func (s *Server) autoscaleLive(ctx context.Context, ns, release, backend string,
 			return live, 0, err
 		}
 		live.LLMGeneration = u.GetGeneration()
-		if !u.GetDeletionTimestamp().IsZero() {
-			live.LLMDeleting = true
-			return live, 0, nil
-		}
 		if obj.Status != nil {
 			live.LLMPhase = obj.Status.Phase
 			live.LLMObservedGeneration = obj.Status.ObservedGeneration
@@ -272,6 +268,12 @@ func (s *Server) autoscaleLive(ctx context.Context, ns, release, backend string,
 				live.HelmStatus = obj.Status.Helm.Status
 				rev = int(obj.Status.Helm.Revision)
 			}
+		}
+		// A deletionTimestamp or status.phase Deleting is the operator tearing
+		// the release down. Probing workloads would only race that.
+		if !u.GetDeletionTimestamp().IsZero() || live.LLMPhase == llmsvc.PhaseDeleting {
+			live.LLMDeleting = true
+			return live, 0, nil
 		}
 	}
 

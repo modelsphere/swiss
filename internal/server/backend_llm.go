@@ -308,6 +308,24 @@ func (b llmBackend) Uninstall(ctx context.Context, ns, release string) (uninstal
 	if err != nil {
 		return uninstallResult{}, failErr(http.StatusBadGateway, err)
 	}
+	if s.llms == nil {
+		return uninstallResult{}, fail(http.StatusBadGateway, "no LLMService client")
+	}
+	u, err := s.llms.Get(ctx, ns, release)
+	if apierrors.IsNotFound(err) {
+		return uninstallResult{}, fail(http.StatusNotFound, "no release %s/%s", ns, release)
+	}
+	if err != nil {
+		return uninstallResult{}, failErr(http.StatusBadGateway, err)
+	}
+	// The operator's finalizer holds the object through route removal and pod
+	// termination. This call returns once that delete is accepted; the reap
+	// drops swiss's records when the object is finally gone.
+	if !u.GetDeletionTimestamp().IsZero() {
+		s.trackLLMUninstall(ns, release, u.GetAnnotations()[llmsvc.AnnPlanHash], u.GetDeletionTimestamp().Time)
+		return uninstallResult{Output: uninstallInProgress}, nil
+	}
+
 	planHash := ""
 	if p, err := b.Current(ctx, ns, release); err == nil {
 		planHash = p.Hash
@@ -315,34 +333,41 @@ func (b llmBackend) Uninstall(ctx context.Context, ns, release string) (uninstal
 		return uninstallResult{}, fail(http.StatusNotFound, "no release %s/%s", ns, release)
 	}
 
-	started := time.Now()
-	ctx, cancel := detach(ctx)
-	defer cancel()
+	prev, err := s.snapshotPlan(ctx, ns, release)
+	if err != nil {
+		return uninstallResult{}, fail(http.StatusInternalServerError, "plan not marked, nothing uninstalled: %s", err.Error())
+	}
+	hadPlan, err := s.markUninstalling(ctx, ns, release)
+	if err != nil {
+		return uninstallResult{}, fail(http.StatusInternalServerError, "plan not marked, nothing uninstalled: %s", err.Error())
+	}
 
+	started := time.Now()
 	delErr := s.llms.Delete(ctx, ns, release)
 	if apierrors.IsNotFound(delErr) {
+		if hadPlan {
+			if rerr := s.restorePlan(ctx, ns, release, prev); rerr != nil {
+				s.log.ErrorContext(ctx, "plan not restored after delete NotFound", "namespace", ns, "release", release, "err", rerr)
+			}
+		}
+		s.forgetUninstalling(ns, release)
 		return uninstallResult{}, fail(http.StatusNotFound, "no release %s/%s", ns, release)
 	}
-	var uninstallErr error
+	out := llmDeleteRequested(ns, release)
 	if delErr != nil {
-		uninstallErr = delErr
-	} else if err := s.llms.WaitGone(ctx, ns, release); err != nil {
-		uninstallErr = err
-	}
-	out := fmt.Sprintf("deleted LLMService %s/%s", ns, release)
-	res := exec.Result{Output: out}
-	s.recordRelease(ctx, "uninstall", ns, release, planHash, res, uninstallErr, started, "", 0)
-	if uninstallErr != nil {
-		return uninstallResult{}, failErr(http.StatusInternalServerError, uninstallErr)
-	}
-	var planErr string
-	if s.writer != nil {
-		if err := s.removeAutoscale(ctx, ns, release); err != nil {
-			planErr = err.Error()
-			s.log.ErrorContext(ctx, "autoscale configmap not removed", "release", release, "err", err)
+		s.recordRelease(ctx, "uninstall", ns, release, planHash, exec.Result{Output: out}, delErr, started, "", 0)
+		if hadPlan {
+			if ferr := s.finishUninstallFailed(ctx, ns, release, delErr); ferr != nil {
+				s.log.ErrorContext(ctx, "plan not marked failed", "namespace", ns, "release", release, "err", ferr)
+			}
 		}
+		return uninstallResult{}, failErr(http.StatusInternalServerError, delErr)
 	}
-	return uninstallResult{Output: out, PlanError: planErr}, nil
+	// Record before tracking. The object may already be gone, and a reap that
+	// sees the tracking first would write the final row ahead of this one.
+	s.recordRelease(ctx, "uninstall", ns, release, planHash, exec.Result{Output: out}, nil, started, "", 0)
+	s.trackLLMUninstall(ns, release, planHash, started)
+	return uninstallResult{Output: uninstallInProgress}, nil
 }
 
 func (b llmBackend) helmRevision(ctx context.Context, ns, name string) int {

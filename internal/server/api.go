@@ -586,9 +586,10 @@ type deployment struct {
 	Route string `json:"route,omitempty"`
 	// Backend is helm or llmsvc. External is an LLMService swiss did not
 	// write. CleanupPending means both records still exist.
-	Backend        string `json:"backend"`
-	External       bool   `json:"external,omitempty"`
-	CleanupPending bool   `json:"cleanupPending,omitempty"`
+	Backend        string           `json:"backend"`
+	External       bool             `json:"external,omitempty"`
+	CleanupPending bool             `json:"cleanupPending,omitempty"`
+	Deletion       *llmDeletionView `json:"deletion,omitempty"`
 
 	// What the plan recorded about its catalog, for finding the configured
 	// catalog the release belongs to.
@@ -671,28 +672,20 @@ func (s *Server) deploymentFromService(ctx context.Context, ref deployRef) *depl
 		Release: u.GetName(), Namespace: u.GetNamespace(),
 		Backend: backendLLMSVC, External: llmsvc.IsExternal(u), CleanupPending: ref.cleanup,
 	}
-	// deletionTimestamp wins over status.phase: the object is still listed
-	// while a finalizer keeps it, and that is the uninstall.
-	deleting := !u.GetDeletionTimestamp().IsZero()
-	if deleting {
-		d.Phase = phaseUninstalling
-		d.Drift = "uninstall in progress"
-	}
 	obj, err := llmsvc.FromUnstructured(u)
 	if err != nil {
 		s.log.WarnContext(ctx, "llmservice does not decode",
 			"namespace", u.GetNamespace(), "release", u.GetName(), "err", err)
 		d.Drift = "plan unreadable: " + err.Error()
-		if deleting {
+		if llmDeleting(u, nil) {
 			d.Phase = phaseUninstalling
-			d.Drift = "uninstall in progress"
+			d.Drift = uninstallDrift("")
 		}
 		return d
 	}
 	if obj.Status != nil {
-		if !deleting {
-			d.Phase = obj.Status.Phase
-		}
+		d.Phase = obj.Status.Phase
+		d.Deletion = deletionView(obj.Status.Deletion)
 		if obj.Status.Helm != nil {
 			d.Revision = int(obj.Status.Helm.Revision)
 			d.Status = obj.Status.Helm.Status
@@ -700,18 +693,18 @@ func (s *Server) deploymentFromService(ctx context.Context, ref deployRef) *depl
 		if obj.Status.Chart != nil {
 			d.Chart = chartLabel(obj.Status.Chart.Name, obj.Status.Chart.Version)
 		}
-		if !deleting {
-			switch obj.Status.Phase {
-			case llmsvc.PhaseFailed:
-				d.Drift = "last apply failed: " + obj.Status.Message
-			case llmsvc.PhaseApplying:
-				d.Drift = "an apply is in progress"
-			}
+		switch obj.Status.Phase {
+		case llmsvc.PhaseFailed:
+			d.Drift = "last apply failed: " + obj.Status.Message
+		case llmsvc.PhaseApplying:
+			d.Drift = "an apply is in progress"
 		}
 	}
-	if deleting {
+	// deletionTimestamp or status.phase Deleting wins: the object is still
+	// listed while the operator's finalizer keeps it, and that is the uninstall.
+	if llmDeleting(u, obj) {
 		d.Phase = phaseUninstalling
-		d.Drift = "uninstall in progress"
+		d.Drift = uninstallDrift(deletionStage(d.Deletion))
 	}
 	if d.Chart == "" {
 		d.Chart = chartLabel(obj.Spec.Chart.Name, obj.Spec.Chart.Version)
@@ -721,9 +714,9 @@ func (s *Server) deploymentFromService(ctx context.Context, ref deployRef) *depl
 		s.log.WarnContext(ctx, "llmservice plan does not decode",
 			"namespace", u.GetNamespace(), "release", u.GetName(), "err", err)
 		d.Drift = "plan unreadable: " + err.Error()
-		if deleting {
+		if llmDeleting(u, obj) {
 			d.Phase = phaseUninstalling
-			d.Drift = "uninstall in progress"
+			d.Drift = uninstallDrift(deletionStage(d.Deletion))
 		}
 		return d
 	}

@@ -19,7 +19,10 @@ import (
 	"gopkg.in/yaml.v3"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/modelsphere/swiss/internal/cluster"
 	"github.com/modelsphere/swiss/internal/llmsvc"
@@ -39,11 +42,20 @@ type uninstallCase struct {
 	SeedAutoscale        bool   `yaml:"seedAutoscale"`
 	// HelmBlocks makes helm uninstall wait for a releaseHelm step, so a case
 	// can act while an uninstall holds the release's lock.
-	HelmBlocks    bool       `yaml:"helmBlocks"`
-	OperatorPhase string     `yaml:"operatorPhase"`
-	Nodes         []nodeSpec `yaml:"nodes"`
-	Pods          []podSpec  `yaml:"pods"`
-	Steps         []unstep   `yaml:"steps"`
+	HelmBlocks    bool   `yaml:"helmBlocks"`
+	OperatorPhase string `yaml:"operatorPhase"`
+	// Deleting nil means the LLMService is created with a deletionTimestamp,
+	// which is what the older cases describe. false creates it without one.
+	Deleting          *bool          `yaml:"deleting"`
+	Finalizer         bool           `yaml:"finalizer"`
+	DeleteNotFound    bool           `yaml:"deleteNotFound"`
+	Missing           bool           `yaml:"missing"`
+	SeedPlanConfigMap bool           `yaml:"seedPlanConfigMap"`
+	PlanPhase         string         `yaml:"planPhase"`
+	Deletion          map[string]any `yaml:"deletion"`
+	Nodes             []nodeSpec     `yaml:"nodes"`
+	Pods              []podSpec      `yaml:"pods"`
+	Steps             []unstep       `yaml:"steps"`
 }
 
 type nodeSpec struct {
@@ -79,9 +91,21 @@ type unstep struct {
 	Pods           []podSpec `yaml:"pods"`
 	Archives       *int      `yaml:"archives"`
 	// Autoscale is whether swiss-autoscale-<release> exists after the step.
-	Autoscale   *bool     `yaml:"autoscale"`
-	Now         time.Time `yaml:"now"`
-	HasRevision *bool     `yaml:"hasRevision"`
+	Autoscale        *bool     `yaml:"autoscale"`
+	Now              time.Time `yaml:"now"`
+	HasRevision      *bool     `yaml:"hasRevision"`
+	OperatorPhase    string    `yaml:"operatorPhase"`
+	DeletionStage    string    `yaml:"deletionStage"`
+	DeletionOutcome  string    `yaml:"deletionOutcome"`
+	DeletionMessage  string    `yaml:"deletionMessage"`
+	DeletionDeadline string    `yaml:"deletionDeadline"`
+	PodsRemaining    *int      `yaml:"podsRemaining"`
+	DeletionPods     *int      `yaml:"deletionPods"`
+	ForceDeleted     *int      `yaml:"forceDeleted"`
+	DriftContains    string    `yaml:"driftContains"`
+	Audits           *int      `yaml:"audits"`
+	LLMService       *bool     `yaml:"llmService"`
+	StoredPhase      string    `yaml:"storedPhase"`
 }
 
 func runUninstallingCase(t *testing.T, path string) {
@@ -129,7 +153,7 @@ func runHelmUninstallCase(t *testing.T, cs *uninstallCase) {
 	for i, step := range cs.Steps {
 		t.Logf("step %d %s", i, step.Do)
 		code, body := h.do(t, step)
-		assertUnstep(t, cs, c, step, code, body)
+		assertUnstep(t, cs, c, step, code, body, h.s, nil)
 	}
 }
 
@@ -317,16 +341,28 @@ func runLLMUninstallCase(t *testing.T, cs *uninstallCase) {
 	if cs.OperatorPhase == "" {
 		cs.OperatorPhase = llmsvc.PhaseApplied
 	}
-	rig := startRig(t, llmProbe(), true, false, backendLLMSVC)
-	u := llmObject(cs.Namespace, cs.Release, map[string]string{llmsvc.AnnProfile: "prod"})
-	u.Object["status"] = map[string]any{
-		"phase": cs.OperatorPhase,
-		"helm":  map[string]any{"revision": int64(4), "status": "deployed"},
+	probe := llmProbe()
+	if probe.MapLabels == nil {
+		probe.MapLabels = map[string]map[string]string{}
 	}
-	ts := metav1.Now()
-	u.SetDeletionTimestamp(&ts)
-	if _, err := rig.c.Create(t.Context(), u); err != nil {
-		t.Fatal(err)
+	if cs.SeedPlanConfigMap {
+		seedLLMPlan(t, &probe, cs)
+	}
+	if cs.SeedArchive {
+		seedLLMArchive(&probe, cs)
+	}
+	if cs.SeedAutoscale {
+		seedLLMAutoscale(&probe, cs)
+	}
+	// The rig operator would rewrite status, including status.deletion.
+	rig := startRig(t, probe, true, false, "")
+	base := rig.s.probe.(*cluster.Fake)
+	rig.s.probe = llmPlanProbe{Fake: base}
+	rig.s.SetWriter(&llmMirrorWriter{fakeWriter: rig.w, probe: base})
+	h := &llmUninstallHarness{cs: cs, rig: rig, base: base, srv: rig.srv}
+	h.arm(t)
+	if !cs.Missing {
+		h.create(t)
 	}
 	ns, rel := cs.Namespace, cs.Release
 	for i, step := range cs.Steps {
@@ -335,21 +371,33 @@ func runLLMUninstallCase(t *testing.T, cs *uninstallCase) {
 		var body map[string]any
 		switch step.Do {
 		case "list":
-			code, body = get(t, rig.srv, "/api/deployments?perPage=100")
+			code, body = get(t, h.srv, "/api/deployments?perPage=100")
 		case "status":
-			code, body = get(t, rig.srv, "/api/releases/"+ns+"/"+rel+"/status")
+			code, body = get(t, h.srv, "/api/releases/"+ns+"/"+rel+"/status")
+		case "uninstall":
+			code, body = del(t, h.srv, "/api/releases/"+ns+"/"+rel)
+		case "reap":
+			h.rig.s.reapUninstalling(context.Background())
+		case "operatorRelease":
+			if err := h.rig.dyn.Tracker().Delete(llmsvc.GVR, ns, rel); err != nil && !apierrors.IsNotFound(err) {
+				t.Fatal(err)
+			}
+		case "clearDeletion":
+			h.clearDeletion(t)
+		case "restart":
+			h.restart(t)
 		case "install":
-			code, body = llmMutate(t, rig, cs, "/api/install")
+			code, body = llmMutate(t, h.rig, cs, "/api/install")
 		case "upgrade", "apply":
-			code, body = llmMutate(t, rig, cs, "/api/apply")
+			code, body = llmMutate(t, h.rig, cs, "/api/apply")
 		case "rollback":
-			code, body = post(t, rig.srv, "/api/releases/"+ns+"/"+rel+"/rollback", map[string]any{
+			code, body = post(t, h.srv, "/api/releases/"+ns+"/"+rel+"/rollback", map[string]any{
 				"toRevision": 1, "expectRevision": 4,
 			})
 		default:
 			t.Fatalf("unknown step %q", step.Do)
 		}
-		assertUnstep(t, cs, nil, step, code, body)
+		assertUnstep(t, cs, h.base, step, code, body, h.rig.s, h.rig.c)
 	}
 }
 
@@ -361,7 +409,7 @@ func llmMutate(t *testing.T, rig *llmRig, cs *uninstallCase, path string) (int, 
 	return post(t, rig.srv, path, map[string]any{"planHash": hash})
 }
 
-func assertUnstep(t *testing.T, cs *uninstallCase, c *uninstallCluster, step unstep, code int, body map[string]any) {
+func assertUnstep(t *testing.T, cs *uninstallCase, p cluster.Probe, step unstep, code int, body map[string]any, srv *Server, llms *llmsvc.Client) {
 	t.Helper()
 	if step.Status != 0 && code != step.Status {
 		t.Fatalf("%s: status %d, body %v", step.Do, code, body)
@@ -434,35 +482,149 @@ func assertUnstep(t *testing.T, cs *uninstallCase, c *uninstallCluster, step uns
 			t.Fatalf("pods total %d, want %d (%v)", total, *step.TotalPods, body["pods"])
 		}
 	}
-	if step.ConfigMap != nil {
-		if c == nil {
-			t.Fatal("configMap is a helm assertion")
+	if step.ConfigMap != nil || step.Autoscale != nil || step.Archives != nil || step.StoredPhase != "" {
+		if p == nil {
+			t.Fatal("resource assertions need a probe")
 		}
-		got := c.hasConfigMap(planRef(cs.Namespace, cs.Release))
+	}
+	if step.ConfigMap != nil {
+		got := probeHasConfigMap(p, planRef(cs.Namespace, cs.Release))
 		if got != *step.ConfigMap {
 			t.Fatalf("configMap present=%v, want %v", got, *step.ConfigMap)
 		}
 	}
 	if step.Autoscale != nil {
-		if c == nil {
-			t.Fatal("autoscale is a helm assertion")
-		}
-		got := c.hasConfigMap(autoscaleRef(cs.Namespace, cs.Release))
+		got := probeHasConfigMap(p, autoscaleRef(cs.Namespace, cs.Release))
 		if got != *step.Autoscale {
 			t.Fatalf("autoscale configmap present=%v, want %v", got, *step.Autoscale)
 		}
 	}
 	if step.Archives != nil {
-		if c == nil {
-			t.Fatal("archives is a helm assertion")
-		}
-		names, err := c.SecretNames(context.Background(), cs.Namespace, archiveSelector(cs.Release))
+		names, err := p.SecretNames(context.Background(), cs.Namespace, archiveSelector(cs.Release))
 		if err != nil {
 			t.Fatal(err)
 		}
 		if len(names) != *step.Archives {
 			t.Fatalf("archives %v, want %d", names, *step.Archives)
 		}
+	}
+	if step.StoredPhase != "" {
+		data, err := p.ConfigMap(context.Background(), planRef(cs.Namespace, cs.Release))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := parseStatus([]byte(data[statusFile])).Phase; got != step.StoredPhase {
+			t.Fatalf("stored phase %q, want %q", got, step.StoredPhase)
+		}
+	}
+	if step.OperatorPhase != "" {
+		if step.Do != "status" {
+			t.Fatalf("%s sets operatorPhase; that is read from a status step", step.Do)
+		}
+		svc, _ := body["llmservice"].(map[string]any)
+		if svc["operatorPhase"] != step.OperatorPhase {
+			t.Fatalf("operatorPhase %v, want %s (%v)", svc["operatorPhase"], step.OperatorPhase, svc)
+		}
+	}
+	if step.DeletionStage != "" || step.DeletionOutcome != "" || step.DeletionMessage != "" || step.DeletionDeadline != "" || step.PodsRemaining != nil || step.DeletionPods != nil || step.ForceDeleted != nil {
+		del := deletionBlock(t, cs, step, body)
+		if step.DeletionStage != "" && del["stage"] != step.DeletionStage {
+			t.Fatalf("deletion.stage %v, want %s (%v)", del["stage"], step.DeletionStage, del)
+		}
+		if step.DeletionOutcome != "" && del["outcome"] != step.DeletionOutcome {
+			t.Fatalf("deletion.outcome %v, want %s (%v)", del["outcome"], step.DeletionOutcome, del)
+		}
+		if step.DeletionMessage != "" && del["message"] != step.DeletionMessage {
+			t.Fatalf("deletion.message %v, want %s", del["message"], step.DeletionMessage)
+		}
+		if step.DeletionDeadline != "" && del["deadline"] != step.DeletionDeadline {
+			t.Fatalf("deletion.deadline %v, want %s", del["deadline"], step.DeletionDeadline)
+		}
+		if step.PodsRemaining != nil && asNum(del["podsRemaining"]) != *step.PodsRemaining {
+			t.Fatalf("podsRemaining %v, want %d (%v)", del["podsRemaining"], *step.PodsRemaining, del)
+		}
+		if step.DeletionPods != nil {
+			pods, _ := del["pods"].([]any)
+			if len(pods) != *step.DeletionPods {
+				t.Fatalf("deletion pods %d, want %d (%v)", len(pods), *step.DeletionPods, del["pods"])
+			}
+		}
+		if step.ForceDeleted != nil {
+			names, _ := del["forceDeleted"].([]any)
+			if len(names) != *step.ForceDeleted {
+				t.Fatalf("forceDeleted %d, want %d (%v)", len(names), *step.ForceDeleted, del["forceDeleted"])
+			}
+		}
+	}
+	if step.DriftContains != "" {
+		if step.Do != "list" {
+			t.Fatalf("%s sets driftContains; that is read from a list step", step.Do)
+		}
+		row, found := deploymentRowIn(body, cs.Namespace, cs.Release)
+		if !found || !strings.Contains(fmt.Sprint(row["drift"]), step.DriftContains) {
+			t.Fatalf("drift %v, want it to contain %q", row["drift"], step.DriftContains)
+		}
+	}
+	if step.Audits != nil {
+		if srv == nil || srv.store == nil {
+			t.Fatal("audits need a store")
+		}
+		runs, err := srv.store.RunsFiltered(context.Background(), store.RunFilter{
+			Namespace: cs.Namespace, Release: cs.Release, Action: "uninstall", Limit: 100,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(runs) != *step.Audits {
+			t.Fatalf("uninstall audits %d, want %d", len(runs), *step.Audits)
+		}
+	}
+	if step.LLMService != nil {
+		if llms == nil {
+			t.Fatal("llmService needs a client")
+		}
+		_, err := llms.Get(context.Background(), cs.Namespace, cs.Release)
+		exists := err == nil
+		if err != nil && !apierrors.IsNotFound(err) {
+			t.Fatal(err)
+		}
+		if exists != *step.LLMService {
+			t.Fatalf("llmservice exists=%v, want %v", exists, *step.LLMService)
+		}
+	}
+}
+
+func probeHasConfigMap(p cluster.Probe, ref string) bool {
+	data, err := p.ConfigMap(context.Background(), ref)
+	if err != nil {
+		return false
+	}
+	return len(data) > 0
+}
+
+func deletionBlock(t *testing.T, cs *uninstallCase, step unstep, body map[string]any) map[string]any {
+	t.Helper()
+	switch step.Do {
+	case "status":
+		svc, _ := body["llmservice"].(map[string]any)
+		del, _ := svc["deletion"].(map[string]any)
+		if del == nil {
+			t.Fatalf("no llmservice.deletion in %v", svc)
+		}
+		return del
+	case "list":
+		row, found := deploymentRowIn(body, cs.Namespace, cs.Release)
+		if !found {
+			t.Fatalf("no row for %s/%s", cs.Namespace, cs.Release)
+		}
+		del, _ := row["deletion"].(map[string]any)
+		if del == nil {
+			t.Fatalf("no deletion on %v", row)
+		}
+		return del
+	default:
+		t.Fatalf("%s sets a deletion field; those are read from a list or status step", step.Do)
+		return nil
 	}
 }
 
@@ -857,3 +1019,260 @@ var (
 	_ cluster.Probe  = (*uninstallCluster)(nil)
 	_ cluster.Writer = (*uninstallCluster)(nil)
 )
+
+// llmPlanProbe is the fake plus plan ConfigMaps labeled uninstalling. Fake's
+// managed set comes from helm releases, which an llmsvc test does not have.
+type llmPlanProbe struct {
+	*cluster.Fake
+}
+
+func (p llmPlanProbe) ManagedRefs(ctx context.Context) ([]cluster.ManagedRef, error) {
+	out, err := p.Fake.ManagedRefs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	for _, ref := range out {
+		seen[ref.Namespace+"/"+ref.Name] = true
+	}
+	for ref, labels := range p.MapLabels {
+		if labels[cluster.LabelPhase] != phaseUninstalling {
+			continue
+		}
+		ns, name, err := cluster.SplitRef(ref)
+		if err != nil {
+			continue
+		}
+		rel, ok := strings.CutPrefix(name, cluster.PlanConfigMapPrefix)
+		if !ok || rel == "" {
+			continue
+		}
+		key := ns + "/" + rel
+		if seen[key] {
+			continue
+		}
+		out = append(out, cluster.ManagedRef{Namespace: ns, Name: rel, Labels: maps.Clone(labels)})
+		seen[key] = true
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Namespace != out[j].Namespace {
+			return out[i].Namespace < out[j].Namespace
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out, nil
+}
+
+// llmMirrorWriter copies writes onto the probe the server reads. The stock
+// fake writer only remembers them for the test.
+type llmMirrorWriter struct {
+	*fakeWriter
+	probe *cluster.Fake
+}
+
+func (m *llmMirrorWriter) PutConfigMap(ctx context.Context, ref string, data, labels map[string]string) error {
+	if err := m.fakeWriter.PutConfigMap(ctx, ref, data, labels); err != nil {
+		return err
+	}
+	if m.probe.Maps == nil {
+		m.probe.Maps = map[string]map[string]string{}
+	}
+	m.probe.Maps[ref] = cloneData(data)
+	if m.probe.MapLabels == nil {
+		m.probe.MapLabels = map[string]map[string]string{}
+	}
+	labs := map[string]string{"app.kubernetes.io/managed-by": "swiss"}
+	for k, v := range labels {
+		if v != "" {
+			labs[k] = v
+		}
+	}
+	m.probe.MapLabels[ref] = labs
+	return nil
+}
+
+func (m *llmMirrorWriter) DeleteConfigMap(ctx context.Context, ref string) error {
+	if err := m.fakeWriter.DeleteConfigMap(ctx, ref); err != nil {
+		return err
+	}
+	delete(m.probe.Maps, ref)
+	delete(m.probe.MapLabels, ref)
+	return nil
+}
+
+func (m *llmMirrorWriter) PutSecret(ctx context.Context, ref string, data, labels map[string]string) error {
+	if err := m.fakeWriter.PutSecret(ctx, ref, data, labels); err != nil {
+		return err
+	}
+	if m.probe.Secrets == nil {
+		m.probe.Secrets = map[string]map[string]string{}
+	}
+	if m.probe.SecretLabels == nil {
+		m.probe.SecretLabels = map[string]map[string]string{}
+	}
+	m.probe.Secrets[ref] = cloneData(data)
+	m.probe.SecretLabels[ref] = cloneData(labels)
+	return nil
+}
+
+func (m *llmMirrorWriter) DeleteSecret(ctx context.Context, ref string) error {
+	if err := m.fakeWriter.DeleteSecret(ctx, ref); err != nil {
+		return err
+	}
+	delete(m.probe.Secrets, ref)
+	delete(m.probe.SecretLabels, ref)
+	return nil
+}
+
+type llmUninstallHarness struct {
+	cs   *uninstallCase
+	rig  *llmRig
+	base *cluster.Fake
+	srv  *httptest.Server
+}
+
+func (h *llmUninstallHarness) arm(t *testing.T) {
+	t.Helper()
+	if h.cs.Finalizer {
+		h.rig.dyn.PrependReactor("delete", "llmservices", func(action k8stesting.Action) (bool, runtime.Object, error) {
+			del := action.(k8stesting.DeleteAction)
+			obj, err := h.rig.dyn.Tracker().Get(llmsvc.GVR, del.GetNamespace(), del.GetName())
+			if err != nil {
+				return true, nil, err
+			}
+			u := obj.(*unstructured.Unstructured).DeepCopy()
+			if !u.GetDeletionTimestamp().IsZero() {
+				return true, nil, nil
+			}
+			ts := metav1.Now()
+			u.SetDeletionTimestamp(&ts)
+			if len(u.GetFinalizers()) == 0 {
+				u.SetFinalizers([]string{llmsvc.Group + "/cleanup"})
+			}
+			if err := h.rig.dyn.Tracker().Update(llmsvc.GVR, u, del.GetNamespace()); err != nil {
+				return true, nil, err
+			}
+			return true, nil, nil
+		})
+	}
+	// Prepended last so it runs first. A NotFound delete still removes the
+	// object, which is what makes the plan-restore path observable.
+	if h.cs.DeleteNotFound {
+		h.rig.dyn.PrependReactor("delete", "llmservices", func(action k8stesting.Action) (bool, runtime.Object, error) {
+			del := action.(k8stesting.DeleteAction)
+			_ = h.rig.dyn.Tracker().Delete(llmsvc.GVR, del.GetNamespace(), del.GetName())
+			gr := schema.GroupResource{Group: llmsvc.Group, Resource: llmsvc.Resource}
+			return true, nil, apierrors.NewNotFound(gr, del.GetName())
+		})
+	}
+}
+
+func (h *llmUninstallHarness) create(t *testing.T) {
+	t.Helper()
+	u := llmObject(h.cs.Namespace, h.cs.Release, map[string]string{llmsvc.AnnProfile: "prod"})
+	st := &llmsvc.Status{
+		Phase: h.cs.OperatorPhase,
+		Helm:  &llmsvc.HelmStatus{Revision: 4, Status: "deployed"},
+	}
+	if len(h.cs.Deletion) > 0 {
+		raw, err := json.Marshal(h.cs.Deletion)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var del llmsvc.DeletionStatus
+		if err := json.Unmarshal(raw, &del); err != nil {
+			t.Fatal(err)
+		}
+		st.Deletion = &del
+	}
+	m, err := runtime.DefaultUnstructuredConverter.ToUnstructured(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.Object["status"] = m
+	if h.cs.Deleting == nil || *h.cs.Deleting {
+		ts := metav1.Now()
+		u.SetDeletionTimestamp(&ts)
+	}
+	if _, err := h.rig.c.Create(t.Context(), u); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (h *llmUninstallHarness) clearDeletion(t *testing.T) {
+	t.Helper()
+	obj, err := h.rig.dyn.Tracker().Get(llmsvc.GVR, h.cs.Namespace, h.cs.Release)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := obj.(*unstructured.Unstructured).DeepCopy()
+	u.SetDeletionTimestamp(nil)
+	u.SetFinalizers(nil)
+	if err := h.rig.dyn.Tracker().Update(llmsvc.GVR, u, h.cs.Namespace); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (h *llmUninstallHarness) restart(t *testing.T) {
+	t.Helper()
+	s := New(h.rig.s.cfg, h.rig.s.probe, discardLogger(), "test")
+	s.SetStore(h.rig.s.store)
+	s.SetWriter(h.rig.s.writer)
+	s.SetLLMServices(h.rig.s.llms)
+	h.rig.s = s
+	if h.srv != nil {
+		h.srv.Close()
+	}
+	h.srv = httptest.NewServer(s.Handler())
+	h.rig.srv = h.srv
+	t.Cleanup(h.srv.Close)
+}
+
+func seedLLMPlan(t *testing.T, probe *cluster.Fake, cs *uninstallCase) {
+	t.Helper()
+	phase := cs.PlanPhase
+	if phase == "" {
+		phase = phaseApplied
+	}
+	raw, err := yaml.Marshal(planStatus{Phase: phase, Action: "install", Revision: 4, StartedAt: stamp(time.Now())})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := planRef(cs.Namespace, cs.Release)
+	if probe.Maps == nil {
+		probe.Maps = map[string]map[string]string{}
+	}
+	probe.Maps[ref] = map[string]string{
+		"helmfile.yaml": "releases: []\n",
+		statusFile:      string(raw),
+	}
+	if phase == phaseUninstalling {
+		if probe.MapLabels == nil {
+			probe.MapLabels = map[string]map[string]string{}
+		}
+		probe.MapLabels[ref] = map[string]string{
+			"app.kubernetes.io/managed-by": "swiss",
+			cluster.LabelPhase:             phaseUninstalling,
+		}
+	}
+}
+
+func seedLLMArchive(probe *cluster.Fake, cs *uninstallCase) {
+	ref := archiveRef(cs.Namespace, cs.Release, 1)
+	if probe.Secrets == nil {
+		probe.Secrets = map[string]map[string]string{}
+	}
+	if probe.SecretLabels == nil {
+		probe.SecretLabels = map[string]map[string]string{}
+	}
+	probe.Secrets[ref] = map[string]string{"helmfile.yaml": "releases: []\n"}
+	probe.SecretLabels[ref] = archiveLabels(cs.Release, 1)
+}
+
+func seedLLMAutoscale(probe *cluster.Fake, cs *uninstallCase) {
+	ref := autoscaleRef(cs.Namespace, cs.Release)
+	if probe.Maps == nil {
+		probe.Maps = map[string]map[string]string{}
+	}
+	probe.Maps[ref] = map[string]string{autoscaleConfigKey: "enabled: true\nminSlices: 1\nmaxSlices: 4\n"}
+}

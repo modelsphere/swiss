@@ -174,6 +174,7 @@ func runUninstallCase(t *testing.T, tc apiCase) {
 	ref := autoscaleRef(ns, release)
 	var srv *httptest.Server
 	var w *fakeWriter
+	var rig *llmRig
 	if tc.Backend == backendLLMSVC {
 		probe := llmProbe()
 		probe.MapLabels = map[string]map[string]string{}
@@ -181,7 +182,7 @@ func runUninstallCase(t *testing.T, tc apiCase) {
 		probe.DSs = map[string]cluster.DisaggregatedSet{}
 		probe.Maps[ref] = map[string]string{"config.yaml": "enabled: true\nminSlices: 1\nmaxSlices: 2\n"}
 		probe.MapLabels[ref] = map[string]string{"owner": "swiss", "name": release}
-		rig := startRig(t, probe, true, false, "")
+		rig = startRig(t, probe, true, false, "")
 		p, _ := pdPlan(t, ns, release, release, 1, true, false, "v2")
 		u, err := llmsvc.FromPlan(p, "install", "seed")
 		if err != nil {
@@ -206,6 +207,11 @@ func runUninstallCase(t *testing.T, tc apiCase) {
 	code, out := del(t, srv, "/api/releases/"+ns+"/"+release)
 	if code != http.StatusOK {
 		t.Fatalf("status %d: %v", code, out)
+	}
+	// The request returns once the delete is accepted. The autoscale ConfigMap
+	// goes when the reap sees the LLMService is gone.
+	if rig != nil {
+		rig.s.reapUninstalling(context.Background())
 	}
 	found := false
 	for _, d := range w.deleted {

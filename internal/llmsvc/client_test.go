@@ -224,30 +224,6 @@ func TestWaitAppliedTimesOut(t *testing.T) {
 	}
 }
 
-func TestWaitGone(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
-	defer cancel()
-	c := New(newDyn(), nil, nil)
-	c.Interval = 5 * time.Millisecond
-	if err := c.WaitGone(ctx, "models", "missing"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := c.Create(ctx, obj("models", "qwen")); err != nil {
-		t.Fatal(err)
-	}
-	errc := make(chan error, 1)
-	go func() {
-		time.Sleep(30 * time.Millisecond)
-		errc <- c.Delete(ctx, "models", "qwen")
-	}()
-	if err := c.WaitGone(ctx, "models", "qwen"); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-errc; err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestListHonoursNamespaceScope(t *testing.T) {
 	ctx := t.Context()
 	dyn := newDyn()

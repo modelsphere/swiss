@@ -358,7 +358,10 @@ func TestLLMListErrorIsStillBadGateway(t *testing.T) {
 	if code != http.StatusBadGateway {
 		t.Fatalf("status %d %v", code, body)
 	}
-	if _, _ = get(t, g.srv, "/api/deployments"); g.calls.Load() != 2 {
+	// Each deployments read lists twice: once while rebuilding uninstalling
+	// LLMServices, and once for the page. A timeout is not cached, so the
+	// second read does both again.
+	if _, _ = get(t, g.srv, "/api/deployments"); g.calls.Load() != 4 {
 		t.Fatalf("a non-forbidden list error was cached: calls %d", g.calls.Load())
 	}
 }

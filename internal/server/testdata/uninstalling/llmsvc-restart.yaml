@@ -1,0 +1,42 @@
+kind: llmsvc
+release: qwen
+namespace: models
+operatorPhase: Deleting
+deletion:
+  stage: Uninstalling
+  podsRemaining: 2
+seedArchive: true
+seedAutoscale: true
+seedPlanConfigMap: true
+planPhase: uninstalling
+steps:
+  - do: restart
+  - do: reap
+  - do: list
+    status: 200
+    present: true
+    phase: uninstalling
+    backend: llmsvc
+    deletionStage: Uninstalling
+    podsRemaining: 2
+    configMap: true
+    autoscale: true
+    archives: 1
+    audits: 0
+  - do: status
+    status: 200
+    servicePhase: uninstalling
+    operatorPhase: Deleting
+    deletionStage: Uninstalling
+  - do: operatorRelease
+  - do: reap
+    configMap: false
+    autoscale: false
+    archives: 0
+    audits: 1
+    llmService: false
+  - do: list
+    status: 200
+    present: false
+  - do: reap
+    audits: 1

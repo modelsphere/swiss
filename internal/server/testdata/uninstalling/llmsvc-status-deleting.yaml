@@ -1,0 +1,40 @@
+kind: llmsvc
+release: qwen
+namespace: models
+deleting: false
+operatorPhase: Deleting
+deletion:
+  stage: RouteRemoving
+  outcome: NoRoute
+  podsRemaining: 2
+  message: removing the route
+  startedAt: "2026-10-23T00:00:00Z"
+  deadline: "2026-10-23T00:05:00Z"
+  forceDeleted:
+    - qwen-old
+  pods:
+    - name: qwen-0
+      phase: Running
+      node: gpu-1
+      grace: 30
+      stuck: true
+steps:
+  - do: status
+    status: 200
+    servicePhase: uninstalling
+    operatorPhase: Deleting
+    deletionStage: RouteRemoving
+    deletionOutcome: NoRoute
+    deletionMessage: removing the route
+    deletionDeadline: "2026-10-23T00:05:00Z"
+    podsRemaining: 2
+    deletionPods: 1
+    forceDeleted: 1
+  - do: list
+    status: 200
+    present: true
+    phase: uninstalling
+    backend: llmsvc
+    deletionStage: RouteRemoving
+    podsRemaining: 2
+    driftContains: "uninstall in progress: RouteRemoving"

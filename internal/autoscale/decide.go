@@ -27,7 +27,7 @@ const (
 	// The tick holds instead of applying again.
 	HoldReleaseFailed = "release failed"
 	// HoldUninstalling is a release on its way out: the plan is marked
-	// uninstalling or the LLMService is being deleted. Nothing is applied.
+	// uninstalling, or the LLMService is being deleted. Nothing is applied.
 	HoldUninstalling = "uninstalling"
 
 	backoffBase = time.Minute
@@ -76,7 +76,7 @@ type Live struct {
 	Roles                 []Role   `json:"roles,omitempty" yaml:"roles,omitempty"`
 	Routers               []Router `json:"routers,omitempty" yaml:"routers,omitempty"`
 	LockBusy              bool     `json:"lockBusy,omitempty" yaml:"lockBusy,omitempty"`
-	// LLMDeleting is an LLMService with a deletionTimestamp.
+	// LLMDeleting is an LLMService with a deletionTimestamp or status.phase Deleting.
 	LLMDeleting bool `json:"llmDeleting,omitempty" yaml:"llmDeleting,omitempty"`
 }
 
@@ -270,7 +270,7 @@ func current(live Live) int {
 
 // rolloutHold is a change still landing. It waits in either direction.
 func rolloutHold(live Live) string {
-	if live.PlanPhase == "uninstalling" || live.LLMDeleting {
+	if live.PlanPhase == "uninstalling" || live.LLMDeleting || live.LLMPhase == "Deleting" {
 		return HoldUninstalling
 	}
 	if live.LockBusy {

@@ -1,0 +1,9 @@
+kind: llmsvc
+release: qwen
+namespace: models
+missing: true
+steps:
+  - do: uninstall
+    status: 404
+    errorContains: no release
+    audits: 0

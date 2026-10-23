@@ -90,10 +90,11 @@ type Server struct {
 	// time.Now; tests replace it.
 	now func() time.Time
 
-	// uninst is namespace/release for plans marked uninstalling. A restart
-	// leaves it empty; the label on the ConfigMap is what fills it again.
-	// inflight is set while helm has not returned, so a list cannot drop the
-	// plan out from under that call.
+	// uninst is namespace/release for a release swiss is uninstalling. A restart
+	// leaves it empty; labeled plan ConfigMaps and LLMServices with a
+	// deletionTimestamp fill it again. llm means the operator owns teardown
+	// and reap waits for the object to disappear. inflight is set while helm
+	// has not returned, so a list cannot drop the plan out from under that call.
 	uninstMu    sync.Mutex
 	uninst      map[string]*uninstState
 	uninstReady bool

@@ -51,6 +51,9 @@ type loopCase struct {
 	PlanPhase string `json:"planPhase,omitempty"`
 	// Deleting gives the LLMService a deletionTimestamp.
 	Deleting bool `json:"deleting,omitempty"`
+	// LLMPhase overrides status.phase. Deleting holds without a deletionTimestamp,
+	// and the rig operator stays off so it does not rewrite that phase.
+	LLMPhase string `json:"llmPhase,omitempty"`
 }
 
 func TestAutoscaleLoop(t *testing.T) {
@@ -158,7 +161,11 @@ func runLLMLoop(t *testing.T, tc loopCase) {
 	probe.SecretLabels = map[string]map[string]string{}
 	seedAutoscaleCM(&probe, ns, release, true, tc.Min, tc.Max)
 
-	rig := startRig(t, probe, true, !tc.Conflict, "")
+	phase := llmsvc.PhaseApplied
+	if tc.LLMPhase != "" {
+		phase = tc.LLMPhase
+	}
+	rig := startRig(t, probe, true, !tc.Conflict && phase != llmsvc.PhaseDeleting, "")
 	u, err := llmsvc.FromPlan(p, "install", "seed")
 	if err != nil {
 		t.Fatal(err)
@@ -169,7 +176,7 @@ func runLLMLoop(t *testing.T, tc loopCase) {
 	}
 	if err := unstructured.SetNestedMap(u.Object, map[string]any{
 		"observedGeneration": int64(1),
-		"phase":              llmsvc.PhaseApplied,
+		"phase":              phase,
 		"helm":               map[string]any{"revision": int64(rev), "status": "deployed"},
 	}, "status"); err != nil {
 		t.Fatal(err)
@@ -190,7 +197,7 @@ func runLLMLoop(t *testing.T, tc loopCase) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if obj.Status == nil || obj.Status.Phase != llmsvc.PhaseApplied || obj.Status.Helm == nil || obj.Status.Helm.Revision != int64(rev) {
+	if obj.Status == nil || obj.Status.Phase != phase || obj.Status.Helm == nil || obj.Status.Helm.Revision != int64(rev) {
 		t.Fatalf("seed status did not stick: %+v gen=%d", obj.Status, seeded.GetGeneration())
 	}
 	if obj.Status.ObservedGeneration < seeded.GetGeneration() {

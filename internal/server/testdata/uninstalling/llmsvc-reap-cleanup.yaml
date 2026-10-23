@@ -1,0 +1,29 @@
+kind: llmsvc
+release: qwen
+namespace: models
+deleting: false
+seedArchive: true
+seedAutoscale: true
+seedPlanConfigMap: true
+planPhase: applied
+steps:
+  - do: uninstall
+    status: 200
+    outputContains: uninstall already in progress
+    llmService: false
+    configMap: true
+    autoscale: true
+    archives: 1
+    audits: 1
+    storedPhase: uninstalling
+  - do: reap
+    configMap: false
+    autoscale: false
+    archives: 0
+    audits: 2
+    llmService: false
+  - do: list
+    status: 200
+    present: false
+  - do: reap
+    audits: 2

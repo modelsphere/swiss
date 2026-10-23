@@ -684,18 +684,20 @@ func (s *Server) applyPlan(ctx context.Context, w http.ResponseWriter, p *plan.P
 	})
 }
 
-// handleUninstall removes a release. A plan ConfigMap is marked uninstalling
-// before helm runs and stays until that release's pods are gone.
+// handleUninstall removes a release. A helm plan is marked uninstalling
+// before helm runs and stays until that release's pods are gone. An LLMService
+// delete returns once the API accepts it; the operator finishes the teardown.
 func (s *Server) handleUninstall(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := contextWithTimeout(r, 15*time.Minute)
 	defer cancel()
 
 	ns, release := r.PathValue("namespace"), r.PathValue("release")
 	if !s.tryApplyLock(ns, release) {
-		// The lock may be held by the uninstall itself, still running helm.
+		// The lock may be held by the uninstall itself, still running helm,
+		// or by another call while an LLMService is already being deleted.
 		// Asking again is not a conflict: it is the same answer as a repeat
 		// DELETE that does get the lock.
-		if s.uninstallInflight(ns, release) || s.planPhase(ctx, ns, release) == phaseUninstalling {
+		if s.uninstallInflight(ns, release) || s.llmUninstalling(ns, release) || s.planPhase(ctx, ns, release) == phaseUninstalling {
 			writeJSON(w, http.StatusOK, map[string]any{
 				"release":   release,
 				"namespace": ns,
