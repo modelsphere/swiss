@@ -4,7 +4,7 @@
 
 - Minimal. Only where the *why* cannot be read off the code.
 - No narrative paragraphs above functions, no package essays, no restating the next line.
-- Rationale belongs in `docs/swiss-design.md`, not in source. Code goes stale silently; the doc can be edited.
+- Rationale belongs in `docs/architecture.md`, not in source. Code goes stale silently; the doc can be edited.
 
 ## Formatting
 

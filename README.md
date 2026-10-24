@@ -11,7 +11,7 @@
 [![stars](https://img.shields.io/github/stars/modelsphere/swiss?style=flat&logo=github)](https://github.com/modelsphere/swiss/stargazers)
 
 A deploy control plane for the sglang and vllm charts. Design and rationale:
-[`docs/swiss-design.md`](docs/swiss-design.md).
+[`docs/architecture.md`](docs/architecture.md). Building and testing: [`DEVELOPMENT.md`](DEVELOPMENT.md).
 
 ## Configure
 
@@ -68,7 +68,7 @@ PUT  /api/profile
 POST /api/plans /api/diff /api/apply /api/install     (allowDeploy only)
 ```
 
-`applyWith` on the site profile chooses the backend for a new install: `helm` (the default when the field is omitted) or `llmsvc` when the LLMService CRD is served. A release already in the cluster stays on the backend that owns it. `llmsvc` requires the plan's `source.schema` to be v2; empty means v1 and is rejected with 400 and nothing is written. Helm accepts v1 and v2. The CLI `swiss install` and `swiss apply` stay on helm. See [docs/swiss-design.md](docs/swiss-design.md).
+`applyWith` on the site profile chooses the backend for a new install: `helm` (the default when the field is omitted) or `llmsvc` when the LLMService CRD is served. A release already in the cluster stays on the backend that owns it. `llmsvc` requires the plan's `source.schema` to be v2; empty means v1 and is rejected with 400 and nothing is written. Helm accepts v1 and v2. The CLI `swiss install` and `swiss apply` stay on helm. See [docs/architecture.md](docs/architecture.md).
 
 ## Deploy
 
