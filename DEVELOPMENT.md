@@ -34,7 +34,12 @@ Configuration: [README.md](README.md#configure).
 make test                     # go test ./...
 ```
 
-CI checks out [model-catalog](https://github.com/modelsphere/model-catalog) to `../swiss-catalog` (pinned by `CATALOG_REF` in `.github/workflows/ci.yml`); the server tests read it from there.
+The server tests read [model-catalog](https://github.com/modelsphere/model-catalog) from `../swiss-catalog` and fail without it. Clone it there at the `CATALOG_REF` pinned in `.github/workflows/ci.yml` (CI does the same):
+
+```sh
+git clone https://github.com/modelsphere/model-catalog ../swiss-catalog
+git -C ../swiss-catalog checkout <CATALOG_REF>
+```
 
 ## e2e tests (kind)
 
