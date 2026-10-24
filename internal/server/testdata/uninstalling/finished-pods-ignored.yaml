@@ -1,0 +1,43 @@
+kind: helm
+release: glm-53
+namespace: models
+chart: vllm
+pods:
+  - name: engine-0
+    phase: Running
+    labels:
+      app: glm-53-vllm
+      app.kubernetes.io/instance: glm-53
+steps:
+  - do: uninstall
+    status: 200
+    planError: false
+    configMap: true
+  - do: list
+    status: 200
+    present: true
+    phase: uninstalling
+  - do: dropHelm
+  - do: list
+    status: 200
+    present: true
+    phase: uninstalling
+    configMap: true
+  - do: setPods
+    pods:
+      - name: glm-53-test
+        phase: Succeeded
+        labels:
+          app.kubernetes.io/instance: glm-53
+      - name: glm-53-pre-delete
+        phase: Failed
+        labels:
+          app.kubernetes.io/instance: glm-53
+      - name: glm-53-vllm-hook
+        phase: Failed
+        labels:
+          app: glm-53-vllm
+  - do: list
+    status: 200
+    present: false
+    configMap: false

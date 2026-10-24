@@ -1,0 +1,14 @@
+kind: llmsvc
+release: qwen
+namespace: models
+deleting: false
+deleteNotFound: true
+seedPlanConfigMap: true
+planPhase: applied
+steps:
+  - do: uninstall
+    status: 404
+    errorContains: no release
+    configMap: true
+    storedPhase: applied
+    audits: 0

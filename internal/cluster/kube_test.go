@@ -5,8 +5,11 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -127,6 +130,65 @@ func TestAnUnreadableReleaseIsStillReported(t *testing.T) {
 	}
 	if got == nil || got.Name != "broken" {
 		t.Fatalf("want the release reported despite the payload, got %+v", got)
+	}
+}
+
+func TestPodsCarryDeletion(t *testing.T) {
+	grace := int64(45)
+	term := int64(90)
+	when := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	ts := metav1.NewTime(when)
+	cs := fake.NewSimpleClientset(
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: "models", Name: "engine-0",
+				Labels:                     map[string]string{"app": "glm"},
+				DeletionTimestamp:          &ts,
+				DeletionGracePeriodSeconds: &grace,
+			},
+			Spec: corev1.PodSpec{
+				NodeName:                      "gpu-1",
+				TerminationGracePeriodSeconds: &term,
+			},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning},
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: "models", Name: "idle",
+				Labels: map[string]string{"app": "glm"},
+			},
+			Spec:   corev1.PodSpec{NodeName: "gpu-2"},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning},
+		},
+	)
+	got, err := NewKubeWithClient(cs).Pods(context.Background(), "models", "app=glm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]Pod{}
+	for _, p := range got {
+		byName[p.Name] = p
+	}
+	engine := byName["engine-0"]
+	if engine.Node != "gpu-1" || engine.DeletionTimestamp == nil || !engine.DeletionTimestamp.Equal(when) {
+		t.Fatalf("deletion timestamp: %+v", engine)
+	}
+	if engine.DeletionGracePeriodSeconds == nil || *engine.DeletionGracePeriodSeconds != 45 {
+		t.Fatalf("deletion grace: %+v", engine.DeletionGracePeriodSeconds)
+	}
+	if engine.TerminationGracePeriodSeconds == nil || *engine.TerminationGracePeriodSeconds != 90 {
+		t.Fatalf("termination grace: %+v", engine.TerminationGracePeriodSeconds)
+	}
+	idle := byName["idle"]
+	if idle.DeletionTimestamp != nil || idle.DeletionGracePeriodSeconds != nil || idle.TerminationGracePeriodSeconds != nil {
+		t.Fatalf("a running pod carries no deletion fields: %+v", idle)
+	}
+	raw, err := json.Marshal(idle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "deletion") || strings.Contains(string(raw), "Grace") {
+		t.Fatalf("deletion fields leaked into pod JSON: %s", raw)
 	}
 }
 

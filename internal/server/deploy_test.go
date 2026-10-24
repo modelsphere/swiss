@@ -65,7 +65,7 @@ func (f *fakeWriter) EnsureNamespace(_ context.Context, name string) error {
 	return nil
 }
 
-func (f *fakeWriter) PutConfigMap(_ context.Context, ref string, data map[string]string) error {
+func (f *fakeWriter) PutConfigMap(_ context.Context, ref string, data, _ map[string]string) error {
 	if err := f.missingNS(ref); err != nil {
 		return err
 	}
@@ -488,7 +488,7 @@ func (failingWriter) EnsureNamespace(context.Context, string) error {
 	return errors.New("forbidden")
 }
 
-func (failingWriter) PutConfigMap(context.Context, string, map[string]string) error {
+func (failingWriter) PutConfigMap(context.Context, string, map[string]string, map[string]string) error {
 	return errors.New("forbidden")
 }
 

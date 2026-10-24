@@ -1,0 +1,47 @@
+kind: llmsvc
+release: qwen
+namespace: models
+deleting: false
+finalizer: true
+operatorPhase: Deleting
+seedArchive: true
+seedAutoscale: true
+deletion:
+  stage: PodsTerminating
+  podsRemaining: 2
+  message: waiting for pods
+steps:
+  - do: uninstall
+    status: 200
+    outputContains: uninstall already in progress
+    llmService: true
+    audits: 1
+  - do: reap
+    llmService: true
+    autoscale: true
+    archives: 1
+    audits: 1
+  - do: list
+    status: 200
+    present: true
+    phase: uninstalling
+    backend: llmsvc
+    deletionStage: PodsTerminating
+    podsRemaining: 2
+    driftContains: "uninstall in progress: PodsTerminating"
+  - do: status
+    status: 200
+    servicePhase: uninstalling
+    operatorPhase: Deleting
+    deletionStage: PodsTerminating
+    podsRemaining: 2
+    deletionMessage: waiting for pods
+  - do: operatorRelease
+  - do: reap
+    llmService: false
+    autoscale: false
+    archives: 0
+    audits: 2
+  - do: list
+    status: 200
+    present: false

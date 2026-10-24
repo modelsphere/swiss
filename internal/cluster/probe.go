@@ -46,6 +46,10 @@ type Release struct {
 type ManagedRef struct {
 	Namespace string
 	Name      string // the release name, not the ConfigMap name
+	// Labels are the plan ConfigMap's labels. Metadata only: the uninstalling
+	// marker is one of them, so a restart can find those releases without
+	// opening the values documents.
+	Labels map[string]string
 }
 
 // Node is what a fit check needs, plus what a node view shows.
@@ -91,6 +95,10 @@ type GPUPod struct {
 
 // Pod is enough to tell loading from broken: on this workload a pod that is
 // scheduled and not ready has usually been reading weights for twenty minutes.
+//
+// The deletion fields are how an uninstall tells a pod that is still finishing
+// from one that is stuck. They are not part of the status JSON, so a pod that
+// is not being deleted looks the same as it did before they existed.
 type Pod struct {
 	Name      string `json:"name"`
 	Phase     string `json:"phase"`
@@ -99,6 +107,10 @@ type Pod struct {
 	Node      string `json:"node,omitempty"`
 	Message   string `json:"message,omitempty"`
 	AgeSecond int64  `json:"ageSeconds"`
+
+	DeletionTimestamp             *time.Time `json:"-"`
+	DeletionGracePeriodSeconds    *int64     `json:"-"`
+	TerminationGracePeriodSeconds *int64     `json:"-"`
 }
 
 type Probe interface {
@@ -447,7 +459,10 @@ func (f Fake) Secret(_ context.Context, ref string) (map[string]string, error) {
 // Writer is the write half, kept separate so a read-only swissd can hold a
 // Probe and nothing else.
 type Writer interface {
-	PutConfigMap(ctx context.Context, ref string, data map[string]string) error
+	// PutConfigMap creates or replaces a ConfigMap given as "namespace/name".
+	// labels are set in addition to app.kubernetes.io/managed-by=swiss, and the
+	// label set is replaced rather than merged: nil leaves only that one label.
+	PutConfigMap(ctx context.Context, ref string, data, labels map[string]string) error
 	// DeleteConfigMap removes one, and succeeds when it is already gone.
 	// Uninstall is a cleanup path: it has to be safe to run twice.
 	DeleteConfigMap(ctx context.Context, ref string) error

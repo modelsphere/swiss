@@ -1,0 +1,24 @@
+# A helm uninstall that fails leaves the release, so its revision history
+# stays too.
+kind: helm
+release: glm-53
+namespace: models
+chart: vllm
+helmExit: 1
+seedArchive: true
+pods:
+  - name: engine-0
+    phase: Running
+    labels:
+      app: glm-53-vllm
+      app.kubernetes.io/instance: glm-53
+steps:
+  - do: uninstall
+    status: 500
+    errorContains: helm uninstall
+    archives: 1
+  - do: list
+    status: 200
+    present: true
+    phase: failed
+    archives: 1

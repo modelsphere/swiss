@@ -1,0 +1,34 @@
+kind: helm
+release: glm-53
+namespace: models
+chart: vllm
+pods:
+  - name: engine-0
+    phase: Running
+    labels:
+      app: glm-53-vllm
+      app.kubernetes.io/instance: glm-53
+steps:
+  - do: uninstall
+    status: 200
+  - do: list
+    status: 200
+    present: true
+    phase: uninstalling
+  - do: restart
+  - do: list
+    status: 200
+    present: true
+    phase: uninstalling
+    configMap: true
+  - do: dropHelm
+  - do: list
+    status: 200
+    present: true
+    phase: uninstalling
+    configMap: true
+  - do: setPods
+  - do: list
+    status: 200
+    present: false
+    configMap: false

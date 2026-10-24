@@ -18,6 +18,7 @@ import (
 	"github.com/modelsphere/swiss/internal/llmsvc"
 	"github.com/modelsphere/swiss/internal/store"
 	"github.com/modelsphere/swiss/internal/testutil/cases"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8stesting "k8s.io/client-go/testing"
@@ -46,6 +47,13 @@ type loopCase struct {
 	WantRetryDelta     string            `json:"wantRetryDelta,omitempty"`
 	WantLastFailedWant *int              `json:"wantLastFailedWant,omitempty"`
 	WantCleared        bool              `json:"wantCleared,omitempty"`
+	// PlanPhase seeds status.yaml in the helm plan ConfigMap.
+	PlanPhase string `json:"planPhase,omitempty"`
+	// Deleting gives the LLMService a deletionTimestamp.
+	Deleting bool `json:"deleting,omitempty"`
+	// LLMPhase overrides status.phase. Deleting holds without a deletionTimestamp,
+	// and the rig operator stays off so it does not rewrite that phase.
+	LLMPhase string `json:"llmPhase,omitempty"`
 }
 
 func TestAutoscaleLoop(t *testing.T) {
@@ -79,6 +87,9 @@ func runHelmLoop(t *testing.T, tc loopCase) {
 			t.Fatal(err)
 		}
 		probe.Maps[autoscaleRef(ns, release)][autoscaleStatusKey] = string(b)
+	}
+	if tc.PlanPhase != "" {
+		seed[statusFile] = "phase: " + tc.PlanPhase + "\naction: uninstall\nrevision: 2\n"
 	}
 	probe.Maps[planRef(ns, release)] = seed
 	rev := tc.Revision
@@ -150,7 +161,11 @@ func runLLMLoop(t *testing.T, tc loopCase) {
 	probe.SecretLabels = map[string]map[string]string{}
 	seedAutoscaleCM(&probe, ns, release, true, tc.Min, tc.Max)
 
-	rig := startRig(t, probe, true, !tc.Conflict, "")
+	phase := llmsvc.PhaseApplied
+	if tc.LLMPhase != "" {
+		phase = tc.LLMPhase
+	}
+	rig := startRig(t, probe, true, !tc.Conflict && phase != llmsvc.PhaseDeleting, "")
 	u, err := llmsvc.FromPlan(p, "install", "seed")
 	if err != nil {
 		t.Fatal(err)
@@ -161,12 +176,16 @@ func runLLMLoop(t *testing.T, tc loopCase) {
 	}
 	if err := unstructured.SetNestedMap(u.Object, map[string]any{
 		"observedGeneration": int64(1),
-		"phase":              llmsvc.PhaseApplied,
+		"phase":              phase,
 		"helm":               map[string]any{"revision": int64(rev), "status": "deployed"},
 	}, "status"); err != nil {
 		t.Fatal(err)
 	}
 	u.SetGeneration(1)
+	if tc.Deleting {
+		ts := metav1.Now()
+		u.SetDeletionTimestamp(&ts)
+	}
 	if _, err := rig.c.Create(t.Context(), u); err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +197,7 @@ func runLLMLoop(t *testing.T, tc loopCase) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if obj.Status == nil || obj.Status.Phase != llmsvc.PhaseApplied || obj.Status.Helm == nil || obj.Status.Helm.Revision != int64(rev) {
+	if obj.Status == nil || obj.Status.Phase != phase || obj.Status.Helm == nil || obj.Status.Helm.Revision != int64(rev) {
 		t.Fatalf("seed status did not stick: %+v gen=%d", obj.Status, seeded.GetGeneration())
 	}
 	if obj.Status.ObservedGeneration < seeded.GetGeneration() {
@@ -224,14 +243,29 @@ func runLLMLoop(t *testing.T, tc loopCase) {
 		t.Fatal(err)
 	}
 	if tc.Conflict {
-		if gotGets != 7 {
-			t.Errorf("Get calls %d, want 7", gotGets)
+		// One more than the loop alone: applyLocked reads the LLMService
+		// once to refuse a release that is being deleted.
+		if gotGets != 8 {
+			t.Errorf("Get calls %d, want 8", gotGets)
 		}
 		if st.LastError == "" || !strings.Contains(st.LastError, tc.ErrorContains) {
 			t.Fatalf("lastError %q, want substring %q (gets %d)", st.LastError, tc.ErrorContains, gets.Load())
 		}
 		if got.GetAnnotations()[llmsvc.AnnAction] == "autoscale" {
 			t.Fatalf("conflict updated the object: %v", got.GetAnnotations())
+		}
+		assertLoopBackoff(t, st, tc)
+		return
+	}
+	if tc.WantHold != "" {
+		if st.HoldReason != tc.WantHold {
+			t.Fatalf("hold %q, want %q", st.HoldReason, tc.WantHold)
+		}
+		if st.LastError != "" {
+			t.Fatalf("hold recorded error %q", st.LastError)
+		}
+		if got.GetAnnotations()[llmsvc.AnnAction] == "autoscale" {
+			t.Fatalf("held tick updated the object: %v", got.GetAnnotations())
 		}
 		assertLoopBackoff(t, st, tc)
 		return

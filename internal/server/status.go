@@ -17,6 +17,8 @@ import (
 	"github.com/modelsphere/swiss/internal/plan"
 	"github.com/modelsphere/swiss/internal/site"
 	"github.com/modelsphere/swiss/internal/values"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 type releaseStatus struct {
@@ -56,11 +58,37 @@ type releaseStatus struct {
 }
 
 // llmStatusView is the operator's status, in place of status.yaml.
+// Phase is swiss's word for the row (uninstalling while the object is being
+// deleted). OperatorPhase is status.phase as the operator wrote it.
 type llmStatusView struct {
-	Phase      string         `json:"phase,omitempty"`
-	Message    string         `json:"message,omitempty"`
-	Revision   int64          `json:"revision,omitempty"`
-	Conditions []llmCondition `json:"conditions,omitempty"`
+	Phase         string           `json:"phase,omitempty"`
+	OperatorPhase string           `json:"operatorPhase,omitempty"`
+	Message       string           `json:"message,omitempty"`
+	Revision      int64            `json:"revision,omitempty"`
+	Conditions    []llmCondition   `json:"conditions,omitempty"`
+	Deletion      *llmDeletionView `json:"deletion,omitempty"`
+}
+
+// llmDeletionView is status.deletion. Swiss passes through what the operator
+// reports and does not include the operator's internal timestamps.
+type llmDeletionView struct {
+	Stage         string           `json:"stage,omitempty"`
+	Outcome       string           `json:"outcome,omitempty"`
+	PodsRemaining int              `json:"podsRemaining,omitempty"`
+	Deadline      metav1.Time      `json:"deadline,omitempty,omitzero"`
+	StartedAt     metav1.Time      `json:"startedAt,omitempty,omitzero"`
+	Message       string           `json:"message,omitempty"`
+	Pods          []llmDeletionPod `json:"pods,omitempty"`
+	ForceDeleted  []string         `json:"forceDeleted,omitempty"`
+}
+
+type llmDeletionPod struct {
+	Name              string      `json:"name,omitempty"`
+	Phase             string      `json:"phase,omitempty"`
+	Node              string      `json:"node,omitempty"`
+	DeletionTimestamp metav1.Time `json:"deletionTimestamp,omitempty,omitzero"`
+	Grace             int         `json:"grace,omitempty"`
+	Stuck             bool        `json:"stuck,omitempty"`
 }
 
 type llmCondition struct {
@@ -105,21 +133,26 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadGateway, err.Error())
 			return
 		}
-		if obj, err := llmsvc.FromUnstructured(u); err == nil && obj.Status != nil {
+		var obj *llmsvc.LLMService
+		if decoded, err := llmsvc.FromUnstructured(u); err == nil {
+			obj = decoded
 			out.Exists = true
-			out.Service = &llmStatusView{Phase: obj.Status.Phase, Message: obj.Status.Message}
-			for _, c := range obj.Status.Conditions {
-				out.Service.Conditions = append(out.Service.Conditions, llmCondition{
-					Type: c.Type, Status: string(c.Status), Reason: c.Reason, Message: c.Message,
-				})
-			}
-			if obj.Status.Helm != nil {
-				out.Revision = int(obj.Status.Helm.Revision)
-				out.HelmStatus = obj.Status.Helm.Status
-				out.Service.Revision = obj.Status.Helm.Revision
+			if obj.Status != nil {
+				out.Service = llmStatusFrom(obj.Status)
+				if obj.Status.Helm != nil {
+					out.Revision = int(obj.Status.Helm.Revision)
+					out.HelmStatus = obj.Status.Helm.Status
+				}
 			}
 		} else {
 			out.Exists = true
+		}
+		if llmDeleting(u, obj) {
+			out.Exists = true
+			if out.Service == nil {
+				out.Service = &llmStatusView{}
+			}
+			out.Service.Phase = phaseUninstalling
 		}
 		if decoded, err := llmsvc.ToPlan(u); err == nil {
 			p = decoded
@@ -165,7 +198,71 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			out.Ready++
 		}
 	}
+	if (out.Plan != nil && out.Plan.Phase == phaseUninstalling) || s.llmUninstalling(ns, release) {
+		s.reapRelease(ctx, ns, release)
+	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func llmStatusFrom(st *llmsvc.Status) *llmStatusView {
+	v := &llmStatusView{
+		Phase: st.Phase, OperatorPhase: st.Phase, Message: st.Message,
+		Deletion: deletionView(st.Deletion),
+	}
+	if st.Helm != nil {
+		v.Revision = st.Helm.Revision
+	}
+	for _, c := range st.Conditions {
+		v.Conditions = append(v.Conditions, llmCondition{
+			Type: c.Type, Status: string(c.Status), Reason: c.Reason, Message: c.Message,
+		})
+	}
+	return v
+}
+
+// llmDeleting is an LLMService the operator has been asked to remove, either
+// because the delete is already stamped or because status.phase says so.
+func llmDeleting(u *unstructured.Unstructured, obj *llmsvc.LLMService) bool {
+	if u != nil && !u.GetDeletionTimestamp().IsZero() {
+		return true
+	}
+	return obj != nil && obj.Status != nil && obj.Status.Phase == llmsvc.PhaseDeleting
+}
+
+func uninstallDrift(stage string) string {
+	if stage == "" {
+		return "uninstall in progress"
+	}
+	return "uninstall in progress: " + stage
+}
+
+func deletionStage(v *llmDeletionView) string {
+	if v == nil {
+		return ""
+	}
+	return v.Stage
+}
+
+func deletionView(d *llmsvc.DeletionStatus) *llmDeletionView {
+	if d == nil {
+		return nil
+	}
+	v := &llmDeletionView{
+		Stage: d.Stage, Outcome: d.Outcome, PodsRemaining: d.PodsRemaining,
+		Deadline: d.Deadline, StartedAt: d.StartedAt, Message: d.Message,
+		ForceDeleted: d.ForceDeleted,
+	}
+	if len(d.Pods) == 0 {
+		return v
+	}
+	v.Pods = make([]llmDeletionPod, len(d.Pods))
+	for i, p := range d.Pods {
+		v.Pods[i] = llmDeletionPod{
+			Name: p.Name, Phase: p.Phase, Node: p.Node,
+			DeletionTimestamp: p.DeletionTimestamp, Grace: p.Grace, Stuck: p.Stuck,
+		}
+	}
+	return v
 }
 
 // releaseDigestDrift compares the digest this release pinned with the digest

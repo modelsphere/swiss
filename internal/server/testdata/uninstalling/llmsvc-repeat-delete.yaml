@@ -1,0 +1,21 @@
+kind: llmsvc
+release: qwen
+namespace: models
+deleting: false
+finalizer: true
+steps:
+  - do: uninstall
+    status: 200
+    outputContains: uninstall already in progress
+    audits: 1
+    llmService: true
+  - do: uninstall
+    status: 200
+    outputContains: uninstall already in progress
+    audits: 1
+    llmService: true
+  - do: list
+    status: 200
+    present: true
+    phase: uninstalling
+    backend: llmsvc

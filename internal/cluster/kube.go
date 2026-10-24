@@ -62,6 +62,10 @@ type Kube struct {
 // PlanConfigMapPrefix names the ConfigMap holding a release's live plan.
 const PlanConfigMapPrefix = "swiss-plan-"
 
+// LabelPhase is the plan ConfigMap label whose value is the release phase when
+// that phase has to be visible without reading the ConfigMap body.
+const LabelPhase = "swiss.modelsphere.dev/phase"
+
 // PlanSecretPrefix names the Secrets holding previous plans, one per revision:
 // swiss.plan.v1.<release>.v<revision>, the shape helm uses for its own.
 const PlanSecretPrefix = "swiss.plan.v1."
@@ -264,7 +268,7 @@ func (k *Kube) ManagedRefs(ctx context.Context) ([]ManagedRef, error) {
 			if !ok || name == "" {
 				continue
 			}
-			out = append(out, ManagedRef{Namespace: item.Namespace, Name: name})
+			out = append(out, ManagedRef{Namespace: item.Namespace, Name: name, Labels: maps.Clone(item.GetLabels())})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -615,16 +619,22 @@ var (
 )
 
 // PutConfigMap creates or replaces a ConfigMap given as "namespace/name".
-func (k *Kube) PutConfigMap(ctx context.Context, ref string, data map[string]string) error {
+func (k *Kube) PutConfigMap(ctx context.Context, ref string, data, labels map[string]string) error {
 	ns, name, err := SplitRef(ref)
 	if err != nil {
 		return err
+	}
+	labs := map[string]string{"app.kubernetes.io/managed-by": "swiss"}
+	for k, v := range labels {
+		if v != "" {
+			labs[k] = v
+		}
 	}
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: ns,
 			Name:      name,
-			Labels:    map[string]string{"app.kubernetes.io/managed-by": "swiss"},
+			Labels:    labs,
 		},
 		Data: data,
 	}
@@ -730,6 +740,18 @@ func (k *Kube) Pods(ctx context.Context, namespace, selector string) ([]Pod, err
 			Name:  p.Name,
 			Phase: string(p.Status.Phase),
 			Node:  p.Spec.NodeName,
+		}
+		if p.DeletionTimestamp != nil && !p.DeletionTimestamp.IsZero() {
+			t := p.DeletionTimestamp.Time
+			pod.DeletionTimestamp = &t
+		}
+		if p.DeletionGracePeriodSeconds != nil {
+			v := *p.DeletionGracePeriodSeconds
+			pod.DeletionGracePeriodSeconds = &v
+		}
+		if p.Spec.TerminationGracePeriodSeconds != nil {
+			v := *p.Spec.TerminationGracePeriodSeconds
+			pod.TerminationGracePeriodSeconds = &v
 		}
 		if !p.CreationTimestamp.IsZero() {
 			pod.AgeSecond = int64(time.Since(p.CreationTimestamp.Time).Seconds())

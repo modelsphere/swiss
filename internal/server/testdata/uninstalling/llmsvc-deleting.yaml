@@ -1,0 +1,22 @@
+kind: llmsvc
+release: qwen
+namespace: models
+operatorPhase: Applied
+steps:
+  - do: list
+    status: 200
+    present: true
+    phase: uninstalling
+    backend: llmsvc
+  - do: status
+    status: 200
+    servicePhase: uninstalling
+  - do: apply
+    status: 409
+    errorContains: uninstalling
+  - do: install
+    status: 409
+    errorContains: uninstalling
+  - do: rollback
+    status: 409
+    errorContains: uninstalling

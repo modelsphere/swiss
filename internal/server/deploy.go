@@ -646,7 +646,14 @@ func (s *Server) apply(ctx context.Context, p *plan.Plan, mode exec.Mode, applyW
 	return s.applyLocked(ctx, p, mode, applyWith, o)
 }
 
+// applyLocked is where install, upgrade, rollback and the autoscaler refuse an
+// uninstalling release. It runs under the release's lock, as the uninstall
+// marker is written, so an apply cannot write its applying phase over the
+// marker and an uninstall cannot start in the middle of an apply.
 func (s *Server) applyLocked(ctx context.Context, p *plan.Plan, mode exec.Mode, applyWith string, o applyOpts) (applyResult, error) {
+	if err := s.refuseUninstalling(ctx, p.Release.Namespace, p.Release.Name); err != nil {
+		return applyResult{}, err
+	}
 	b, err := s.backendForApply(ctx, p, mode, applyWith)
 	if err != nil {
 		return applyResult{}, err
@@ -677,20 +684,28 @@ func (s *Server) applyPlan(ctx context.Context, w http.ResponseWriter, p *plan.P
 	})
 }
 
-// handleUninstall removes a release and the plan recorded beside it.
-//
-// The order is deliberate and is the write-ahead in reverse. An apply records
-// the plan first so a failure cannot leave a live release with nothing beside
-// it; an uninstall removes the release first for the same reason. Dropping the
-// ConfigMap up front and then failing to uninstall would turn a release swiss
-// deployed into an `untracked` row -- the one thing that is supposed to mean
-// somebody installed by hand.
+// handleUninstall removes a release. A helm plan is marked uninstalling
+// before helm runs and stays until that release's pods are gone. An LLMService
+// delete returns once the API accepts it; the operator finishes the teardown.
 func (s *Server) handleUninstall(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := contextWithTimeout(r, 15*time.Minute)
 	defer cancel()
 
 	ns, release := r.PathValue("namespace"), r.PathValue("release")
 	if !s.tryApplyLock(ns, release) {
+		// The lock may be held by the uninstall itself, still running helm,
+		// or by another call while an LLMService is already being deleted.
+		// Asking again is not a conflict: it is the same answer as a repeat
+		// DELETE that does get the lock.
+		if s.uninstallInflight(ns, release) || s.llmUninstalling(ns, release) || s.planPhase(ctx, ns, release) == phaseUninstalling {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"release":   release,
+				"namespace": ns,
+				"output":    uninstallInProgress,
+				"planError": "",
+			})
+			return
+		}
 		writeStatus(w, &applyBusyError{ns: ns, release: release}, http.StatusConflict)
 		return
 	}
@@ -717,9 +732,10 @@ func (s *Server) handleUninstall(w http.ResponseWriter, r *http.Request) {
 }
 
 const (
-	phaseApplying = "applying"
-	phaseApplied  = "applied"
-	phaseFailed   = "failed"
+	phaseApplying     = "applying"
+	phaseApplied      = "applied"
+	phaseFailed       = "failed"
+	phaseUninstalling = "uninstalling"
 )
 
 // applyBudget bounds the cluster-changing half of an apply, which runs detached
@@ -822,6 +838,26 @@ func (s *Server) pruneArchives(ctx context.Context, namespace, release string, n
 	return nil
 }
 
+// deleteArchives removes every archived plan for the release. Best effort, the
+// same as the uninstall that first deletes them: a list error is left for the
+// next attempt, and a delete error is logged. DeleteSecret succeeds when the
+// Secret is already gone. The plan ConfigMap is a different object and stays
+// until the pods are gone.
+func (s *Server) deleteArchives(ctx context.Context, ns, release string) {
+	if s.writer == nil {
+		return
+	}
+	revs, err := s.archivedRevisions(ctx, ns, release)
+	if err != nil {
+		return
+	}
+	for _, r := range revs {
+		if err := s.writer.DeleteSecret(ctx, archiveRef(ns, release, r)); err != nil {
+			s.log.WarnContext(ctx, "archived plan not removed", "release", release, "revision", r, "err", err)
+		}
+	}
+}
+
 // archivedRevisions is every revision with a plan beside it, newest first.
 func (s *Server) archivedRevisions(ctx context.Context, namespace, release string) ([]int, error) {
 	names, err := s.probe.SecretNames(ctx, namespace, archiveSelector(release))
@@ -857,7 +893,17 @@ func (s *Server) writePlan(ctx context.Context, p *plan.Plan, st planStatus) err
 		return err
 	}
 	files["status.yaml"] = string(status)
-	return s.writer.PutConfigMap(ctx, planRef(p.Release.Namespace, p.Release.Name), files)
+	return s.writer.PutConfigMap(ctx, planRef(p.Release.Namespace, p.Release.Name), files, phaseLabel(st.Phase))
+}
+
+// phaseLabel is the metadata marker for a phase the deployments list has to
+// see without reading status.yaml. Any other phase clears it: PutConfigMap
+// replaces labels.
+func phaseLabel(phase string) map[string]string {
+	if phase == phaseUninstalling {
+		return map[string]string{cluster.LabelPhase: phaseUninstalling}
+	}
+	return nil
 }
 
 func (s *Server) planFromRequest(ctx context.Context, r *http.Request) (*plan.Plan, error) {

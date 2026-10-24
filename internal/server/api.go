@@ -455,7 +455,7 @@ func (s *Server) handleSaveProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := map[string]string{s.cfg.Cluster.Profile.Key: body}
-	if err := s.writer.PutConfigMap(ctx, ref, data); err != nil {
+	if err := s.writer.PutConfigMap(ctx, ref, data, nil); err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
@@ -563,11 +563,13 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 }
 
 type deployment struct {
-	Release    string `json:"release"`
-	Namespace  string `json:"namespace"`
-	Chart      string `json:"chart,omitempty"`
-	Status     string `json:"status,omitempty"`
-	Revision   int    `json:"revision"`
+	Release   string `json:"release"`
+	Namespace string `json:"namespace"`
+	Chart     string `json:"chart,omitempty"`
+	Status    string `json:"status,omitempty"`
+	// Revision is helm's. Omitted when there is none, so an uninstalling row
+	// whose release is already gone does not report 0.
+	Revision   int    `json:"revision,omitempty"`
 	Updated    string `json:"updated,omitempty"`
 	Model      string `json:"model,omitempty"`
 	Variant    string `json:"variant,omitempty"`
@@ -584,9 +586,10 @@ type deployment struct {
 	Route string `json:"route,omitempty"`
 	// Backend is helm or llmsvc. External is an LLMService swiss did not
 	// write. CleanupPending means both records still exist.
-	Backend        string `json:"backend"`
-	External       bool   `json:"external,omitempty"`
-	CleanupPending bool   `json:"cleanupPending,omitempty"`
+	Backend        string           `json:"backend"`
+	External       bool             `json:"external,omitempty"`
+	CleanupPending bool             `json:"cleanupPending,omitempty"`
+	Deletion       *llmDeletionView `json:"deletion,omitempty"`
 
 	// What the plan recorded about its catalog, for finding the configured
 	// catalog the release belongs to.
@@ -674,10 +677,15 @@ func (s *Server) deploymentFromService(ctx context.Context, ref deployRef) *depl
 		s.log.WarnContext(ctx, "llmservice does not decode",
 			"namespace", u.GetNamespace(), "release", u.GetName(), "err", err)
 		d.Drift = "plan unreadable: " + err.Error()
+		if llmDeleting(u, nil) {
+			d.Phase = phaseUninstalling
+			d.Drift = uninstallDrift("")
+		}
 		return d
 	}
 	if obj.Status != nil {
 		d.Phase = obj.Status.Phase
+		d.Deletion = deletionView(obj.Status.Deletion)
 		if obj.Status.Helm != nil {
 			d.Revision = int(obj.Status.Helm.Revision)
 			d.Status = obj.Status.Helm.Status
@@ -692,6 +700,12 @@ func (s *Server) deploymentFromService(ctx context.Context, ref deployRef) *depl
 			d.Drift = "an apply is in progress"
 		}
 	}
+	// deletionTimestamp or status.phase Deleting wins: the object is still
+	// listed while the operator's finalizer keeps it, and that is the uninstall.
+	if llmDeleting(u, obj) {
+		d.Phase = phaseUninstalling
+		d.Drift = uninstallDrift(deletionStage(d.Deletion))
+	}
 	if d.Chart == "" {
 		d.Chart = chartLabel(obj.Spec.Chart.Name, obj.Spec.Chart.Version)
 	}
@@ -700,6 +714,10 @@ func (s *Server) deploymentFromService(ctx context.Context, ref deployRef) *depl
 		s.log.WarnContext(ctx, "llmservice plan does not decode",
 			"namespace", u.GetNamespace(), "release", u.GetName(), "err", err)
 		d.Drift = "plan unreadable: " + err.Error()
+		if llmDeleting(u, obj) {
+			d.Phase = phaseUninstalling
+			d.Drift = uninstallDrift(deletionStage(d.Deletion))
+		}
 		return d
 	}
 	d.Route = routeOf(p)
@@ -724,6 +742,10 @@ func (s *Server) deploymentFromService(ctx context.Context, ref deployRef) *depl
 func (s *Server) handleDeployments(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := contextWithTimeout(r, 30*time.Second)
 	defer cancel()
+
+	// A release whose pods have finished terminating drops out of this page
+	// rather than on the next poll interval.
+	s.reapUninstalling(ctx)
 
 	refs, err := s.deploymentRefs(ctx)
 	if err != nil {
@@ -845,6 +867,8 @@ func (s *Server) deploymentRow(ctx context.Context, rel cluster.Release) *deploy
 			d.Drift = "last apply failed: " + st.Error
 		case phaseApplying:
 			d.Drift = "an apply was started and never completed"
+		case phaseUninstalling:
+			d.Drift = "uninstall in progress"
 		}
 	}
 	// The route is read off the composed values rather than the summary: it is a

@@ -27,10 +27,10 @@ func TestWireContract(t *testing.T) {
 	if GVR != (schema.GroupVersionResource{Group: "serving.modelsphere.dev", Version: "v1alpha1", Resource: "llmservices"}) {
 		t.Fatalf("GVR %v", GVR)
 	}
-	if PhasePending != "Pending" || PhaseApplying != "Applying" || PhaseApplied != "Applied" || PhaseFailed != "Failed" {
+	if PhasePending != "Pending" || PhaseApplying != "Applying" || PhaseApplied != "Applied" || PhaseFailed != "Failed" || PhaseDeleting != "Deleting" {
 		t.Fatal("phases")
 	}
-	if ConditionApplied != "Applied" || ConditionAdopted != "Adopted" {
+	if ConditionApplied != "Applied" || ConditionAdopted != "Adopted" || ConditionDeleting != "Deleting" {
 		t.Fatal("conditions")
 	}
 	if AnnDeletionPolicy != "serving.modelsphere.dev/deletion-policy" || AnnForceConflicts != "serving.modelsphere.dev/force-conflicts" {
@@ -365,6 +365,12 @@ func TestStatusRoundTripsThroughUnstructured(t *testing.T) {
 				Annotations:        map[string]string{AnnAction: "upgrade", AnnNote: "bump to 1.1.0"},
 				ForceConflicts:     true, Action: "upgrade",
 			}},
+			Deletion: &DeletionStatus{
+				Stage: "PodsTerminating", Outcome: "Clean", StartedAt: ts, Deadline: ts,
+				PodsRemaining: 2, Message: "waiting",
+				Pods:         []DeletionPod{{Name: "qwen-0", Phase: "Running", Node: "gpu-1", Grace: 30, Stuck: true, DeletionTimestamp: ts}},
+				ForceDeleted: []string{"qwen-old"},
+			},
 		},
 	}
 	in.APIVersion = APIVersion
@@ -386,6 +392,9 @@ func TestStatusRoundTripsThroughUnstructured(t *testing.T) {
 		`"appliedHash":"sha256:abc"`,
 		`"suspend":true`,
 		`"action":"upgrade"`,
+		`"stage":"PodsTerminating"`,
+		`"podsRemaining":2`,
+		`"forceDeleted":["qwen-old"]`,
 	} {
 		if !strings.Contains(s, needle) {
 			t.Errorf("missing %s in %s", needle, s)
@@ -426,6 +435,16 @@ func TestStatusRoundTripsThroughUnstructured(t *testing.T) {
 	}
 	if !h.AppliedAt.Time.Equal(ts.Time) {
 		t.Fatalf("appliedAt %s", h.AppliedAt)
+	}
+	d := got.Status.Deletion
+	if d == nil || d.Stage != "PodsTerminating" || d.Outcome != "Clean" || d.PodsRemaining != 2 || d.Message != "waiting" {
+		t.Fatalf("deletion %+v", d)
+	}
+	if len(d.Pods) != 1 || d.Pods[0].Name != "qwen-0" || d.Pods[0].Grace != 30 || !d.Pods[0].Stuck || d.Pods[0].Node != "gpu-1" {
+		t.Fatalf("deletion pods %+v", d.Pods)
+	}
+	if len(d.ForceDeleted) != 1 || d.ForceDeleted[0] != "qwen-old" || !d.StartedAt.Time.Equal(ts.Time) || !d.Deadline.Time.Equal(ts.Time) {
+		t.Fatalf("deletion times %+v", d)
 	}
 }
 

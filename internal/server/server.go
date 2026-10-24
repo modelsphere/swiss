@@ -85,6 +85,19 @@ type Server struct {
 
 	// decisionHTTP is the client for decision-gen. Nil uses a 5s timeout.
 	decisionHTTP *http.Client
+
+	// now is the clock stuck-terminating pods are judged against. New installs
+	// time.Now; tests replace it.
+	now func() time.Time
+
+	// uninst is namespace/release for a release swiss is uninstalling. A restart
+	// leaves it empty; labeled plan ConfigMaps and LLMServices with a
+	// deletionTimestamp fill it again. llm means the operator owns teardown
+	// and reap waits for the object to disappear. inflight is set while helm
+	// has not returned, so a list cannot drop the plan out from under that call.
+	uninstMu    sync.Mutex
+	uninst      map[string]*uninstState
+	uninstReady bool
 }
 
 type openCatalog struct {
@@ -102,6 +115,7 @@ func New(cfg *config.Config, probe cluster.Probe, log *slog.Logger, version stri
 		catCache:  catalog.NewCache(cfg.Server.CatalogCacheDir()),
 		cats:      map[string]openCatalog{},
 		charts:    map[string]chartListing{},
+		now:       time.Now,
 	}
 }
 
@@ -459,7 +473,11 @@ func (s *Server) Handler() http.Handler {
 
 // Run serves until ctx is cancelled, then drains.
 func (s *Server) Run(ctx context.Context) error {
-	go s.runAutoscaler(ctx)
+	loopCtx, stopLoop := context.WithCancel(ctx)
+	defer stopLoop()
+	go s.runAutoscaler(loopCtx)
+	go s.uninstallLoop(loopCtx)
+
 	srv := &http.Server{
 		Addr:              s.cfg.Server.Addr,
 		Handler:           s.Handler(),

@@ -1,0 +1,37 @@
+# While helm uninstall runs it holds the release's lock: install, upgrade and
+# rollback are 409 and none of them writes its applying phase over the marker.
+# Once helm has returned, the lock is free and the marker is what refuses them.
+kind: helm
+release: glm-53
+namespace: models
+chart: vllm
+helmBlocks: true
+pods:
+  - name: engine-0
+    phase: Running
+    labels:
+      app: glm-53-vllm
+      app.kubernetes.io/instance: glm-53
+steps:
+  - do: uninstallAsync
+  - do: install
+    status: 409
+  - do: upgrade
+    status: 409
+  - do: rollback
+    status: 409
+  - do: list
+    status: 200
+    present: true
+    phase: uninstalling
+  - do: releaseHelm
+    status: 200
+    outputContains: helm uninstall
+  - do: upgrade
+    status: 409
+    errorContains: uninstalling
+  - do: list
+    status: 200
+    present: true
+    phase: uninstalling
+    configMap: true

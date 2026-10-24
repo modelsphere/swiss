@@ -825,14 +825,24 @@ paths:
     delete:
       tags: [releases]
       summary: Uninstall
-      description: Removes the release first, then its plan record, so a failure never leaves a live release untracked.
+      description: >-
+        Removes the release. Helm uninstalls and keeps the plan until pods
+        finish terminating. An llmsvc release returns 200 as soon as the
+        LLMService delete is accepted; the operator removes the route,
+        uninstalls the chart, and waits for pods. The release stays listed
+        with phase uninstalling, and deletion passes through the operator's
+        stage, until the LLMService is gone.
       operationId: uninstall
       parameters:
         - $ref: "#/components/parameters/namespace"
         - $ref: "#/components/parameters/release"
       responses:
         "200":
-          description: Uninstalled.
+          description: >-
+            Uninstalled, or output is "uninstall already in progress" when the
+            release is already uninstalling. An llmsvc release returns that
+            in-progress body as soon as the delete is accepted; the operator
+            finishes the teardown.
           content:
             application/json:
               schema:
@@ -846,6 +856,11 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: An apply on this release is in progress.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "500": { $ref: "#/components/responses/ServerError" }
         "502": { $ref: "#/components/responses/BadGateway" }
 
@@ -1877,25 +1892,54 @@ components:
 
     Deployment:
       type: object
-      required: [release, namespace, revision, backend]
+      required: [release, namespace, backend]
       properties:
         release: { type: string }
         namespace: { type: string }
         chart: { type: string, description: "`name-version`." }
         status: { type: string, description: "helm's status." }
-        revision: { type: integer }
+        revision: { type: integer, description: "helm's revision. Omitted when there is no revision." }
         updated: { type: string, format: date-time }
         model: { type: string }
         variant: { type: string }
         catalogRef: { type: string }
         catalog: { type: string, description: "The configured catalog it came from; absent when the site no longer lists it." }
         version: { type: string }
-        phase: { type: string, description: "swiss's apply phase: applying, applied, failed (or the operator's)." }
-        drift: { type: string, description: "What a person should look at." }
+        phase: { type: string, description: "swiss's apply phase: applying, applied, failed, uninstalling (or the operator's). uninstalling is also set on an LLMService while metadata.deletionTimestamp is set or status.phase is Deleting." }
+        drift: { type: string, description: "What a person should look at. An uninstall in progress names the operator's stage when there is one." }
+        deletion:
+          $ref: "#/components/schemas/LLMDeletion"
         route: { type: string }
         backend: { $ref: "#/components/schemas/ApplyWith" }
         external: { type: boolean, description: "An LLMService swiss did not write." }
         cleanupPending: { type: boolean, description: "Both a plan ConfigMap and an LLMService exist." }
+
+    LLMDeletion:
+      type: object
+      description: Operator staged teardown of an LLMService. Swiss passes the fields through.
+      properties:
+        stage: { type: string, description: "RouteRemoving, RouteSettling, Uninstalling, PodsTerminating, ForceDeleting, or Released." }
+        outcome: { type: string, description: "Clean, NoRoute, RouteStuck, PodsForceDeleted, or TimedOut." }
+        podsRemaining: { type: integer }
+        deadline: { type: string, format: date-time }
+        startedAt: { type: string, format: date-time }
+        message: { type: string }
+        pods:
+          type: array
+          items: { $ref: "#/components/schemas/LLMDeletionPod" }
+        forceDeleted:
+          type: array
+          items: { type: string }
+
+    LLMDeletionPod:
+      type: object
+      properties:
+        name: { type: string }
+        phase: { type: string }
+        node: { type: string }
+        deletionTimestamp: { type: string, format: date-time }
+        grace: { type: integer }
+        stuck: { type: boolean }
 
     ReleaseStatus:
       type: object
@@ -1933,7 +1977,7 @@ components:
           description: Helm releases. The last apply as swiss recorded it.
           required: [phase]
           properties:
-            phase: { type: string, enum: [applying, applied, failed] }
+            phase: { type: string, enum: [applying, applied, failed, uninstalling] }
             action: { type: string }
             revision: { type: integer }
             startedAt: { type: string, format: date-time }
@@ -1947,9 +1991,12 @@ components:
           type: object
           description: LLMService releases. The operator's status.
           properties:
-            phase: { type: string, examples: [Applying, Applied, Failed] }
+            phase: { type: string, description: "uninstalling while metadata.deletionTimestamp is set or status.phase is Deleting; otherwise the operator's phase.", examples: [Applying, Applied, Failed, uninstalling] }
+            operatorPhase: { type: string, description: "status.phase as the operator wrote it, including Deleting.", examples: [Applying, Applied, Failed, Deleting] }
             message: { type: string }
             revision: { type: integer }
+            deletion:
+              $ref: "#/components/schemas/LLMDeletion"
             conditions:
               type: array
               items:

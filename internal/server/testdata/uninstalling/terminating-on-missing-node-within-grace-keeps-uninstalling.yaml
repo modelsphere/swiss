@@ -1,0 +1,37 @@
+# A missing node does not end the uninstall while the pod is still inside its
+# grace period: a node that flaps NotReady may still be running it. Once the
+# grace is over the node is enough, without the extra five minutes.
+kind: helm
+release: glm-53
+namespace: models
+chart: vllm
+nodes:
+  - name: gpu-1
+    ready: true
+pods:
+  - name: engine-0
+    phase: Running
+    node: gpu-gone
+    deletionTimestamp: 2026-10-22T12:00:00Z
+    deletionGracePeriodSeconds: 600
+    labels:
+      app: glm-53-vllm
+      app.kubernetes.io/instance: glm-53
+steps:
+  - do: setNow
+    now: 2026-10-22T12:09:59Z
+  - do: uninstall
+    status: 200
+    configMap: true
+  - do: dropHelm
+  - do: list
+    status: 200
+    present: true
+    phase: uninstalling
+    configMap: true
+  - do: setNow
+    now: 2026-10-22T12:10:01Z
+  - do: list
+    status: 200
+    present: false
+    configMap: false

@@ -910,31 +910,6 @@ func TestLLMRollback(t *testing.T) {
 	}
 }
 
-func TestLLMUninstall(t *testing.T) {
-	rig := startRig(t, llmProbe(), true, true, backendLLMSVC)
-	hash := rig.storePlan(t, map[string]any{"release": llmRelease})
-	if code, out := post(t, rig.srv, "/api/install", map[string]any{"planHash": hash}); code != 200 {
-		t.Fatalf("install %d %v", code, out)
-	}
-	code, out := del(t, rig.srv, "/api/releases/models/"+llmRelease)
-	if code != 200 {
-		t.Fatalf("uninstall %d %v", code, out)
-	}
-	if output, _ := out["output"].(string); output != "deleted LLMService models/"+llmRelease {
-		t.Fatalf("output %q", output)
-	}
-	if _, err := rig.c.Get(t.Context(), "models", llmRelease); !apierrors.IsNotFound(err) {
-		t.Fatalf("object still present: %v", err)
-	}
-	if len(rig.w.deleted) != 0 {
-		t.Fatalf("llmsvc uninstall must leave archives and ConfigMaps alone: %v", rig.w.deleted)
-	}
-	runs := rig.runs(t)
-	if len(runs) < 1 || runs[0].Action != "uninstall" || runs[0].Revision != 0 || runs[0].Error != "" {
-		t.Fatalf("audit %+v", runs)
-	}
-}
-
 func TestLLMRevisions(t *testing.T) {
 	rig := startRig(t, llmProbe(), true, true, backendLLMSVC)
 	hash := rig.storePlan(t, map[string]any{"release": llmRelease})

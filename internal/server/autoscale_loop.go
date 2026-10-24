@@ -223,16 +223,20 @@ func (s *Server) queryDecision(ctx context.Context, ns, serviceID string) autosc
 
 func (s *Server) autoscaleLive(ctx context.Context, ns, release, backend string, p *plan.Plan) (autoscale.Live, int, error) {
 	live := autoscale.Live{Backend: backend, PD: disaggregated(p), PlanReplicaCount: planReplicaCount(p)}
-	if !s.tryApplyLock(ns, release) {
-		live.LockBusy = true
-	} else {
-		s.unlockApply(ns, release)
-	}
-
 	if data, err := s.probe.ConfigMap(ctx, planRef(ns, release)); err != nil && !apierrors.IsNotFound(err) {
 		return live, 0, err
 	} else if err == nil {
 		live.PlanPhase = parseStatus([]byte(data["status.yaml"])).Phase
+	}
+	// An uninstalling release holds in Decide. Its lock may be the
+	// uninstall's, and a probe would only contend with a repeat DELETE.
+	if live.PlanPhase == phaseUninstalling {
+		return live, 0, nil
+	}
+	if !s.tryApplyLock(ns, release) {
+		live.LockBusy = true
+	} else {
+		s.unlockApply(ns, release)
 	}
 
 	rev := 0
@@ -264,6 +268,12 @@ func (s *Server) autoscaleLive(ctx context.Context, ns, release, backend string,
 				live.HelmStatus = obj.Status.Helm.Status
 				rev = int(obj.Status.Helm.Revision)
 			}
+		}
+		// A deletionTimestamp or status.phase Deleting is the operator tearing
+		// the release down. Probing workloads would only race that.
+		if !u.GetDeletionTimestamp().IsZero() || live.LLMPhase == llmsvc.PhaseDeleting {
+			live.LLMDeleting = true
+			return live, 0, nil
 		}
 	}
 
@@ -359,6 +369,11 @@ func (s *Server) scaleTo(ctx context.Context, ns, release string, from, want, ex
 		Action:         "autoscale",
 		Note:           fmt.Sprintf("autoscale %d -> %d (decision-gen)", from, want),
 	})
+	// An uninstall that started after Decide stops the tick the same way:
+	// applyLocked refused it under the lock, before anything was applied.
+	if errors.Is(err, errUninstalling) {
+		return 0, errAutoscaleInactive
+	}
 	if err != nil {
 		return 0, err
 	}

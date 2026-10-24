@@ -23,7 +23,7 @@ type Client struct {
 	disco discovery.DiscoveryInterface
 	kube  kubernetes.Interface
 
-	// Interval is how often WaitApplied and WaitGone poll. Zero means one second.
+	// Interval is how often WaitApplied polls. Zero means one second.
 	Interval time.Duration
 }
 
@@ -142,18 +142,6 @@ func (c *Client) WaitApplied(ctx context.Context, ns, name string, generation in
 		return nil, err
 	}
 	return got, nil
-}
-
-// WaitGone returns once the object is NotFound. A finalizer keeps it visible
-// until the operator drops it, so a successful Delete is not yet gone.
-func (c *Client) WaitGone(ctx context.Context, ns, name string) error {
-	return c.poll(ctx, func() (bool, error) {
-		_, err := c.Get(ctx, ns, name)
-		if apierrors.IsNotFound(err) {
-			return true, nil
-		}
-		return false, err
-	})
 }
 
 // ControllerRevisions reads history snapshots by name, in the order given.

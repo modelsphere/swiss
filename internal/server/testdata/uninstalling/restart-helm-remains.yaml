@@ -1,0 +1,19 @@
+kind: helm
+release: glm-53
+namespace: models
+chart: vllm
+steps:
+  - do: uninstall
+    status: 200
+    configMap: true
+  - do: restart
+  - do: list
+    status: 200
+    present: true
+    phase: uninstalling
+    configMap: true
+  - do: dropHelm
+  - do: list
+    status: 200
+    present: false
+    configMap: false
