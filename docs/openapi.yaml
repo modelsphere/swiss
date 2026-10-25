@@ -1974,7 +1974,12 @@ components:
         drift: { type: string, description: "The catalog republished this version and variant under another digest." }
         planStatus:
           type: object
-          description: Helm releases. The last apply as swiss recorded it.
+          description: |
+            The last apply, on either backend. Helm: as swiss recorded it beside
+            the release. llmsvc: read from the LLMService -- `applying` until the
+            operator reports Applied or Failed for its current generation,
+            `uninstalling` while it is deleted; `startedAt`, `updatedAt` and
+            `forced` are not set.
           required: [phase]
           properties:
             phase: { type: string, enum: [applying, applied, failed, uninstalling] }

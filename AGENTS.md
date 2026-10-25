@@ -1,5 +1,9 @@
 # Notes for agents
 
+## Role
+
+swiss is the backend server and cli client, changelog are made from that perspective, UI things left to console, not here.
+
 ## Comments
 
 - Minimal. Only where the *why* cannot be read off the code.

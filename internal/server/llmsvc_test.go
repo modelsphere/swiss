@@ -564,8 +564,8 @@ func TestLLMInstall(t *testing.T) {
 	if st["backend"] != "llmsvc" || asNum(st["revision"]) != 1 || st["helmStatus"] != "deployed" {
 		t.Fatalf("release status %v", st)
 	}
-	if _, ok := st["planStatus"]; ok {
-		t.Fatalf("llmsvc status must not carry status.yaml: %v", st["planStatus"])
+	if ps, _ := st["planStatus"].(map[string]any); ps["phase"] != "applied" || asNum(ps["revision"]) != 1 || ps["action"] != "install" || ps["note"] != "first" {
+		t.Fatalf("planStatus %v", st["planStatus"])
 	}
 	svc := st["llmservice"].(map[string]any)
 	if svc["phase"] != "Applied" || asNum(svc["revision"]) != 1 {
@@ -1076,13 +1076,16 @@ func TestLLMExternalUpgradeRefused(t *testing.T) {
 
 func TestLLMStatusReadsTheService(t *testing.T) {
 	probe := llmProbe()
-	probe.Maps[planRef("models", llmRelease)] = map[string]string{"plan.yaml": "source:\n  model: qwen3.6-35b-a3b\n"}
+	probe.Maps[planRef("models", llmRelease)] = map[string]string{
+		"plan.yaml": "source:\n  model: qwen3.6-35b-a3b\n", statusFile: "phase: applied\nnote: helm's leftover\n",
+	}
 	rig := startRig(t, probe, true, false, backendLLMSVC)
-	u := llmObject("models", llmRelease, map[string]string{llmsvc.AnnProfile: "prod"})
+	u := llmObject("models", llmRelease, map[string]string{llmsvc.AnnProfile: "prod", llmsvc.AnnAction: "install", llmsvc.AnnNote: "first"})
 	u.Object["status"] = map[string]any{
-		"phase":   "Failed",
-		"message": "boom",
-		"helm":    map[string]any{"revision": int64(6), "status": "failed"},
+		"observedGeneration": int64(1),
+		"phase":              "Failed",
+		"message":            "boom",
+		"helm":               map[string]any{"revision": int64(6), "status": "failed"},
 		"conditions": []any{map[string]any{
 			"type": "Applied", "status": "False", "reason": "ChartPull", "message": "boom",
 			"lastTransitionTime": time.Now().UTC().Format(time.RFC3339),
@@ -1098,7 +1101,9 @@ func TestLLMStatusReadsTheService(t *testing.T) {
 	if st["backend"] != "llmsvc" || st["cleanupPending"] != true || asNum(st["revision"]) != 6 || st["helmStatus"] != "failed" {
 		t.Fatalf("status %v", st)
 	}
-	if _, ok := st["planStatus"]; ok {
+	// From the LLMService, never the leftover helm plan's status.yaml.
+	ps, _ := st["planStatus"].(map[string]any)
+	if ps["phase"] != "failed" || ps["error"] != "boom" || asNum(ps["revision"]) != 6 || ps["action"] != "install" || ps["note"] != "first" {
 		t.Fatalf("planStatus %v", st["planStatus"])
 	}
 	if warn, _ := st["warning"].(string); !strings.Contains(warn, "clean-up is unfinished") {
@@ -1111,6 +1116,46 @@ func TestLLMStatusReadsTheService(t *testing.T) {
 	conds, _ := svc["conditions"].([]any)
 	if len(conds) != 1 || conds[0].(map[string]any)["reason"] != "ChartPull" {
 		t.Fatalf("conditions %v", svc["conditions"])
+	}
+}
+
+// planStatus is what the web waits on before opening the SLO editor after an
+// install, so an llmsvc release has to reach applied there too.
+func TestLLMStatusPlanPhase(t *testing.T) {
+	rig := startRig(t, llmProbe(), true, false, backendLLMSVC)
+	cases := []struct {
+		name       string
+		generation int64
+		status     map[string]any
+		want       string
+	}{
+		{"not-observed", 1, nil, "applying"},
+		{"pending", 1, map[string]any{"phase": "Pending"}, "applying"},
+		{"applied", 2, map[string]any{"phase": "Applied", "observedGeneration": int64(2), "helm": map[string]any{"revision": int64(3)}}, "applied"},
+		{"applied-stale", 3, map[string]any{"phase": "Applied", "observedGeneration": int64(2)}, "applying"},
+		{"failed-stale", 3, map[string]any{"phase": "Failed", "observedGeneration": int64(2), "message": "old"}, "applying"},
+		{"deleting", 2, map[string]any{"phase": "Deleting", "observedGeneration": int64(2)}, "uninstalling"},
+	}
+	for _, c := range cases {
+		u := llmObject("models", c.name, nil)
+		u.SetGeneration(c.generation)
+		if c.status != nil {
+			u.Object["status"] = c.status
+		}
+		if _, err := rig.c.Create(t.Context(), u); err != nil {
+			t.Fatal(err)
+		}
+		code, st := get(t, rig.srv, "/api/releases/models/"+c.name+"/status")
+		if code != 200 {
+			t.Fatalf("%s: status %d %v", c.name, code, st)
+		}
+		ps, _ := st["planStatus"].(map[string]any)
+		if ps["phase"] != c.want || ps["error"] != nil {
+			t.Fatalf("%s: planStatus %v, want phase %s", c.name, st["planStatus"], c.want)
+		}
+		if c.name == "applied" && asNum(ps["revision"]) != 3 {
+			t.Fatalf("%s: revision %v", c.name, ps["revision"])
+		}
 	}
 }
 
