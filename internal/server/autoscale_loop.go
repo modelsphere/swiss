@@ -16,7 +16,7 @@ import (
 	"github.com/modelsphere/swiss/internal/values"
 )
 
-const defaultAutoscalePeriod = 30 * time.Second
+const defaultAutoscalePeriod = 60 * time.Second
 
 // runAutoscaler polls decision-gen until ctx is cancelled. The first tick
 // waits one period. A tick never delays shutdown: helm apply detaches, and

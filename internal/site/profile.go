@@ -141,7 +141,7 @@ type Scaler struct {
 	SLOTokenKey    string            `yaml:"sloTokenKey,omitempty" json:"sloTokenKey,omitempty"`
 	ServerHeaders  map[string]string `yaml:"serverHeaders,omitempty" json:"serverHeaders,omitempty"`
 	// AutoscalePeriod is how often swissd asks decision-gen for a PD slice
-	// count. A Go duration. Empty is 30s.
+	// count. A Go duration. Empty is 60s.
 	AutoscalePeriod string `yaml:"autoscalePeriod,omitempty" json:"autoscalePeriod,omitempty"`
 }
 

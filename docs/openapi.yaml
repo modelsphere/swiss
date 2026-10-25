@@ -1534,7 +1534,7 @@ components:
             sloTokenSecret: { type: string }
             sloTokenKey: { type: string }
             serverHeaders: { type: object, additionalProperties: { type: string } }
-            autoscalePeriod: { type: string, description: "How often swissd asks decision-gen for a PD slice count. A Go duration. Empty, invalid, or <= 0 is 30s." }
+            autoscalePeriod: { type: string, description: "How often swissd asks decision-gen for a PD slice count. A Go duration. Empty, invalid, or <= 0 is 60s." }
         defaults:
           type: object
           description: The site's preferences, composed beneath the catalog as the `defaults` layer, so a variant overrides them. Every other section is a site fact, composed above the catalog.

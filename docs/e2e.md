@@ -70,7 +70,7 @@ The node image and kube-proxy mode live in `test/e2e/kind-config.yaml`. `make se
 | `GET /api/releases/{ns}/{release}/objects`, `GET /api/deployments` | the rendered objects are readable; the release is listed under the backend that installed it |
 | `DELETE /api/releases/{ns}/{release}` | pods, the helm release and the LLMService are gone |
 
-The autoscale spec applies the DisaggregatedSet CRD, runs an nginx stub for decision-gen, and points `scaler.serverAddress` and `scaler.autoscalePeriod` (2s) at that Service. It plans a PD release with `sloRequirement.enabled` in the form layer and installs it through helm; autoscaling follows from that plan. The check is the DisaggregatedSet going from 2 slices to 1 and the plan's autoscale layer showing `replicaCount` 1. The first loop wait can still be the process's initial 30s.
+The autoscale spec applies the DisaggregatedSet CRD, runs an nginx stub for decision-gen, and points `scaler.serverAddress` and `scaler.autoscalePeriod` (2s) at that Service. It plans a PD release with `sloRequirement.enabled` in the form layer and installs it through helm; autoscaling follows from that plan. The check is the DisaggregatedSet going from 2 slices to 1 and the plan's autoscale layer showing `replicaCount` 1. The first loop wait can still be the process's initial 60s.
 
 ## Settings
 
