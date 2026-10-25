@@ -1,0 +1,9 @@
+name: helm-on
+description: a PD helm release with the form SLO on queries decision-gen and scales
+backend: helm
+pd: true
+colocate: false
+slo: true
+wantQueries: 1
+wantApplies: 1
+wantReplicas: 2

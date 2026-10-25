@@ -126,7 +126,6 @@ func startRig(t *testing.T, probe cluster.Fake, served, operator bool, applyWith
 		probe.SecretLabels = map[string]map[string]string{}
 	}
 	profileApplyWith(probe, applyWith)
-	initMapVersions(&probe)
 	cfg := testConfig("prod-b300")
 	cfg.Server.AllowDeploy = true
 	cfg.Server.HelmBin = failBin(t, "helm")
@@ -138,7 +137,7 @@ func startRig(t *testing.T, probe cluster.Fake, served, operator bool, applyWith
 	}
 	t.Cleanup(func() { db.Close() })
 	s.SetStore(db)
-	w := &fakeWriter{cm: &probe}
+	w := &fakeWriter{}
 	s.SetWriter(w)
 
 	dyn := newDyn()

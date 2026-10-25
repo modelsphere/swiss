@@ -6,7 +6,6 @@ deletion:
   stage: Uninstalling
   podsRemaining: 2
 seedArchive: true
-seedAutoscale: true
 seedPlanConfigMap: true
 planPhase: uninstalling
 steps:
@@ -20,7 +19,6 @@ steps:
     deletionStage: Uninstalling
     podsRemaining: 2
     configMap: true
-    autoscale: true
     archives: 1
     audits: 0
   - do: status
@@ -31,7 +29,6 @@ steps:
   - do: operatorRelease
   - do: reap
     configMap: false
-    autoscale: false
     archives: 0
     audits: 1
     llmService: false

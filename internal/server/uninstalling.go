@@ -426,15 +426,11 @@ func (s *Server) trackDeletingLLMServices(ctx context.Context, seen map[string]b
 }
 
 // reapRelease drops the plan once helm no longer has the release and no pod
-// matches either selector. The autoscale ConfigMap goes first, at the same
-// point: the autoscaler holds while the release is uninstalling, and its
-// config outlives the release only if that delete fails, which keeps the
-// release listed until a later check removes it. Once helm has dropped the
-// release, archive Secrets are removed even while pods remain, so a restart
-// between the helm uninstall and that delete does not leave them behind. A
-// lookup or list error leaves the release listed; a delete error is retried
-// on the next check. The returned string is the delete error, for the
-// uninstall response.
+// matches either selector. Once helm has dropped the release, archive Secrets
+// are removed even while pods remain, so a restart between the helm uninstall
+// and that delete does not leave them behind. A lookup or list error leaves
+// the release listed; a delete error is retried on the next check. The
+// returned string is the delete error, for the uninstall response.
 func (s *Server) reapRelease(ctx context.Context, ns, release string) string {
 	if s.uninstallInflight(ns, release) {
 		return ""
@@ -485,11 +481,6 @@ func (s *Server) reapRelease(ctx context.Context, ns, release string) string {
 		s.trackUninstalling(ns, release)
 		return ""
 	}
-	if err := s.removeAutoscale(ctx, ns, release); err != nil {
-		s.log.ErrorContext(ctx, "autoscale configmap not removed", "release", release, "err", err)
-		s.trackUninstalling(ns, release)
-		return err.Error()
-	}
 	if err := s.writer.DeleteConfigMap(ctx, ref); err != nil {
 		s.log.ErrorContext(ctx, "plan configmap not removed", "release", release, "err", err)
 		s.trackUninstalling(ns, release)
@@ -536,10 +527,6 @@ func (s *Server) finishLLMGone(ctx context.Context, ns, release string) string {
 		return ""
 	}
 	s.deleteArchives(ctx, ns, release)
-	if err := s.removeAutoscale(ctx, ns, release); err != nil {
-		s.log.ErrorContext(ctx, "autoscale configmap not removed", "release", release, "err", err)
-		return err.Error()
-	}
 	ref := planRef(ns, release)
 	data, err := s.probe.ConfigMap(ctx, ref)
 	if err != nil && !apierrors.IsNotFound(err) {

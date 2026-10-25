@@ -15,9 +15,9 @@ type carryCase struct {
 	Name              string `json:"name"`
 	Description       string `json:"description,omitempty"`
 	Kind              string `json:"kind"`
-	Enabled           *bool  `json:"enabled,omitempty"`
-	HasConfig         *bool  `json:"hasConfig,omitempty"`
+	On                bool   `json:"rule,omitempty"`
 	Overrides         bool   `json:"overrides,omitempty"`
+	SLOOff            bool   `json:"sloOff,omitempty"`
 	LiveAutoscale     *int   `json:"liveAutoscale,omitempty"`
 	ArchivedAutoscale *int   `json:"archivedAutoscale,omitempty"`
 	ArchivedForm      *int   `json:"archivedForm,omitempty"`
@@ -44,6 +44,9 @@ func runUpgradeCarry(t *testing.T, tc carryCase) {
 		Model: "qwen3.6-35b-a3b", Release: "r", ServiceID: "r",
 		Overrides: values.Tree{"replicaCount": 3},
 	})
+	if tc.On {
+		setAutoscaleRule(p)
+	}
 	if tc.LiveAutoscale != nil {
 		if p.Layers == nil {
 			p.Layers = map[string]values.Tree{}
@@ -61,15 +64,18 @@ func runUpgradeCarry(t *testing.T, tc carryCase) {
 	probe.Rel = append(probe.Rel, cluster.Release{
 		Name: "r", Namespace: "models", Status: "deployed", Revision: 3, SwissFiles: files,
 	})
-	if carryHasConfig(tc) {
-		on := tc.Enabled != nil && *tc.Enabled
-		seedAutoscaleCM(&probe, "models", "r", on, 1, 8)
-	}
 	srv, _ := deployServerWith(t, probe, true)
 
 	body := map[string]any{"fromRelease": "r"}
+	overrides := map[string]any{}
 	if tc.Overrides {
-		body["overrides"] = map[string]any{"replicaCount": 5}
+		overrides["replicaCount"] = 5
+	}
+	if tc.SLOOff {
+		overrides["sloRequirement"] = map[string]any{"enabled": false}
+	}
+	if len(overrides) > 0 {
+		body["overrides"] = overrides
 	}
 	code, up := post(t, srv, "/api/plans", body)
 	if code != http.StatusOK {
@@ -127,6 +133,9 @@ func runRollbackCarry(t *testing.T, tc carryCase) {
 	}
 
 	live := clonePlan(base)
+	if tc.On {
+		setAutoscaleRule(live)
+	}
 	if tc.LiveAutoscale != nil {
 		if live.Layers == nil {
 			live.Layers = map[string]values.Tree{}
@@ -149,10 +158,6 @@ func runRollbackCarry(t *testing.T, tc carryCase) {
 	ref := archiveRef("models", "glm-53", 4)
 	probe.Secrets = map[string]map[string]string{ref: archFiles}
 	probe.SecretLabels = map[string]map[string]string{ref: archiveLabels("glm-53", 4)}
-	if carryHasConfig(tc) {
-		on := tc.Enabled != nil && *tc.Enabled
-		seedAutoscaleCM(&probe, "models", "glm-53", on, 1, 8)
-	}
 
 	srv, s := deployServerWith(t, probe, true)
 	s.cfg.Server.HelmBin, s.cfg.Server.HelmfileBin = stubHelm(t, 0), stubHelm(t, 0)
@@ -170,7 +175,7 @@ func runRollbackCarry(t *testing.T, tc carryCase) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	overlay := tc.Enabled != nil && *tc.Enabled && tc.LiveAutoscale != nil
+	overlay := tc.On && tc.LiveAutoscale != nil
 	if overlay {
 		stored, err := s.store.Plan(context.Background(), hash)
 		if err != nil {
@@ -193,11 +198,17 @@ func runRollbackCarry(t *testing.T, tc carryCase) {
 	}
 }
 
-func carryHasConfig(tc carryCase) bool {
-	if tc.HasConfig != nil {
-		return *tc.HasConfig
+func setAutoscaleRule(p *plan.Plan) {
+	if p.Layers == nil {
+		p.Layers = map[string]values.Tree{}
 	}
-	return tc.Enabled != nil
+	form := p.Layers[values.LayerForm]
+	if form == nil {
+		form = values.Tree{}
+		p.Layers[values.LayerForm] = form
+	}
+	form["pd"] = values.Tree{"enabled": true, "colocate": false}
+	form["sloRequirement"] = values.Tree{"enabled": true}
 }
 
 func mustVerify(files map[string]string) error {

@@ -3,8 +3,6 @@ description: an LLMService with a deletionTimestamp holds and is not updated
 backend: llmsvc
 decision: 3
 slices: 1
-min: 1
-max: 4
 revision: 2
 deleting: true
 wantApplies: 0

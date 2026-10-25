@@ -1,14 +1,11 @@
-name: backoff-plan-failed
-description: a plan phase of failed with no recorded autoscale failure holds
-config:
-  enabled: true
-  minSlices: 1
-  maxSlices: 4
-now: "2026-10-23T00:00:00Z"
+name: hold-release-failed-llm
+description: an LLMService phase of Failed holds until an operator applies or rolls back
 live:
-  backend: helm
+  backend: llmsvc
   helmStatus: deployed
-  planPhase: failed
+  llmPhase: Failed
+  llmGeneration: 2
+  llmObservedGeneration: 2
   pd: true
   dsGeneration: 1
   dsObservedGeneration: 1
@@ -38,5 +35,4 @@ wantHold: "release failed"
 wantScale: false
 wantCurrent: 3
 want: 0
-wantFailed: false
 hasDecision: true

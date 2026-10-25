@@ -1,9 +1,5 @@
 name: guard-ds-observed
 description: a DisaggregatedSet whose status lags its generation holds the tick
-config:
-  enabled: true
-  minSlices: 1
-  maxSlices: 4
 live:
   backend: helm
   helmStatus: deployed
@@ -15,9 +11,8 @@ live:
 decision:
   ok: true
   replicas: 2
-wantHold: "disaggregatedset observedGeneration behind"
+wantHold: disaggregatedset observedGeneration behind
 wantScale: false
 wantCurrent: 1
 want: 0
-wantFailed: false
 hasDecision: true

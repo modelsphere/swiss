@@ -1,9 +1,6 @@
 name: scale-down-ds-observed
-description: a scale-down still holds while the DisaggregatedSet observedGeneration is behind
-config:
-  enabled: true
-  minSlices: 1
-  maxSlices: 5
+description: a scale-down still holds while the DisaggregatedSet observedGeneration
+  is behind
 live:
   backend: helm
   helmStatus: deployed
@@ -13,28 +10,27 @@ live:
   dsSlices: 3
   planReplicaCount: 3
   roles:
-    - replicas: 1
-      readyReplicas: 1
-      updatedReplicas: 1
+  - replicas: 1
+    readyReplicas: 1
+    updatedReplicas: 1
   routers:
-    - specReplicas: 1
-      readyReplicas: 1
-      generation: 1
-      observedGeneration: 1
-    - specReplicas: 1
-      readyReplicas: 1
-      generation: 1
-      observedGeneration: 1
-    - specReplicas: 1
-      readyReplicas: 1
-      generation: 1
-      observedGeneration: 1
+  - specReplicas: 1
+    readyReplicas: 1
+    generation: 1
+    observedGeneration: 1
+  - specReplicas: 1
+    readyReplicas: 1
+    generation: 1
+    observedGeneration: 1
+  - specReplicas: 1
+    readyReplicas: 1
+    generation: 1
+    observedGeneration: 1
 decision:
   ok: true
   replicas: 1
-wantHold: "disaggregatedset observedGeneration behind"
+wantHold: disaggregatedset observedGeneration behind
 wantScale: false
 wantCurrent: 3
 want: 0
-wantFailed: false
 hasDecision: true

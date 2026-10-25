@@ -1,0 +1,8 @@
+name: helm-slo-off
+description: a PD helm release whose form SLO is off is not queried
+backend: helm
+pd: true
+colocate: false
+slo: false
+wantQueries: 0
+wantApplies: 0

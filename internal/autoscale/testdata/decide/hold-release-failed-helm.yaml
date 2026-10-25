@@ -1,13 +1,9 @@
-name: backoff-release-failed
-description: a helm failure with no recorded autoscale failure holds
-config:
-  enabled: true
-  minSlices: 1
-  maxSlices: 4
-now: "2026-10-23T00:00:00Z"
+name: hold-release-failed-helm
+description: a helm status of failed holds even when the plan phase is applied
 live:
   backend: helm
   helmStatus: failed
+  planPhase: applied
   pd: true
   dsGeneration: 1
   dsObservedGeneration: 1
@@ -37,5 +33,4 @@ wantHold: "release failed"
 wantScale: false
 wantCurrent: 3
 want: 0
-wantFailed: false
 hasDecision: true

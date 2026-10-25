@@ -1,0 +1,7 @@
+name: helm-slo-absent
+description: a PD helm release with no form SLO key is not queried
+backend: helm
+pd: true
+colocate: false
+wantQueries: 0
+wantApplies: 0

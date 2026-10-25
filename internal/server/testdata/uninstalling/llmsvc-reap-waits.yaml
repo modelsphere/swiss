@@ -5,7 +5,6 @@ deleting: false
 finalizer: true
 operatorPhase: Deleting
 seedArchive: true
-seedAutoscale: true
 deletion:
   stage: PodsTerminating
   podsRemaining: 2
@@ -18,7 +17,6 @@ steps:
     audits: 1
   - do: reap
     llmService: true
-    autoscale: true
     archives: 1
     audits: 1
   - do: list
@@ -39,7 +37,6 @@ steps:
   - do: operatorRelease
   - do: reap
     llmService: false
-    autoscale: false
     archives: 0
     audits: 2
   - do: list

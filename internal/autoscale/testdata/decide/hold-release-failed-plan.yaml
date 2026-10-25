@@ -1,18 +1,9 @@
-name: backoff-helm-failed
-description: a helm failure recorded by autoscale waits out its backoff
-config:
-  enabled: true
-  minSlices: 1
-  maxSlices: 4
-now: "2026-10-23T00:00:00Z"
-status:
-  lastFailedWant: 1
-  lastFailedAt: "2026-10-23T00:00:00Z"
-  failures: 1
-  retryAfter: "2026-10-23T00:01:00Z"
+name: hold-release-failed-plan
+description: a plan phase of failed holds until an operator applies or rolls back
 live:
   backend: helm
-  helmStatus: failed
+  helmStatus: deployed
+  planPhase: failed
   pd: true
   dsGeneration: 1
   dsObservedGeneration: 1
@@ -38,13 +29,8 @@ live:
 decision:
   ok: true
   replicas: 1
-wantHold: "backing off"
+wantHold: "release failed"
 wantScale: false
 wantCurrent: 3
 want: 0
-wantFailed: false
 hasDecision: true
-wantFailures: 1
-wantRetryAfter: "2026-10-23T00:01:00Z"
-wantLastFailedAt: "2026-10-23T00:00:00Z"
-wantLastFailedWant: 1

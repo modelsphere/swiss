@@ -1,9 +1,7 @@
 name: rollback-enabled-no-live-layer
-description: rollback while enabled leaves an archive alone when the live plan has no autoscale layer
+description: rollback while autoscaling leaves an archive alone when the live plan has no autoscale layer
 kind: rollback
-enabled: true
-hasConfig: true
+rule: true
 archivedAutoscale: 2
 archivedForm: 1
-wantLayer: true
-wantReplicaCount: 2
+wantLayer: false

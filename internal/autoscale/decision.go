@@ -3,6 +3,7 @@ package autoscale
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -11,6 +12,10 @@ import (
 	"strings"
 	"time"
 )
+
+// ErrNoDecision is a 200 whose decisions contain no row for this service.
+// The SLO may have no maximumDeployment; that is decision-gen's business.
+var ErrNoDecision = errors.New("no decision")
 
 const decisionsAPIVersion = "llmscaling.inference.x-k8s.io/v1alpha1"
 
@@ -93,8 +98,8 @@ func ParseDecisions(body []byte, namespace, serviceID string) (int, error) {
 	switch len(matches) {
 	case 1:
 	case 0:
-		return 0, fmt.Errorf("no decision for serviceId %q in namespace %q among the %d returned",
-			serviceID, namespace, len(decoded.Decisions))
+		return 0, fmt.Errorf("%w for serviceId %q in namespace %q among the %d returned",
+			ErrNoDecision, serviceID, namespace, len(decoded.Decisions))
 	default:
 		return 0, fmt.Errorf("%d decisions match serviceId %q in namespace %q, expected 1",
 			len(matches), serviceID, namespace)

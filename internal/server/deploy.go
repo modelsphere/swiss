@@ -72,8 +72,9 @@ type planRequest struct {
 	// Set by carryForward, never by the caller.
 	runningChart plan.ChartRef
 	movedFrom    *plan.Plan
-	// autoscale is the live replicaCount layer, copied while autoscaling is
-	// enabled. Unexported so a request body cannot set it.
+	// autoscale is the live replicaCount layer, copied while the previous plan
+	// is autoscaling and the new form keeps the rule. Unexported so a request
+	// body cannot set it.
 	autoscale values.Tree
 }
 
@@ -302,7 +303,7 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 		if edits := prev.Layers[values.LayerEdit]; len(edits) > 0 {
 			out.EditsYAML = mustYAML(edits)
 		}
-		return s.withAutoscale(ctx, prev, out)
+		return s.withAutoscale(prev, out), nil
 	}
 	values.Merge(out.Overrides, req.Overrides, values.LayerForm, nil)
 	out.EditsYAML = req.EditsYAML
@@ -323,29 +324,22 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 		out.GPUProducts = req.GPUProducts
 		out.ForceGPUProducts = req.ForceGPUProducts
 	}
-	return s.withAutoscale(ctx, prev, out)
+	return s.withAutoscale(prev, out), nil
 }
 
-// withAutoscale copies the live autoscale layer onto an upgrade while that
-// release has autoscaling enabled. Otherwise the layer is left behind and
-// replicaCount falls back to form and edit.
-func (s *Server) withAutoscale(ctx context.Context, prev *plan.Plan, out planRequest) (planRequest, error) {
-	if prev == nil {
-		return out, nil
+// withAutoscale copies the live autoscale layer onto an upgrade while the
+// previous plan is autoscaling and the new form keeps the rule. Otherwise the
+// layer is left behind and replicaCount falls back to form and edit.
+func (s *Server) withAutoscale(prev *plan.Plan, out planRequest) planRequest {
+	if prev == nil || !autoscaleOn(prev) {
+		return out
 	}
 	layer := prev.Layers[values.LayerAutoscale]
-	if len(layer) == 0 {
-		return out, nil
-	}
-	on, err := s.autoscalingEnabled(ctx, prev.Release.Namespace, prev.Release.Name)
-	if err != nil {
-		return planRequest{}, err
-	}
-	if !on {
-		return out, nil
+	if len(layer) == 0 || !formKeepsAutoscale(out.Overrides) {
+		return out
 	}
 	out.autoscale = cloneTree(layer)
-	return out, nil
+	return out
 }
 
 // checkMove refuses a cross-catalog upgrade that would put another model, or the

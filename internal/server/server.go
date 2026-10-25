@@ -440,11 +440,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/releases/{namespace}/{release}/slo", s.handleSLO)
 	mux.HandleFunc("PUT /api/releases/{namespace}/{release}/slo", s.handleSLO)
 	mux.HandleFunc("DELETE /api/releases/{namespace}/{release}/slo", s.handleSLO)
-	// Same gate as /slo: registered either way, PUT and DELETE refuse inside
-	// the handler when deploys are off. GET is a read.
-	mux.HandleFunc("GET /api/releases/{namespace}/{release}/autoscaling", s.handleAutoscaling)
-	mux.HandleFunc("PUT /api/releases/{namespace}/{release}/autoscaling", s.handleAutoscaling)
-	mux.HandleFunc("DELETE /api/releases/{namespace}/{release}/autoscaling", s.handleAutoscaling)
 
 	if s.cfg.Server.AllowDeploy {
 		mux.HandleFunc("POST /api/plans", s.handlePlan)

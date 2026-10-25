@@ -1,4 +1,4 @@
 name: uninstall-llmsvc
-description: uninstall of an llmsvc release with no autoscale ConfigMap writes none and reports no plan error
+description: uninstall of an llmsvc release reports no plan error
 kind: uninstall
 backend: llmsvc

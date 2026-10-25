@@ -17,7 +17,6 @@ import (
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -115,6 +114,7 @@ http {
 		var planned plan.Plan
 		api.must(http.MethodPost, "/api/plans", planBody{
 			Model: cfg.model, Release: e2ePDRelease, Namespace: ns, ServiceID: e2ePDRelease,
+			Overrides: map[string]any{"sloRequirement": map[string]any{"enabled": true}},
 			EditsYAML: pdEdits(e2ePDRelease),
 		}, &planned, apiTimeout)
 		Expect(planned.Hash).NotTo(BeEmpty())
@@ -155,49 +155,29 @@ http {
 			g.Expect(dep.Status.AvailableReplicas).To(BeNumerically(">=", 1))
 		}).WithTimeout(4 * time.Minute).WithPolling(2 * time.Second).Should(Succeed())
 
-		api.must(http.MethodPut, releasePath(e2ePDRelease)+"/autoscaling", map[string]any{
-			"enabled": true, "minSlices": 1, "maxSlices": 4,
-		}, nil, apiTimeout)
-		DeferCleanup(func() {
-			_ = api.call(http.MethodDelete, releasePath(e2ePDRelease)+"/autoscaling", nil, nil, apiTimeout)
-		})
-
 		By("scaling 2 to 1")
-		var view autoscaleBody
 		Eventually(func(g Gomega) {
 			obj, err := dynClient.Resource(dsGVR).Namespace(ns).Get(context.Background(), e2ePDRelease, metav1.GetOptions{})
 			g.Expect(err).NotTo(HaveOccurred())
 			slices, _, err := unstructured.NestedInt64(obj.Object, "spec", "slices")
 			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(api.call(http.MethodGet, releasePath(e2ePDRelease)+"/autoscaling", nil, &view, apiTimeout)).To(Succeed())
 			var st releaseStatusBody
 			g.Expect(api.call(http.MethodGet, releasePath(e2ePDRelease)+"/status", nil, &st, apiTimeout)).To(Succeed())
 			var cur plan.Plan
 			g.Expect(api.call(http.MethodGet, releasePath(e2ePDRelease)+"/plan", nil, &cur, apiTimeout)).To(Succeed())
-			g.Expect(slices).To(Equal(int64(1)), "hold=%s err=%s decision=%v helm=%s rev=%d autoscale=%v",
-				view.Status.HoldReason, view.Status.LastError, view.Status.LastDecision, st.HelmStatus, st.Revision, cur.Layers["autoscale"])
-			g.Expect(st.Revision).To(BeNumerically(">", installed.Revision))
-			g.Expect(view.Status.LastScaleFrom).NotTo(BeNil())
-			g.Expect(*view.Status.LastScaleFrom).To(Equal(2))
-			g.Expect(view.Status.LastScaleTo).NotTo(BeNil())
-			g.Expect(*view.Status.LastScaleTo).To(Equal(1))
 			layer := cur.Layers["autoscale"]
+			g.Expect(slices).To(Equal(int64(1)), "helm=%s rev=%d autoscale=%v", st.HelmStatus, st.Revision, layer)
+			g.Expect(st.Revision).To(BeNumerically(">", installed.Revision))
 			g.Expect(layer).NotTo(BeNil())
 			g.Expect(layer["replicaCount"]).To(BeNumerically("==", 1))
 		}).WithTimeout(10 * time.Minute).WithPolling(5 * time.Second).Should(Succeed())
-		_, _ = fmt.Fprintf(GinkgoWriter, "scaled hold=%q err=%q from=%d to=%d\n", view.Status.HoldReason, view.Status.LastError, *view.Status.LastScaleFrom, *view.Status.LastScaleTo)
 		markDSCurrent(ns, e2ePDRelease)
 
-		By("deleting autoscaling and uninstalling")
-		api.must(http.MethodDelete, releasePath(e2ePDRelease)+"/autoscaling", nil, nil, apiTimeout)
+		By("uninstalling")
 		var removed uninstallResult
 		api.must(http.MethodDelete, releasePath(e2ePDRelease), nil, &removed, installTimeout)
 		Expect(removed.Release).To(Equal(e2ePDRelease))
 		Expect(removed.PlanError).To(BeEmpty())
-		Eventually(func() bool {
-			_, err := kube.CoreV1().ConfigMaps(ns).Get(context.Background(), "swiss-autoscale-"+e2ePDRelease, metav1.GetOptions{})
-			return apierrors.IsNotFound(err)
-		}).WithTimeout(2 * time.Minute).WithPolling(2 * time.Second).Should(BeTrue())
 	})
 })
 
@@ -229,20 +209,12 @@ modelRoute:
   enabled: false
 cart:
   enabled: false
-sloRequirement:
-  enabled: false
 serviceMonitor:
   enabled: false
 `, release, release)
 }
 
 func dumpAutoscale(ns, release string) {
-	var view autoscaleBody
-	if err := api.call(http.MethodGet, releasePath(release)+"/autoscaling", nil, &view, apiTimeout); err != nil {
-		_, _ = fmt.Fprintf(GinkgoWriter, "autoscaling: %v\n", err)
-	} else {
-		_, _ = fmt.Fprintf(GinkgoWriter, "autoscaling found=%v status=%+v\n", view.Found, view.Status)
-	}
 	var st releaseStatusBody
 	if err := api.call(http.MethodGet, releasePath(release)+"/status", nil, &st, apiTimeout); err != nil {
 		_, _ = fmt.Fprintf(GinkgoWriter, "status: %v\n", err)
@@ -270,17 +242,6 @@ func dumpAutoscale(ns, release string) {
 	slices, _, _ := unstructured.NestedInt64(obj.Object, "spec", "slices")
 	obs, _, _ := unstructured.NestedInt64(obj.Object, "status", "observedGeneration")
 	_, _ = fmt.Fprintf(GinkgoWriter, "ds generation=%d observed=%d slices=%d\n", obj.GetGeneration(), obs, slices)
-}
-
-type autoscaleBody struct {
-	Found  bool `json:"found"`
-	Status struct {
-		LastDecision  *int   `json:"lastDecision"`
-		HoldReason    string `json:"holdReason"`
-		LastError     string `json:"lastError"`
-		LastScaleFrom *int   `json:"lastScaleFrom"`
-		LastScaleTo   *int   `json:"lastScaleTo"`
-	} `json:"status"`
 }
 
 // markDSCurrent sets observedGeneration to the live generation and leaves the
