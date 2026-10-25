@@ -246,6 +246,16 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 	if err != nil {
 		return nil, err
 	}
+	// The carried layer belongs only on a plan that is itself autoscaling. An
+	// upgrade can leave PD through its edits or a non-PD variant, which the
+	// form alone does not show; left in place, the layer would win over the
+	// operator's replicaCount on a plan the loop never touches.
+	if _, ok := p.Layers[values.LayerAutoscale]; ok && !autoscaleOn(p) {
+		delete(p.Layers, values.LayerAutoscale)
+		if err := p.ComputeHash(); err != nil {
+			return nil, err
+		}
+	}
 	p.Warnings = warnings
 	return p, nil
 }
@@ -328,14 +338,14 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 }
 
 // withAutoscale copies the live autoscale layer onto an upgrade while the
-// previous plan is autoscaling and the new form keeps the rule. Otherwise the
-// layer is left behind and replicaCount falls back to form and edit.
+// previous plan is autoscaling. Compose drops it again when the plan it builds
+// is not autoscaling, so replicaCount falls back to form and edit.
 func (s *Server) withAutoscale(prev *plan.Plan, out planRequest) planRequest {
 	if prev == nil || !autoscaleOn(prev) {
 		return out
 	}
 	layer := prev.Layers[values.LayerAutoscale]
-	if len(layer) == 0 || !formKeepsAutoscale(out.Overrides) {
+	if len(layer) == 0 {
 		return out
 	}
 	out.autoscale = cloneTree(layer)

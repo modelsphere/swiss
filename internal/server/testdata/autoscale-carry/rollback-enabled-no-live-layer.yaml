@@ -5,3 +5,4 @@ rule: true
 archivedAutoscale: 2
 archivedForm: 1
 wantLayer: false
+archivedRule: true

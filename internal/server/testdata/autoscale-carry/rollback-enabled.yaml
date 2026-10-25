@@ -6,3 +6,4 @@ liveAutoscale: 4
 archivedForm: 1
 wantLayer: true
 wantReplicaCount: 4
+archivedRule: true

@@ -18,6 +18,8 @@ type carryCase struct {
 	On                bool   `json:"rule,omitempty"`
 	Overrides         bool   `json:"overrides,omitempty"`
 	SLOOff            bool   `json:"sloOff,omitempty"`
+	Edits             string `json:"edits,omitempty"`
+	ArchivedRule      bool   `json:"archivedRule,omitempty"`
 	LiveAutoscale     *int   `json:"liveAutoscale,omitempty"`
 	ArchivedAutoscale *int   `json:"archivedAutoscale,omitempty"`
 	ArchivedForm      *int   `json:"archivedForm,omitempty"`
@@ -77,6 +79,9 @@ func runUpgradeCarry(t *testing.T, tc carryCase) {
 	if len(overrides) > 0 {
 		body["overrides"] = overrides
 	}
+	if tc.Edits != "" {
+		body["editsYAML"] = tc.Edits
+	}
 	code, up := post(t, srv, "/api/plans", body)
 	if code != http.StatusOK {
 		t.Fatalf("status %d: %v", code, up)
@@ -115,6 +120,9 @@ func runRollbackCarry(t *testing.T, tc carryCase) {
 		t.Fatal(err)
 	}
 	arch := clonePlan(base)
+	if tc.ArchivedRule {
+		setAutoscaleRule(arch)
+	}
 	if tc.ArchivedAutoscale != nil {
 		if arch.Layers == nil {
 			arch.Layers = map[string]values.Tree{}
@@ -175,7 +183,7 @@ func runRollbackCarry(t *testing.T, tc carryCase) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	overlay := tc.On && tc.LiveAutoscale != nil
+	overlay := tc.On && tc.ArchivedRule && tc.LiveAutoscale != nil
 	if overlay {
 		stored, err := s.store.Plan(context.Background(), hash)
 		if err != nil {

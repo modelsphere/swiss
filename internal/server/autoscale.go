@@ -25,21 +25,6 @@ func formSLO(p *plan.Plan) bool {
 	return ok && on
 }
 
-// formKeepsAutoscale reports whether an upgrade's form still has the rule on.
-// A key the request does not set stays as the previous form left it.
-func formKeepsAutoscale(form values.Tree) bool {
-	if on, ok := formBool(form, "sloRequirement.enabled"); ok && !on {
-		return false
-	}
-	if on, ok := formBool(form, "pd.enabled"); ok && !on {
-		return false
-	}
-	if col, ok := formBool(form, "pd.colocate"); ok && col {
-		return false
-	}
-	return true
-}
-
 func formBool(form values.Tree, path string) (bool, bool) {
 	v, ok := values.Get(form, path)
 	if !ok {
@@ -53,8 +38,8 @@ func formBool(form values.Tree, path string) (bool, bool) {
 }
 
 // overlayAutoscale puts the live autoscale layer onto an archived plan while
-// the live plan is autoscaling, then recomputes the hash. No live layer leaves
-// the archive as stored.
+// both the live plan and the archived target are autoscaling, then recomputes
+// the hash. Otherwise the archive is applied as stored.
 func (s *Server) overlayAutoscale(ctx context.Context, ns, release string, p *plan.Plan) error {
 	if p == nil {
 		return nil
@@ -75,6 +60,11 @@ func (s *Server) overlayAutoscale(ctx context.Context, ns, release string, p *pl
 		cp[k] = v
 	}
 	cp[values.LayerAutoscale] = cloneTree(layer)
+	target := *p
+	target.Layers = cp
+	if !autoscaleOn(&target) {
+		return nil
+	}
 	p.Layers = cp
 	if err := p.ComputeHash(); err != nil {
 		return failErr(http.StatusInternalServerError, err)
