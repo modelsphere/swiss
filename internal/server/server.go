@@ -86,6 +86,11 @@ type Server struct {
 	// decisionHTTP is the client for decision-gen. Nil uses a 5s timeout.
 	decisionHTTP *http.Client
 
+	// asState is the last autoscaler pass per namespace/release. In memory,
+	// rebuilt by the loop, lost on restart.
+	asMu    sync.Mutex
+	asState map[string]autoscaleState
+
 	// now is the clock stuck-terminating pods are judged against. New installs
 	// time.Now; tests replace it.
 	now func() time.Time
@@ -115,6 +120,7 @@ func New(cfg *config.Config, probe cluster.Probe, log *slog.Logger, version stri
 		catCache:  catalog.NewCache(cfg.Server.CatalogCacheDir()),
 		cats:      map[string]openCatalog{},
 		charts:    map[string]chartListing{},
+		asState:   map[string]autoscaleState{},
 		now:       time.Now,
 	}
 }
@@ -440,6 +446,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/releases/{namespace}/{release}/slo", s.handleSLO)
 	mux.HandleFunc("PUT /api/releases/{namespace}/{release}/slo", s.handleSLO)
 	mux.HandleFunc("DELETE /api/releases/{namespace}/{release}/slo", s.handleSLO)
+	// Last autoscaler pass. Memory only. Not behind allowDeploy: it writes nothing.
+	mux.HandleFunc("GET /api/autoscaling", s.handleAutoscalingList)
+	mux.HandleFunc("GET /api/releases/{namespace}/{release}/autoscaling", s.handleAutoscaling)
 
 	if s.cfg.Server.AllowDeploy {
 		mux.HandleFunc("POST /api/plans", s.handlePlan)

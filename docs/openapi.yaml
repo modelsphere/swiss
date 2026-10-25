@@ -107,6 +107,8 @@ tags:
     description: Releases swiss manages, by namespace and name.
   - name: slo
     description: The release's LLMSLORequirement, through the SLO server.
+  - name: autoscaling
+    description: PD autoscaling state from the loop, read-only.
   - name: runs
     description: The operation log in swissd's database.
   - name: secrets
@@ -779,6 +781,22 @@ paths:
         "502": { $ref: "#/components/responses/BadGateway" }
         "503": { $ref: "#/components/responses/Unavailable" }
 
+  /api/autoscaling:
+    get:
+      tags: [autoscaling]
+      summary: Last autoscaler pass for every release
+      description: |
+        In-memory state from swissd's loop. Only releases it is scaling are
+        listed. Lost on restart.
+      operationId: listAutoscaling
+      responses:
+        "200":
+          description: The passes, sorted by namespace and release.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AutoscaleStateList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   /api/deployments:
     get:
       tags: [releases]
@@ -895,6 +913,28 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ReleaseStatus" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
+  /api/releases/{namespace}/{release}/autoscaling:
+    get:
+      tags: [autoscaling]
+      summary: Last autoscaler pass for one release
+      description: |
+        The loop's last pass when it has one. Otherwise the plan: `enabled` is
+        the PD and form-SLO gate, `current` is the plan replicaCount, and there
+        is no outcome. A release swiss does not manage is 404.
+      operationId: getAutoscaling
+      parameters:
+        - $ref: "#/components/parameters/namespace"
+        - $ref: "#/components/parameters/release"
+      responses:
+        "200":
+          description: The pass, or the plan's gate when the loop has not recorded one.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AutoscaleState" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
         "502": { $ref: "#/components/responses/BadGateway" }
 
   /api/releases/{namespace}/{release}/objects:
@@ -2095,3 +2135,32 @@ components:
         revision: { type: integer, description: "0 when the operation left none." }
         startedAt: { type: string, format: date-time }
         endedAt: { type: string, format: date-time }
+
+    AutoscaleState:
+      type: object
+      description: One release's autoscaler pass. In memory, rebuilt by the loop, lost on restart.
+      required: [namespace, release, enabled, current]
+      properties:
+        namespace: { type: string }
+        release: { type: string }
+        enabled: { type: boolean, description: "True when the plan is disaggregated and the form SLO is on." }
+        current: { type: integer, description: "Replicas the loop saw. A cold read is the plan's replicaCount." }
+        want: { type: integer, description: "The count Decide would apply. Omitted on a hold, or before a pass." }
+        decision: { type: integer, description: "decision-gen's count, before the safety clamp." }
+        noDecision: { type: boolean, description: "decision-gen returned no row for this service." }
+        outcome:
+          type: string
+          enum: [scaled-up, scaled-down, unchanged, no-decision, held, error]
+          description: Omitted when this process has not evaluated the release.
+        hold: { type: string, description: "Why Decide refused to scale." }
+        error: { type: string }
+        lastEvaluated: { type: string, format: date-time }
+        lastScaled: { type: string, format: date-time, description: "When this process applied a scale. Kept across later passes." }
+
+    AutoscaleStateList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/AutoscaleState" }

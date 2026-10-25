@@ -56,55 +56,125 @@ func (s *Server) autoscaleTick(ctx context.Context) {
 		s.log.WarnContext(ctx, "autoscale list", "err", err)
 		return
 	}
+	seen := make(map[string]bool, len(refs))
 	for _, ref := range refs {
-		s.autoscaleOne(ctx, ref.Namespace, ref.Name)
+		if s.autoscaleOne(ctx, ref.Namespace, ref.Name) {
+			seen[autoscaleKey(ref.Namespace, ref.Name)] = true
+		}
 	}
+	// Releases this pass did not mark are no longer autoscaling.
+	s.pruneAutoscale(seen)
 }
 
-func (s *Server) autoscaleOne(ctx context.Context, ns, release string) {
+// autoscaleOne reports whether this release stays in the pass. False drops it.
+// A read that fails before the plan is known keeps the previous entry.
+func (s *Server) autoscaleOne(ctx context.Context, ns, release string) bool {
 	b, _, err := s.backendFor(ctx, ns, release)
 	if err != nil {
 		s.log.WarnContext(ctx, "autoscale", "release", release, "err", err)
-		return
+		s.noteAutoscaleError(ns, release, err)
+		return true
 	}
 	if b == nil {
-		return
+		return false
 	}
 	p, err := b.Current(ctx, ns, release)
 	if err != nil {
 		s.log.WarnContext(ctx, "autoscale", "release", release, "err", err)
-		return
+		s.noteAutoscaleError(ns, release, err)
+		return true
 	}
 	if !autoscaleOn(p) {
-		return
+		return false
 	}
+	st := autoscaleState{Namespace: ns, Release: release, Enabled: true, Current: planReplicaCount(p)}
 	live, rev, err := s.autoscaleLive(ctx, ns, release, b.Name(), p)
 	if err != nil {
 		s.log.WarnContext(ctx, "autoscale", "release", release, "err", err)
-		return
+		st.Outcome = outcomeError
+		st.Error = err.Error()
+		s.recordAutoscale(st)
+		return true
 	}
+	st.Current = liveReplicaCount(live)
 	d, err := s.queryDecision(ctx, ns, autoscaleServiceID(p))
 	if err != nil {
 		if errors.Is(err, autoscale.ErrNoDecision) {
 			s.log.DebugContext(ctx, "autoscale", "release", release, "err", err)
-			return
+			st.Outcome = outcomeNoDecision
+			st.NoDecision = true
+			s.recordAutoscale(st)
+			return true
 		}
 		s.log.WarnContext(ctx, "autoscale", "release", release, "err", err)
-		return
+		st.Outcome = outcomeError
+		st.Error = err.Error()
+		s.recordAutoscale(st)
+		return true
 	}
 	res := autoscale.Decide(live, d)
+	st.Current = res.Current
+	st.Decision = res.Decision
 	if !res.Scale {
 		if res.HoldReason != "" {
 			s.log.DebugContext(ctx, "autoscale hold", "release", release, "hold", res.HoldReason)
+			st.Outcome = outcomeHeld
+			st.Hold = res.HoldReason
+			s.recordAutoscale(st)
+			return true
 		}
-		return
+		want := res.Want
+		st.Want = &want
+		st.Outcome = outcomeUnchanged
+		s.recordAutoscale(st)
+		return true
 	}
+	want := res.Want
+	st.Want = &want
 	if _, scaleErr := s.scaleTo(ctx, ns, release, res.Current, res.Want, rev); scaleErr != nil {
 		if errors.Is(scaleErr, errAutoscaleInactive) {
-			return
+			s.dropAutoscale(autoscaleKey(ns, release))
+			return false
 		}
 		s.log.WarnContext(ctx, "autoscale", "release", release, "err", scaleErr)
+		st.Outcome = outcomeError
+		st.Error = scaleErr.Error()
+		s.recordAutoscale(st)
+		return true
 	}
+	st.Outcome = outcomeScaledDown
+	if res.Want > res.Current {
+		st.Outcome = outcomeScaledUp
+	}
+	now := s.clock()
+	st.LastScaled = &now
+	s.recordAutoscale(st)
+	return true
+}
+
+// noteAutoscaleError marks a failed read on the entry this process already
+// has. A release with no entry yet is left absent; the caller still counts
+// the key as seen so a transient error does not prune it once it exists.
+func (s *Server) noteAutoscaleError(ns, release string, err error) {
+	st, ok := s.autoscaleStateOf(ns, release)
+	if !ok {
+		return
+	}
+	st.Outcome = outcomeError
+	st.Error = err.Error()
+	s.recordAutoscale(st)
+}
+
+// liveReplicaCount is the count the loop saw: DisaggregatedSet slices when
+// set, otherwise the plan's replicaCount.
+func liveReplicaCount(live autoscale.Live) int {
+	if live.DSSlices != nil && *live.DSSlices >= 0 {
+		return *live.DSSlices
+	}
+	if live.PlanReplicaCount < 0 {
+		return 0
+	}
+	return live.PlanReplicaCount
 }
 
 func (s *Server) queryDecision(ctx context.Context, ns, serviceID string) (autoscale.Decision, error) {
