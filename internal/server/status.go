@@ -46,10 +46,11 @@ type releaseStatus struct {
 	// release runs, under a different entry digest. A warning: upgrade is
 	// still accepted. Computed here, for one release, and not on the list.
 	Drift string `json:"drift,omitempty"`
-	// Plan is the status key written beside a helm release on every apply. It is
-	// the only thing that can say an apply was started and never finished --
-	// helm's own status describes the last apply that returned. An llmsvc
-	// release reports Service instead.
+	// Plan is the last apply, whichever backend ran it. On helm it is the status
+	// key written beside the release on every apply, the only thing that can say
+	// an apply was started and never finished -- helm's own status describes the
+	// last apply that returned. On llmsvc it is read from the LLMService
+	// (llmPlanStatus); Service carries the operator's own words.
 	Plan *planStatus `json:"planStatus,omitempty"`
 	// Backend is helm or llmsvc when swiss manages the release.
 	Backend        string         `json:"backend,omitempty"`
@@ -154,6 +155,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			}
 			out.Service.Phase = phaseUninstalling
 		}
+		out.Plan = llmPlanStatus(u, obj)
 		if decoded, err := llmsvc.ToPlan(u); err == nil {
 			p = decoded
 		}
@@ -198,10 +200,39 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			out.Ready++
 		}
 	}
-	if (out.Plan != nil && out.Plan.Phase == phaseUninstalling) || s.llmUninstalling(ns, release) {
+	// An llmsvc Plan is derived, not the helm plan's record: llmUninstalling is its trigger.
+	helmUninstalling := out.Backend != backendLLMSVC && out.Plan != nil && out.Plan.Phase == phaseUninstalling
+	if helmUninstalling || s.llmUninstalling(ns, release) {
 		s.reapRelease(ctx, ns, release)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// llmPlanStatus is planStatus for an llmsvc release, in helm's phases, so a
+// client asks one field whether the last apply finished. A status the operator
+// wrote for an older generation describes the apply before this one.
+func llmPlanStatus(u *unstructured.Unstructured, obj *llmsvc.LLMService) *planStatus {
+	if obj == nil && !llmDeleting(u, nil) {
+		return nil
+	}
+	ann := u.GetAnnotations()
+	st := &planStatus{Action: ann[llmsvc.AnnAction], Note: ann[llmsvc.AnnNote]}
+	switch {
+	case llmDeleting(u, obj):
+		st.Phase = phaseUninstalling
+	case obj.Status == nil || obj.Status.ObservedGeneration < u.GetGeneration():
+		st.Phase = phaseApplying
+	case obj.Status.Phase == llmsvc.PhaseApplied:
+		st.Phase = phaseApplied
+	case obj.Status.Phase == llmsvc.PhaseFailed:
+		st.Phase, st.Error = phaseFailed, obj.Status.Message
+	default:
+		st.Phase = phaseApplying
+	}
+	if obj != nil && obj.Status != nil && obj.Status.Helm != nil {
+		st.Revision = int(obj.Status.Helm.Revision)
+	}
+	return st
 }
 
 func llmStatusFrom(st *llmsvc.Status) *llmStatusView {
