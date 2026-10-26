@@ -108,7 +108,7 @@ tags:
   - name: slo
     description: The release's LLMSLORequirement, through the SLO server.
   - name: autoscaling
-    description: PD autoscaling state from the loop, read-only.
+    description: PD autoscaling state from the loop, read-only. Temporary, for PD mode autoscaling only; will be removed in a future release.
   - name: runs
     description: The operation log in swissd's database.
   - name: secrets
@@ -786,6 +786,9 @@ paths:
       tags: [autoscaling]
       summary: Last autoscaler pass for every release
       description: |
+        Temporary API for PD mode autoscaling only. It will be removed in a
+        future release.
+
         In-memory state from swissd's loop. Only releases it is scaling are
         listed. Lost on restart.
       operationId: listAutoscaling
@@ -920,6 +923,9 @@ paths:
       tags: [autoscaling]
       summary: Last autoscaler pass for one release
       description: |
+        Temporary API for PD mode autoscaling only. It will be removed in a
+        future release.
+
         The loop's last pass when it has one. Otherwise the plan: `enabled` is
         the PD and form-SLO gate, `current` is the plan replicaCount, and there
         is no outcome. A release swiss does not manage is 404.
