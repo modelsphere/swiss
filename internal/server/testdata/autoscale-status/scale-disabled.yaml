@@ -1,8 +1,0 @@
-name: scale-disabled
-description: config disabled between decide and scale is not applied
-kind: scale
-mutate: disable
-wantApplies: 0
-wantReads: 2
-wantEnabled: false
-wantPresent: true

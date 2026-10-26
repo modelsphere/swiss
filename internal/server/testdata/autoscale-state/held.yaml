@@ -1,0 +1,12 @@
+name: held
+description: a pending helm upgrade is held
+decision: 2
+helmStatus: pending-upgrade
+slo: true
+pd: true
+wantOutcome: held
+wantHold: helm pending
+wantCurrent: 1
+wantEnabled: true
+wantList:
+  - pd

@@ -469,11 +469,12 @@ type clusterBody struct {
 }
 
 type planBody struct {
-	Model     string `json:"model"`
-	Release   string `json:"release"`
-	Namespace string `json:"namespace"`
-	ServiceID string `json:"serviceId"`
-	EditsYAML string `json:"editsYAML,omitempty"`
+	Model     string         `json:"model"`
+	Release   string         `json:"release"`
+	Namespace string         `json:"namespace"`
+	ServiceID string         `json:"serviceId"`
+	EditsYAML string         `json:"editsYAML,omitempty"`
+	Overrides map[string]any `json:"overrides,omitempty"`
 }
 
 type installBody struct {

@@ -108,7 +108,7 @@ tags:
   - name: slo
     description: The release's LLMSLORequirement, through the SLO server.
   - name: autoscaling
-    description: Prefill/decode slice bounds for one release. The loop in swissd applies them.
+    description: PD autoscaling state from the loop, read-only. Temporary, for PD mode autoscaling only; will be removed in a future release.
   - name: runs
     description: The operation log in swissd's database.
   - name: secrets
@@ -781,6 +781,25 @@ paths:
         "502": { $ref: "#/components/responses/BadGateway" }
         "503": { $ref: "#/components/responses/Unavailable" }
 
+  /api/autoscaling:
+    get:
+      tags: [autoscaling]
+      summary: Last autoscaler pass for every release
+      description: |
+        Temporary API for PD mode autoscaling only. It will be removed in a
+        future release.
+
+        In-memory state from swissd's loop. Only releases it is scaling are
+        listed. Lost on restart.
+      operationId: listAutoscaling
+      responses:
+        "200":
+          description: The passes, sorted by namespace and release.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AutoscaleStateList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   /api/deployments:
     get:
       tags: [releases]
@@ -897,6 +916,31 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ReleaseStatus" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
+  /api/releases/{namespace}/{release}/autoscaling:
+    get:
+      tags: [autoscaling]
+      summary: Last autoscaler pass for one release
+      description: |
+        Temporary API for PD mode autoscaling only. It will be removed in a
+        future release.
+
+        The loop's last pass when it has one. Otherwise the plan: `enabled` is
+        the PD and form-SLO gate, `current` is the plan replicaCount, and there
+        is no outcome. A release swiss does not manage is 404.
+      operationId: getAutoscaling
+      parameters:
+        - $ref: "#/components/parameters/namespace"
+        - $ref: "#/components/parameters/release"
+      responses:
+        "200":
+          description: The pass, or the plan's gate when the loop has not recorded one.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AutoscaleState" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
         "502": { $ref: "#/components/responses/BadGateway" }
 
   /api/releases/{namespace}/{release}/objects:
@@ -1173,70 +1217,6 @@ paths:
         "409": { $ref: "#/components/responses/SLOToken" }
         "502": { $ref: "#/components/responses/BadGateway" }
         "503": { $ref: "#/components/responses/Unavailable" }
-
-  /api/releases/{namespace}/{release}/autoscaling:
-    parameters:
-      - $ref: "#/components/parameters/namespace"
-      - $ref: "#/components/parameters/release"
-    get:
-      tags: [autoscaling]
-      summary: Read PD autoscaling
-      description: |
-        The ConfigMap `swiss-autoscale-<release>` when it exists. `found` is false
-        when it does not, including for a release swiss does not manage. Allowed
-        when deploys are off.
-      operationId: getAutoscaling
-      responses:
-        "200":
-          description: The config and the loop's last status.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/AutoscaleView" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "502": { $ref: "#/components/responses/BadGateway" }
-    put:
-      tags: [autoscaling]
-      summary: Enable or edit PD autoscaling
-      description: |
-        Stores `{enabled, minSlices, maxSlices}`. Requires `1 <= minSlices <= maxSlices <= 64`,
-        a release swiss manages, and a disaggregated plan (`pd.enabled` true and
-        `pd.colocate` not true). `enabled: false` keeps the ConfigMap. 403 when
-        deploys are off.
-      operationId: saveAutoscaling
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/AutoscaleConfig" }
-      responses:
-        "200":
-          description: The config as stored.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/AutoscaleView" }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "502": { $ref: "#/components/responses/BadGateway" }
-    delete:
-      tags: [autoscaling]
-      summary: Delete PD autoscaling
-      description: |
-        Deletes the ConfigMap only. The live plan's `autoscale` layer stays, so
-        the slice count stays, until the next user upgrade (which does not carry
-        the layer once autoscaling is gone). Idempotent. 403 when deploys are off.
-      operationId: deleteAutoscaling
-      responses:
-        "200":
-          description: "`found` false."
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/AutoscaleView" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "502": { $ref: "#/components/responses/BadGateway" }
 
   /api/runs:
     get:
@@ -1600,7 +1580,7 @@ components:
             sloTokenSecret: { type: string }
             sloTokenKey: { type: string }
             serverHeaders: { type: object, additionalProperties: { type: string } }
-            autoscalePeriod: { type: string, description: "How often swissd asks decision-gen for a PD slice count. A Go duration. Empty, invalid, or <= 0 is 30s." }
+            autoscalePeriod: { type: string, description: "How often swissd asks decision-gen for a PD slice count. A Go duration. Empty, invalid, or <= 0 is 60s." }
         defaults:
           type: object
           description: The site's preferences, composed beneath the catalog as the `defaults` layer, so a variant overrides them. Every other section is a site fact, composed above the catalog.
@@ -1851,7 +1831,7 @@ components:
             derived: { type: object }
             form: { type: object }
             edit: { type: object }
-            autoscale: { type: object, description: "Only `replicaCount`, written by PD autoscaling." }
+            autoscale: { type: object, description: "Only `replicaCount`. swissd writes it when the plan is disaggregated (`pd.enabled` true, `pd.colocate` not true) and the form layer has `sloRequirement.enabled` true, clamping the decision into [1, 64]." }
         createNamespace: { type: boolean }
         helmfile: { type: string, description: "The helmfile these values are applied through. Not hashed." }
         warnings: { type: array, items: { type: string }, description: "Accepted but worth seeing. Not hashed." }
@@ -2144,40 +2124,6 @@ components:
           properties:
             found: { type: boolean }
 
-    AutoscaleConfig:
-      type: object
-      required: [enabled, minSlices, maxSlices]
-      properties:
-        enabled: { type: boolean }
-        minSlices: { type: integer, minimum: 1, maximum: 64 }
-        maxSlices: { type: integer, minimum: 1, maximum: 64 }
-
-    AutoscaleStatus:
-      type: object
-      description: |
-        What the loop last did. Counts are omitted until that tick has a value;
-        a present 0 is a real zero. The API owns `config.yaml`; the loop owns
-        `status.yaml`.
-      properties:
-        lastTickAt: { type: string, format: date-time, description: "Time of the last status write. A tick that changes nothing leaves it as it was." }
-        lastDecision: { type: integer, description: "decision-gen's recommendation before clamping. Omitted when the query failed." }
-        current: { type: integer }
-        desired: { type: integer }
-        holdReason: { type: string }
-        lastScaleAt: { type: string, format: date-time }
-        lastScaleFrom: { type: integer }
-        lastScaleTo: { type: integer }
-        lastRevision: { type: integer }
-        lastError: { type: string }
-
-    AutoscaleView:
-      type: object
-      required: [found]
-      properties:
-        found: { type: boolean }
-        config: { $ref: "#/components/schemas/AutoscaleConfig" }
-        status: { $ref: "#/components/schemas/AutoscaleStatus" }
-
     Run:
       type: object
       required: [id, namespace, release, action, planHash, changed, startedAt, endedAt]
@@ -2195,3 +2141,32 @@ components:
         revision: { type: integer, description: "0 when the operation left none." }
         startedAt: { type: string, format: date-time }
         endedAt: { type: string, format: date-time }
+
+    AutoscaleState:
+      type: object
+      description: One release's autoscaler pass. In memory, rebuilt by the loop, lost on restart.
+      required: [namespace, release, enabled, current]
+      properties:
+        namespace: { type: string }
+        release: { type: string }
+        enabled: { type: boolean, description: "True when the plan is disaggregated and the form SLO is on." }
+        current: { type: integer, description: "Replicas the loop saw. A cold read is the plan's replicaCount." }
+        want: { type: integer, description: "The count Decide would apply. Omitted on a hold, or before a pass." }
+        decision: { type: integer, description: "decision-gen's count, before the safety clamp." }
+        noDecision: { type: boolean, description: "decision-gen returned no row for this service." }
+        outcome:
+          type: string
+          enum: [scaled-up, scaled-down, unchanged, no-decision, held, error]
+          description: Omitted when this process has not evaluated the release.
+        hold: { type: string, description: "Why Decide refused to scale." }
+        error: { type: string }
+        lastEvaluated: { type: string, format: date-time }
+        lastScaled: { type: string, format: date-time, description: "When this process applied a scale. Kept across later passes." }
+
+    AutoscaleStateList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/AutoscaleState" }

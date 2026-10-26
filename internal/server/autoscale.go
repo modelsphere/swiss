@@ -3,309 +3,53 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
-	"gopkg.in/yaml.v3"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-
-	"github.com/modelsphere/swiss/internal/autoscale"
 	"github.com/modelsphere/swiss/internal/plan"
 	"github.com/modelsphere/swiss/internal/values"
 )
 
-const (
-	autoscalePrefix         = "swiss-autoscale-"
-	autoscaleConfigKey      = "config.yaml"
-	autoscaleStatusKey      = "status.yaml"
-	maxAutoscaleSlices      = 64
-	autoscaleStatusAttempts = 5
-)
-
-func autoscaleRef(namespace, release string) string {
-	return namespace + "/" + autoscalePrefix + release
+// autoscaleOn is the whole gate. A release scales when its plan is
+// disaggregated and the form layer turned the SLO requirement on.
+func autoscaleOn(p *plan.Plan) bool {
+	return disaggregated(p) && formSLO(p)
 }
 
-func autoscaleLabels(release string) map[string]string {
-	return map[string]string{"owner": "swiss", "name": release}
+func formSLO(p *plan.Plan) bool {
+	if p == nil {
+		return false
+	}
+	on, ok := formBool(p.Layers[values.LayerForm], "sloRequirement.enabled")
+	return ok && on
 }
 
-func (s *Server) handleAutoscaling(w http.ResponseWriter, r *http.Request) {
-	if (r.Method == http.MethodPut || r.Method == http.MethodDelete) && !s.cfg.Server.AllowDeploy {
-		writeError(w, http.StatusForbidden, "this swissd is read-only: set server.allowDeploy")
-		return
+func formBool(form values.Tree, path string) (bool, bool) {
+	v, ok := values.Get(form, path)
+	if !ok {
+		return false, false
 	}
-	ns, release := r.PathValue("namespace"), r.PathValue("release")
-	if ns == "" || release == "" {
-		writeError(w, http.StatusBadRequest, "namespace and release are required")
-		return
+	b, isBool := v.(bool)
+	if !isBool {
+		return false, false
 	}
-	ctx, cancel := contextWithTimeout(r, 15*time.Second)
-	defer cancel()
-
-	switch r.Method {
-	case http.MethodGet:
-		view, err := s.readAutoscale(ctx, ns, release)
-		if err != nil {
-			writeError(w, http.StatusBadGateway, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, view)
-	case http.MethodPut:
-		s.putAutoscale(ctx, w, r, ns, release)
-	case http.MethodDelete:
-		s.deleteAutoscale(ctx, w, ns, release)
-	default:
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-	}
-}
-
-func (s *Server) putAutoscale(ctx context.Context, w http.ResponseWriter, r *http.Request, ns, release string) {
-	var cfg autoscale.Config
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&cfg); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if cfg.MinSlices < 1 {
-		writeError(w, http.StatusBadRequest, "minSlices must be >= 1")
-		return
-	}
-	if cfg.MaxSlices > maxAutoscaleSlices {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("maxSlices must be <= %d", maxAutoscaleSlices))
-		return
-	}
-	if cfg.MinSlices > cfg.MaxSlices {
-		writeError(w, http.StatusBadRequest, "minSlices must be <= maxSlices")
-		return
-	}
-	if s.writer == nil {
-		writeError(w, http.StatusBadGateway, "no cluster writer")
-		return
-	}
-	b, _, err := s.backendFor(ctx, ns, release)
-	if err != nil {
-		writeStatus(w, err, http.StatusBadGateway)
-		return
-	}
-	if b == nil {
-		writeError(w, http.StatusNotFound, fmt.Sprintf("release %s/%s is not managed by swiss", ns, release))
-		return
-	}
-	p, err := b.Current(ctx, ns, release)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	if !disaggregated(p) {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("release %s/%s is not disaggregated: pd.enabled must be true and pd.colocate must not be", ns, release))
-		return
-	}
-	if err := s.writeAutoscaleConfig(ctx, ns, release, cfg); err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	view, err := s.readAutoscale(ctx, ns, release)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, view)
-}
-
-func (s *Server) deleteAutoscale(ctx context.Context, w http.ResponseWriter, ns, release string) {
-	if s.writer == nil {
-		writeError(w, http.StatusBadGateway, "no cluster writer")
-		return
-	}
-	b, _, err := s.backendFor(ctx, ns, release)
-	if err != nil {
-		writeStatus(w, err, http.StatusBadGateway)
-		return
-	}
-	if b == nil {
-		writeError(w, http.StatusNotFound, fmt.Sprintf("release %s/%s is not managed by swiss", ns, release))
-		return
-	}
-	if err := s.writer.DeleteConfigMap(ctx, autoscaleRef(ns, release)); err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, autoscaleView{Found: false})
-}
-
-type autoscaleView struct {
-	Found  bool              `json:"found"`
-	Config *autoscale.Config `json:"config,omitempty"`
-	Status *autoscale.Status `json:"status,omitempty"`
-}
-
-func (s *Server) readAutoscale(ctx context.Context, ns, release string) (autoscaleView, error) {
-	data, err := s.probe.ConfigMap(ctx, autoscaleRef(ns, release))
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return autoscaleView{}, nil
-		}
-		return autoscaleView{}, err
-	}
-	if len(data) == 0 || data[autoscaleConfigKey] == "" {
-		return autoscaleView{}, nil
-	}
-	var cfg autoscale.Config
-	if err := yaml.Unmarshal([]byte(data[autoscaleConfigKey]), &cfg); err != nil {
-		return autoscaleView{}, fmt.Errorf("config.yaml: %w", err)
-	}
-	st := &autoscale.Status{}
-	if raw := data[autoscaleStatusKey]; raw != "" {
-		if err := yaml.Unmarshal([]byte(raw), st); err != nil {
-			return autoscaleView{}, fmt.Errorf("status.yaml: %w", err)
-		}
-	}
-	return autoscaleView{Found: true, Config: &cfg, Status: st}, nil
-}
-
-func (s *Server) writeAutoscaleConfig(ctx context.Context, ns, release string, cfg autoscale.Config) error {
-	ref := autoscaleRef(ns, release)
-	data, err := s.probe.ConfigMap(ctx, ref)
-	if err != nil && !apierrors.IsNotFound(err) {
-		return err
-	}
-	next := map[string]string{}
-	for k, v := range data {
-		next[k] = v
-	}
-	b, err := yaml.Marshal(cfg)
-	if err != nil {
-		return err
-	}
-	next[autoscaleConfigKey] = string(b)
-	return s.writer.PutLabeledConfigMap(ctx, ref, next, autoscaleLabels(release))
-}
-
-func (s *Server) writeAutoscaleStatus(ctx context.Context, ns, release string, fn func(*autoscale.Status)) error {
-	if s.writer == nil {
-		return fmt.Errorf("no cluster writer")
-	}
-	ref := autoscaleRef(ns, release)
-	var last error
-	for attempt := 0; attempt < autoscaleStatusAttempts; attempt++ {
-		data, rv, err := s.probe.ConfigMapWithVersion(ctx, ref)
-		if err != nil {
-			if apierrors.IsNotFound(err) {
-				return nil
-			}
-			return err
-		}
-		var st autoscale.Status
-		if raw := data[autoscaleStatusKey]; raw != "" {
-			if err := yaml.Unmarshal([]byte(raw), &st); err != nil {
-				return err
-			}
-		}
-		prev := st
-		fn(&st)
-		// lastTickAt is the time of the last write. A tick that changes nothing else skips the update.
-		if statusSame(prev, st) {
-			return nil
-		}
-		b, err := yaml.Marshal(&st)
-		if err != nil {
-			return err
-		}
-		err = s.writer.UpdateConfigMapKey(ctx, ref, autoscaleStatusKey, string(b), rv)
-		if err == nil || apierrors.IsNotFound(err) {
-			return nil
-		}
-		if apierrors.IsConflict(err) {
-			last = err
-			continue
-		}
-		return err
-	}
-	return fmt.Errorf("autoscale status for %s/%s: %w", ns, release, last)
-}
-
-func statusSame(a, b autoscale.Status) bool {
-	a.LastTickAt, b.LastTickAt = "", ""
-	return sameInt(a.LastDecision, b.LastDecision) &&
-		sameInt(a.Current, b.Current) &&
-		sameInt(a.Desired, b.Desired) &&
-		a.HoldReason == b.HoldReason &&
-		a.LastScaleAt == b.LastScaleAt &&
-		sameInt(a.LastScaleFrom, b.LastScaleFrom) &&
-		sameInt(a.LastScaleTo, b.LastScaleTo) &&
-		sameInt(a.LastRevision, b.LastRevision) &&
-		a.LastError == b.LastError &&
-		sameInt(a.LastFailedWant, b.LastFailedWant) &&
-		a.LastFailedAt == b.LastFailedAt &&
-		a.Failures == b.Failures &&
-		a.RetryAfter == b.RetryAfter
-}
-
-func sameInt(a, b *int) bool {
-	if a == nil || b == nil {
-		return a == nil && b == nil
-	}
-	return *a == *b
-}
-
-func (s *Server) autoscalingEnabled(ctx context.Context, ns, release string) (bool, error) {
-	data, err := s.probe.ConfigMap(ctx, autoscaleRef(ns, release))
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	if len(data) == 0 || data[autoscaleConfigKey] == "" {
-		return false, nil
-	}
-	var cfg autoscale.Config
-	if err := yaml.Unmarshal([]byte(data[autoscaleConfigKey]), &cfg); err != nil {
-		return false, err
-	}
-	return cfg.Enabled, nil
-}
-
-// removeAutoscale deletes the autoscale ConfigMap when one exists. A missing
-// map is not an error, so an uninstall that never enabled autoscaling stays
-// a single plan-ConfigMap delete.
-func (s *Server) removeAutoscale(ctx context.Context, ns, release string) error {
-	if s.probe == nil || s.writer == nil {
-		return nil
-	}
-	ref := autoscaleRef(ns, release)
-	data, err := s.probe.ConfigMap(ctx, ref)
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
-		}
-		return err
-	}
-	if data == nil {
-		return nil
-	}
-	return s.writer.DeleteConfigMap(ctx, ref)
+	return b, true
 }
 
 // overlayAutoscale puts the live autoscale layer onto an archived plan while
-// autoscaling is enabled, then recomputes the hash. No live layer leaves the
-// archive as stored.
+// both the live plan and the archived target are autoscaling, then recomputes
+// the hash. Otherwise the archive is applied as stored.
 func (s *Server) overlayAutoscale(ctx context.Context, ns, release string, p *plan.Plan) error {
-	on, err := s.autoscalingEnabled(ctx, ns, release)
-	if err != nil {
-		return failErr(http.StatusBadGateway, err)
-	}
-	if !on || p == nil {
+	if p == nil {
 		return nil
 	}
 	cur, err := s.currentPlan(ctx, ns, release)
 	if err != nil {
 		return failErr(http.StatusBadGateway, err)
+	}
+	if !autoscaleOn(cur) {
+		return nil
 	}
 	layer := cur.Layers[values.LayerAutoscale]
 	if len(layer) == 0 {
@@ -316,6 +60,11 @@ func (s *Server) overlayAutoscale(ctx context.Context, ns, release string, p *pl
 		cp[k] = v
 	}
 	cp[values.LayerAutoscale] = cloneTree(layer)
+	target := *p
+	target.Layers = cp
+	if !autoscaleOn(&target) {
+		return nil
+	}
 	p.Layers = cp
 	if err := p.ComputeHash(); err != nil {
 		return failErr(http.StatusInternalServerError, err)
@@ -465,5 +214,3 @@ func clonePlan(p *plan.Plan) *plan.Plan {
 	}
 	return &cp
 }
-
-func intPtr(n int) *int { return &n }

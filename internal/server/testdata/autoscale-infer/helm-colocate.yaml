@@ -1,0 +1,8 @@
+name: helm-colocate
+description: a colocated helm release is not queried
+backend: helm
+pd: true
+colocate: true
+slo: true
+wantQueries: 0
+wantApplies: 0

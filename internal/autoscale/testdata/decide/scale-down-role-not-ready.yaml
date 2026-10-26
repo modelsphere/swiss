@@ -1,9 +1,5 @@
 name: scale-down-role-not-ready
 description: a scale-down proceeds when the only hold is a role that is not ready
-config:
-  enabled: true
-  minSlices: 1
-  maxSlices: 5
 live:
   backend: helm
   helmStatus: deployed
@@ -13,28 +9,27 @@ live:
   dsSlices: 3
   planReplicaCount: 3
   roles:
-    - replicas: 2
-      readyReplicas: 1
-      updatedReplicas: 1
+  - replicas: 2
+    readyReplicas: 1
+    updatedReplicas: 1
   routers:
-    - specReplicas: 1
-      readyReplicas: 1
-      generation: 1
-      observedGeneration: 1
-    - specReplicas: 1
-      readyReplicas: 1
-      generation: 1
-      observedGeneration: 1
-    - specReplicas: 1
-      readyReplicas: 1
-      generation: 1
-      observedGeneration: 1
+  - specReplicas: 1
+    readyReplicas: 1
+    generation: 1
+    observedGeneration: 1
+  - specReplicas: 1
+    readyReplicas: 1
+    generation: 1
+    observedGeneration: 1
+  - specReplicas: 1
+    readyReplicas: 1
+    generation: 1
+    observedGeneration: 1
 decision:
   ok: true
   replicas: 1
-wantHold: ""
+wantHold: ''
 wantScale: true
 wantCurrent: 3
 want: 1
-wantFailed: false
 hasDecision: true

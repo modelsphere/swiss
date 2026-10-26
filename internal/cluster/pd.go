@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -17,27 +16,6 @@ var disaggregatedSetGVR = schema.GroupVersionResource{
 	Group:    "disaggregatedset.x-k8s.io",
 	Version:  "v1",
 	Resource: "disaggregatedsets",
-}
-
-func (k *Kube) ConfigMapList(ctx context.Context, namespace, selector string) ([]ConfigMapObj, error) {
-	if namespace == "" {
-		namespace = metav1.NamespaceAll
-	}
-	list, err := k.client.CoreV1().ConfigMaps(namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
-	if err != nil {
-		return nil, fmt.Errorf("list configmaps: %w", err)
-	}
-	out := make([]ConfigMapObj, 0, len(list.Items))
-	for i := range list.Items {
-		cm := &list.Items[i]
-		out = append(out, ConfigMapObj{
-			Namespace: cm.Namespace,
-			Name:      cm.Name,
-			Data:      cloneStringMap(cm.Data),
-			Labels:    cloneStringMap(cm.Labels),
-		})
-	}
-	return out, nil
 }
 
 func (k *Kube) Deployment(ctx context.Context, ref string) (*Deployment, error) {
@@ -131,54 +109,4 @@ func asInt(v any) (int, bool) {
 	default:
 		return 0, false
 	}
-}
-
-func (k *Kube) PutLabeledConfigMap(ctx context.Context, ref string, data, labels map[string]string) error {
-	ns, name, err := SplitRef(ref)
-	if err != nil {
-		return err
-	}
-	lbs := map[string]string{"app.kubernetes.io/managed-by": "swiss"}
-	for key, v := range labels {
-		lbs[key] = v
-	}
-	copied := cloneStringMap(data)
-	existing, err := k.client.CoreV1().ConfigMaps(ns).Get(ctx, name, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		_, err = k.client.CoreV1().ConfigMaps(ns).Create(ctx, &corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, Labels: lbs},
-			Data:       copied,
-		}, metav1.CreateOptions{})
-		return err
-	}
-	if err != nil {
-		return err
-	}
-	existing.Data = copied
-	existing.Labels = lbs
-	_, err = k.client.CoreV1().ConfigMaps(ns).Update(ctx, existing, metav1.UpdateOptions{})
-	return err
-}
-
-// UpdateConfigMapKey sets one data key and leaves every other key and the
-// labels alone. A missing map is returned as NotFound and is not created.
-// resourceVersion must be the one just read; the apiserver rejects a stale one.
-func (k *Kube) UpdateConfigMapKey(ctx context.Context, ref, key, value, resourceVersion string) error {
-	ns, name, err := SplitRef(ref)
-	if err != nil {
-		return err
-	}
-	existing, err := k.client.CoreV1().ConfigMaps(ns).Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
-		return err
-	}
-	if existing.ResourceVersion != resourceVersion {
-		return apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, name, fmt.Errorf("resourceVersion changed"))
-	}
-	if existing.Data == nil {
-		existing.Data = map[string]string{}
-	}
-	existing.Data[key] = value
-	_, err = k.client.CoreV1().ConfigMaps(ns).Update(ctx, existing, metav1.UpdateOptions{})
-	return err
 }

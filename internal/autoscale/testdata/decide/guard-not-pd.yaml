@@ -1,9 +1,5 @@
 name: guard-not-pd
 description: a release that is not disaggregated holds the tick
-config:
-  enabled: true
-  minSlices: 1
-  maxSlices: 4
 live:
   backend: helm
   helmStatus: deployed
@@ -12,9 +8,8 @@ live:
 decision:
   ok: true
   replicas: 2
-wantHold: "not disaggregated"
+wantHold: not disaggregated
 wantScale: false
 wantCurrent: 1
 want: 0
-wantFailed: false
 hasDecision: true

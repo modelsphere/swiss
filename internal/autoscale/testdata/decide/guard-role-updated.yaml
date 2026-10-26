@@ -1,9 +1,5 @@
 name: guard-role-updated
 description: a ready role that is not updated holds the tick
-config:
-  enabled: true
-  minSlices: 1
-  maxSlices: 4
 live:
   backend: helm
   helmStatus: deployed
@@ -13,15 +9,14 @@ live:
   dsSlices: 1
   planReplicaCount: 1
   roles:
-    - replicas: 2
-      readyReplicas: 2
-      updatedReplicas: 1
+  - replicas: 2
+    readyReplicas: 2
+    updatedReplicas: 1
 decision:
   ok: true
   replicas: 2
-wantHold: "role not updated"
+wantHold: role not updated
 wantScale: false
 wantCurrent: 1
 want: 0
-wantFailed: false
 hasDecision: true

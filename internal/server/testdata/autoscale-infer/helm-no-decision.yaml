@@ -1,0 +1,9 @@
+name: helm-no-decision
+description: decision-gen returning no row is a quiet no-op
+backend: helm
+pd: true
+colocate: false
+slo: true
+noDecision: true
+wantQueries: 1
+wantApplies: 0

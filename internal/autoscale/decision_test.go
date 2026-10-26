@@ -1,6 +1,7 @@
 package autoscale
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,17 +12,18 @@ import (
 )
 
 type decisionCase struct {
-	Name          string            `json:"name"`
-	Description   string            `json:"description,omitempty"`
-	Namespace     string            `json:"namespace"`
-	ServiceID     string            `json:"serviceId"`
-	Status        int               `json:"status,omitempty"`
-	Body          string            `json:"body,omitempty"`
-	Transport     bool              `json:"transport,omitempty"`
-	Headers       map[string]string `json:"headers,omitempty"`
-	Want          *int              `json:"want,omitempty"`
-	ErrorContains string            `json:"errorContains,omitempty"`
-	WantHeader    string            `json:"wantHeader,omitempty"`
+	Name           string            `json:"name"`
+	Description    string            `json:"description,omitempty"`
+	Namespace      string            `json:"namespace"`
+	ServiceID      string            `json:"serviceId"`
+	Status         int               `json:"status,omitempty"`
+	Body           string            `json:"body,omitempty"`
+	Transport      bool              `json:"transport,omitempty"`
+	Headers        map[string]string `json:"headers,omitempty"`
+	Want           *int              `json:"want,omitempty"`
+	ErrorContains  string            `json:"errorContains,omitempty"`
+	WantNoDecision bool              `json:"wantNoDecision,omitempty"`
+	WantHeader     string            `json:"wantHeader,omitempty"`
 }
 
 func TestDecisions(t *testing.T) {
@@ -56,6 +58,9 @@ func TestDecisions(t *testing.T) {
 		if tc.ErrorContains != "" {
 			if err == nil || !strings.Contains(err.Error(), tc.ErrorContains) {
 				t.Fatalf("error %v, want substring %q", err, tc.ErrorContains)
+			}
+			if tc.WantNoDecision && !errors.Is(err, ErrNoDecision) {
+				t.Fatalf("error %v, want ErrNoDecision", err)
 			}
 			return
 		}

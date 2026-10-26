@@ -1,0 +1,11 @@
+name: scaled
+description: decision 2 from 1 slice scales up
+decision: 2
+slo: true
+pd: true
+wantOutcome: scaled-up
+wantWant: 2
+wantCurrent: 1
+wantEnabled: true
+wantList:
+  - pd

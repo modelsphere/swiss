@@ -224,7 +224,6 @@ func runNoAutoscaleRollbackHelm(t *testing.T) {
 	if _, ok := archived.Layers[values.LayerAutoscale]; ok {
 		t.Fatal("applied archive gained an autoscale layer")
 	}
-	assertNoAutoscaleWrites(t, s.writer.(*fakeWriter))
 }
 
 func runNoAutoscaleRollbackLLM(t *testing.T) {
@@ -262,7 +261,6 @@ func runNoAutoscaleRollbackLLM(t *testing.T) {
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("spec.layers %v, want %v", names, want)
 	}
-	assertNoAutoscaleWrites(t, rig.w)
 }
 
 func runNoAutoscalePrune(t *testing.T, tc noAutoscaleCase) {
@@ -333,7 +331,6 @@ func runNoAutoscalePrune(t *testing.T, tc noAutoscaleCase) {
 			t.Fatalf("revision %d still stored", rev)
 		}
 	}
-	assertNoAutoscaleWrites(t, base)
 
 	code, again := post(t, srv, "/api/plans", map[string]any{
 		"fromRelease": "glm-53",
@@ -367,7 +364,6 @@ func runNoAutoscaleUninstall(t *testing.T, tc noAutoscaleCase) {
 		if !reflect.DeepEqual(w.deleted, []string{planRef("models", "glm-53")}) {
 			t.Fatalf("deleted %v", w.deleted)
 		}
-		assertNoAutoscaleWrites(t, w)
 	case backendLLMSVC:
 		rig := startRig(t, llmProbe(), true, true, backendLLMSVC)
 		hash := rig.storePlan(t, map[string]any{"release": llmRelease})
@@ -385,7 +381,6 @@ func runNoAutoscaleUninstall(t *testing.T, tc noAutoscaleCase) {
 		if len(rig.w.written) != beforeW || len(rig.w.deleted) != beforeD {
 			t.Fatalf("written %v deleted %v", rig.w.written, rig.w.deleted)
 		}
-		assertNoAutoscaleWrites(t, rig.w)
 	default:
 		t.Fatalf("backend %q", tc.Backend)
 	}
@@ -448,11 +443,6 @@ func runNoAutoscaleLoopHelm(t *testing.T) {
 		Name: release, Namespace: ns, Status: "deployed", Revision: 2, SwissFiles: files,
 	}}
 	probe.Maps[planRef(ns, release)] = files
-	probe.MapLabels = map[string]map[string]string{
-		planRef(ns, release):     {"owner": "swiss", "name": release},
-		ns + "/swiss-plan-decoy": {"owner": "swiss"},
-	}
-	probe.Maps[ns+"/swiss-plan-decoy"] = map[string]string{"note": "not autoscale"}
 	logPath := filepath.Join(t.TempDir(), "calls.log")
 	bin := countBin(t, logPath)
 	s, w := newLoopServer(t, &probe, bin, bin)
@@ -468,10 +458,6 @@ func runNoAutoscaleLoopHelm(t *testing.T) {
 func runNoAutoscaleLoopLLM(t *testing.T) {
 	t.Helper()
 	probe := llmProbe()
-	probe.MapLabels = map[string]map[string]string{
-		"models/swiss-plan-decoy": {"owner": "swiss"},
-	}
-	probe.Maps["models/swiss-plan-decoy"] = map[string]string{"note": "not autoscale"}
 	rig := startRig(t, probe, true, false, "")
 	p, err := rig.s.compose(context.Background(), planRequest{
 		Model: "qwen3-8b", Variant: "vllm-tp1-910b", ChartVersion: "0.7.6",
@@ -630,20 +616,6 @@ func masterLayerNames(p *plan.Plan) []string {
 		}
 	}
 	return out
-}
-
-func assertNoAutoscaleWrites(t *testing.T, w *fakeWriter) {
-	t.Helper()
-	for ref := range w.written {
-		if strings.Contains(ref, autoscalePrefix) {
-			t.Fatalf("autoscale config written at %s", ref)
-		}
-	}
-	for _, ref := range w.deleted {
-		if strings.Contains(ref, autoscalePrefix) {
-			t.Fatalf("autoscale config deleted at %s", ref)
-		}
-	}
 }
 
 func archiveRevision(ref string) (int, bool) {

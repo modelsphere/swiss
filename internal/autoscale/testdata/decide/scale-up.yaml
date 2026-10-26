@@ -1,9 +1,5 @@
 name: scale-up
 description: a decision above the current count scales up
-config:
-  enabled: true
-  minSlices: 1
-  maxSlices: 5
 live:
   backend: helm
   helmStatus: deployed
@@ -13,20 +9,19 @@ live:
   dsSlices: 1
   planReplicaCount: 1
   roles:
-    - replicas: 1
-      readyReplicas: 1
-      updatedReplicas: 1
+  - replicas: 1
+    readyReplicas: 1
+    updatedReplicas: 1
   routers:
-    - specReplicas: 1
-      readyReplicas: 1
-      generation: 1
-      observedGeneration: 1
+  - specReplicas: 1
+    readyReplicas: 1
+    generation: 1
+    observedGeneration: 1
 decision:
   ok: true
   replicas: 3
-wantHold: ""
+wantHold: ''
 wantScale: true
 wantCurrent: 1
 want: 3
-wantFailed: false
 hasDecision: true

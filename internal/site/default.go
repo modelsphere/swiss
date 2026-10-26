@@ -73,8 +73,8 @@ cache:
 scaler:
   # What the chart receives.
   serverAddress: http://decision-gen.llm-scaler.svc:80
-  # How often swissd asks decision-gen for a PD slice count. Empty is 30s.
-  # autoscalePeriod: 30s
+  # How often swissd asks decision-gen for a PD slice count. Empty is 60s.
+  # autoscalePeriod: 60s
   # Same service. swissd calls this to read and edit LLMSLORequirement
   # thresholds after install. It is not copied into chart values.
   sloAddress: http://slo-api.llm-scaler.svc:80

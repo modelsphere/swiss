@@ -1,9 +1,5 @@
 name: scale-up-readiness
 description: a scale-up still holds when a role is not ready
-config:
-  enabled: true
-  minSlices: 1
-  maxSlices: 4
 live:
   backend: helm
   helmStatus: deployed
@@ -13,20 +9,19 @@ live:
   dsSlices: 1
   planReplicaCount: 1
   roles:
-    - replicas: 2
-      readyReplicas: 1
-      updatedReplicas: 0
+  - replicas: 2
+    readyReplicas: 1
+    updatedReplicas: 0
   routers:
-    - specReplicas: 1
-      readyReplicas: 1
-      generation: 1
-      observedGeneration: 1
+  - specReplicas: 1
+    readyReplicas: 1
+    generation: 1
+    observedGeneration: 1
 decision:
   ok: true
   replicas: 2
-wantHold: "role not ready"
+wantHold: role not ready
 wantScale: false
 wantCurrent: 1
 want: 0
-wantFailed: false
 hasDecision: true

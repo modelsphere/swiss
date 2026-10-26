@@ -72,8 +72,9 @@ type planRequest struct {
 	// Set by carryForward, never by the caller.
 	runningChart plan.ChartRef
 	movedFrom    *plan.Plan
-	// autoscale is the live replicaCount layer, copied while autoscaling is
-	// enabled. Unexported so a request body cannot set it.
+	// autoscale is the live replicaCount layer, copied while the previous plan
+	// is autoscaling and the new form keeps the rule. Unexported so a request
+	// body cannot set it.
 	autoscale values.Tree
 }
 
@@ -245,6 +246,16 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 	if err != nil {
 		return nil, err
 	}
+	// The carried layer belongs only on a plan that is itself autoscaling. An
+	// upgrade can leave PD through its edits or a non-PD variant, which the
+	// form alone does not show; left in place, the layer would win over the
+	// operator's replicaCount on a plan the loop never touches.
+	if _, ok := p.Layers[values.LayerAutoscale]; ok && !autoscaleOn(p) {
+		delete(p.Layers, values.LayerAutoscale)
+		if err := p.ComputeHash(); err != nil {
+			return nil, err
+		}
+	}
 	p.Warnings = warnings
 	return p, nil
 }
@@ -302,7 +313,7 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 		if edits := prev.Layers[values.LayerEdit]; len(edits) > 0 {
 			out.EditsYAML = mustYAML(edits)
 		}
-		return s.withAutoscale(ctx, prev, out)
+		return s.withAutoscale(prev, out), nil
 	}
 	values.Merge(out.Overrides, req.Overrides, values.LayerForm, nil)
 	out.EditsYAML = req.EditsYAML
@@ -323,29 +334,22 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 		out.GPUProducts = req.GPUProducts
 		out.ForceGPUProducts = req.ForceGPUProducts
 	}
-	return s.withAutoscale(ctx, prev, out)
+	return s.withAutoscale(prev, out), nil
 }
 
-// withAutoscale copies the live autoscale layer onto an upgrade while that
-// release has autoscaling enabled. Otherwise the layer is left behind and
-// replicaCount falls back to form and edit.
-func (s *Server) withAutoscale(ctx context.Context, prev *plan.Plan, out planRequest) (planRequest, error) {
-	if prev == nil {
-		return out, nil
+// withAutoscale copies the live autoscale layer onto an upgrade while the
+// previous plan is autoscaling. Compose drops it again when the plan it builds
+// is not autoscaling, so replicaCount falls back to form and edit.
+func (s *Server) withAutoscale(prev *plan.Plan, out planRequest) planRequest {
+	if prev == nil || !autoscaleOn(prev) {
+		return out
 	}
 	layer := prev.Layers[values.LayerAutoscale]
 	if len(layer) == 0 {
-		return out, nil
-	}
-	on, err := s.autoscalingEnabled(ctx, prev.Release.Namespace, prev.Release.Name)
-	if err != nil {
-		return planRequest{}, err
-	}
-	if !on {
-		return out, nil
+		return out
 	}
 	out.autoscale = cloneTree(layer)
-	return out, nil
+	return out
 }
 
 // checkMove refuses a cross-catalog upgrade that would put another model, or the
