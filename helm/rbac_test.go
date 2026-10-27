@@ -4,6 +4,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -44,7 +45,7 @@ func TestChartGrantsLLMService(t *testing.T) {
 	}
 	crud := `verbs: ["get","list","watch","create","update","patch","delete"]`
 
-	deploy, err := helmTemplate(t)
+	deploy, err := helmTemplate(t, "rbac.scope=namespaced")
 	if err != nil {
 		t.Fatal(deploy)
 	}
@@ -70,6 +71,32 @@ func TestChartGrantsLLMService(t *testing.T) {
 	}
 }
 
+// The default is cluster scope: one ClusterRole, no namespaces to list, and no
+// cluster.namespaces in the config, so swissd lists every namespace.
+func TestChartDefaultsToClusterScope(t *testing.T) {
+	if _, err := exec.LookPath("helm"); err != nil {
+		t.Skip("helm not on PATH")
+	}
+	out, err := helmTemplateIn(t, "default")
+	if err != nil {
+		t.Fatal(out)
+	}
+	ids := objectIDs(t, out, "default")
+	for _, id := range []string{"ClusterRole//swiss-default-releases", "ClusterRoleBinding//swiss-default-releases"} {
+		if !slices.Contains(ids, id) {
+			t.Errorf("default render has no %s:\n%v", id, ids)
+		}
+	}
+	for _, id := range ids {
+		if strings.HasPrefix(id, "Role/") && strings.HasSuffix(id, "-releases") {
+			t.Errorf("default render has a namespaced release Role %s", id)
+		}
+	}
+	if strings.Contains(out, "namespaces:\n") {
+		t.Errorf("default render lists cluster.namespaces:\n%s", out)
+	}
+}
+
 // Two installs under one release name, each in its own namespace and managing
 // only that namespace, must not render an object the other also owns.
 func TestChartInstallsSideBySide(t *testing.T) {
@@ -78,7 +105,7 @@ func TestChartInstallsSideBySide(t *testing.T) {
 	}
 	owned := map[string]string{}
 	for _, ns := range []string{"team-a", "team-b"} {
-		out, err := helmTemplateIn(t, ns, "rbac.namespaces={"+ns+"}")
+		out, err := helmTemplateIn(t, ns, "rbac.scope=namespaced", "rbac.namespaces={"+ns+"}")
 		if err != nil {
 			t.Fatal(out)
 		}

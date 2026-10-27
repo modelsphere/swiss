@@ -79,21 +79,23 @@ GHCR image; charts in the [modelsphere helm repo](https://github.com/modelsphere
 are the other channel and pull from Docker Hub.
 
 ```sh
-helm install swiss oci://ghcr.io/modelsphere/charts/swiss -n swiss --create-namespace \
-  --set 'rbac.namespaces={models,kimi}'
+helm install swiss oci://ghcr.io/modelsphere/charts/swiss -n swiss --create-namespace
 ```
 
 From a checkout:
 
 ```sh
 docker build -t ghcr.io/modelsphere/swissd:$(./hack/bump.sh) .
-helm install swiss ./helm/swiss -n swiss --create-namespace \
-  --set 'rbac.namespaces={models,kimi}'
+helm install swiss ./helm/swiss -n swiss --create-namespace
 ```
 
+`rbac.scope` defaults to `cluster`: one ClusterRole, and swissd reads every
+namespace, which includes every Secret in the cluster. For a tighter grant, set
+`rbac.scope: namespaced` and list the namespaces holding model releases, e.g.
+`--set rbac.scope=namespaced --set 'rbac.namespaces={models,kimi}'`.
 `rbac.namespaces` is rendered into both the Roles and `cluster.namespaces`, so
 swissd lists only namespaces it was granted — a Role cannot authorise a
-cluster-wide list. `rbac.scope: cluster` drops the list and reads everything.
+cluster-wide list.
 `rbac.applyWith` is `helm` (today's grant), `both` (that grant plus
 LLMService), or `llmsvc` (LLMService writes and the read grants, without Secret,
 Role or workload writes). Anything else is refused. The new-install backend is

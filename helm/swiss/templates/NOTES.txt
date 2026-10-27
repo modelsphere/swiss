@@ -60,7 +60,8 @@ untracked. Add namespaces to rbac.namespaces as they appear.
 {{- else }}
 This grants read access to every Secret in the cluster, because helm stores
 releases in Secrets and RBAC cannot filter a secret read. It buys a complete
-untracked-release view. Make sure that trade was deliberate.
+untracked-release view. For a tighter grant, set rbac.scope=namespaced and
+list the namespaces holding model releases in rbac.namespaces.
 {{- end }}
 
 Swiss does not deploy Swiss: upgrade this release with helm or helmfile, never

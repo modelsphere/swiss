@@ -92,7 +92,7 @@ auth:
   disabled: false
 
 # ---------------------------------------------------------------------------
-# RBAC. Read the comments before widening this.
+# RBAC. Read the comments before installing: the default is the wide grant.
 # ---------------------------------------------------------------------------
 # swissd deploys, and writes its own site profile and the Secret beside it: the
 # chart always grants both. One replica: sqlite is a single writer.
@@ -117,23 +117,26 @@ auth:
 rbac:
   create: true
 
-  # namespaced (default) or cluster.
+  # cluster (default) or namespaced.
   #
   # swissd reads helm's own release storage, which is SECRETS. Kubernetes RBAC
   # cannot filter a secret read by label or name prefix, so "let it read helm
   # releases" and "let it read every credential in those namespaces" are the
   # same grant. There is no third option.
   #
-  #   namespaced  Role/RoleBinding in each namespace listed below. Tight, and
-  #               the default -- but swissd can only see releases in those
-  #               namespaces, so an unlisted namespace is invisible rather than
-  #               reported as untracked.
-  #   cluster     One ClusterRole. swissd sees every release, which is what makes
-  #               the untracked-release view complete -- at the cost of read
-  #               access to every Secret in the cluster.
+  #   cluster     One ClusterRole. The default because it is simpler: nothing
+  #               to list, and swissd sees every release, so the
+  #               untracked-release view is complete. It grants read/write on
+  #               Secrets, Roles, RoleBindings and the workloads above in every
+  #               namespace -- including read access to every Secret in the
+  #               cluster.
+  #   namespaced  Role/RoleBinding in each namespace listed below. The tighter
+  #               grant, but swissd only sees releases in those namespaces: an
+  #               unlisted namespace is invisible rather than reported as
+  #               untracked.
   #
-  # Start namespaced. Widen deliberately, knowing what it grants.
-  scope: namespaced
+  # For the tighter grant set scope: namespaced and list the namespaces.
+  scope: cluster
 
   # Cluster-wide pod LIST, for the GPU usage column on the nodes page.
   #
@@ -144,7 +147,8 @@ rbac:
   # which is the honest answer when it cannot see every pod.
   nodeGPUUsage: true
 
-  # Namespaces holding model releases. Used when scope is namespaced.
+  # Namespaces holding model releases. Used, and required, when scope is
+  # namespaced.
   namespaces: []
     # - models
     # - kimi

@@ -209,7 +209,7 @@ subjects:
     namespace: {{ .Release.Namespace }}
 {{- else }}
 # ---------------------------------------------------------------------------
-# NAMESPACED SCOPE (the default). One Role per listed namespace.
+# NAMESPACED SCOPE. One Role per listed namespace.
 #
 # Still a full secret read within each -- see above, it cannot be narrower -- but
 # bounded to the namespaces that actually hold model releases. The cost is that

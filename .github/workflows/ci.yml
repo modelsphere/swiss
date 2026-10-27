@@ -57,7 +57,7 @@ jobs:
           set -eu
           lint() { helm lint --strict helm/swiss --set 'rbac.namespaces={ci}' "$@"; }
           lint
-          lint --set rbac.scope=cluster
+          lint --set rbac.scope=namespaced
           lint --set catalogServer.enabled=true
 
   gate:
