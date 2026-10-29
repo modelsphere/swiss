@@ -19,7 +19,8 @@ type Repository struct {
 
 // HelmDefaults mirror the repo's helmfile.yaml. They are not tunable knobs: a
 // cold load here is 20-40 minutes, "failed" usually means "still loading", and
-// an automatic rollback of that is the expensive wrong answer.
+// an automatic rollback of that is the expensive wrong answer. createNamespace
+// and skipSchemaValidation are the plan's.
 type HelmDefaults struct {
 	Wait          bool     `yaml:"wait" json:"wait"`
 	Atomic        bool     `yaml:"atomic" json:"atomic"`
@@ -27,6 +28,9 @@ type HelmDefaults struct {
 	CreateNS      bool     `yaml:"createNamespace" json:"createNamespace"`
 	HistoryMax    int      `yaml:"historyMax" json:"historyMax"`
 	DiffArgs      []string `yaml:"diffArgs" json:"diffArgs"`
+	// helmfile passes it to helm-diff as well as to helm, so the dry run and the
+	// apply skip the same check.
+	SkipSchemaValidation bool `yaml:"skipSchemaValidation,omitempty" json:"skipSchemaValidation,omitempty"`
 }
 
 // HelmfileRelease is the release stanza of the generated document.
@@ -61,11 +65,12 @@ func diffArgs() []string {
 	return []string{"--three-way-merge", "--server-side=true"}
 }
 
-func defaults(createNamespace bool) HelmDefaults {
+func defaults(createNamespace, skipSchemaValidation bool) HelmDefaults {
 	return HelmDefaults{
 		Wait: false, Atomic: false, CleanupOnFail: false,
 		CreateNS: createNamespace, HistoryMax: 20,
-		DiffArgs: diffArgs(),
+		DiffArgs:             diffArgs(),
+		SkipSchemaValidation: skipSchemaValidation,
 	}
 }
 
@@ -77,7 +82,7 @@ func (p *Plan) HelmfileDocument(chartRoot string) (*HelmfileDoc, error) {
 		return nil, err
 	}
 	d := &HelmfileDoc{
-		HelmDefaults: defaults(p.CreateNamespace),
+		HelmDefaults: defaults(p.CreateNamespace, p.SkipSchemaValidation),
 		Releases: []HelmfileRelease{{
 			Name:      p.Release.Name,
 			Namespace: p.Release.Namespace,

@@ -157,7 +157,7 @@ func TestWaitApplied(t *testing.T) {
 				errc <- err
 			}()
 
-			final, err := c.WaitApplied(ctx, "models", "qwen", 4)
+			final, err := c.WaitApplied(ctx, "models", "qwen", 4, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -178,6 +178,48 @@ func TestWaitApplied(t *testing.T) {
 	}
 }
 
+// A write that left the generation alone finds the last attempt's Failed
+// already observed. With after, that status is not the answer: the next one
+// written is.
+func TestWaitAppliedPastAWriteThatKeptTheGeneration(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	c := New(newDyn(), nil, nil)
+	c.Interval = 5 * time.Millisecond
+	u := obj("models", "qwen")
+	u.SetGeneration(4)
+	u.SetResourceVersion("7")
+	u.Object["status"] = map[string]any{"observedGeneration": int64(4), "phase": "Failed", "message": "values don't meet the specifications of the schema"}
+	if _, err := c.Create(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+
+	errc := make(chan error, 1)
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		got, err := c.Get(ctx, "models", "qwen")
+		if err != nil {
+			errc <- err
+			return
+		}
+		got.SetResourceVersion("8")
+		got.Object["status"] = map[string]any{"observedGeneration": int64(4), "phase": "Applied"}
+		_, err = c.Update(ctx, got)
+		errc <- err
+	}()
+
+	final, err := c.WaitApplied(ctx, "models", "qwen", 4, "7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-errc; err != nil {
+		t.Fatal(err)
+	}
+	if phase, _, _ := unstructured.NestedString(final.Object, "status", "phase"); phase != "Applied" {
+		t.Fatalf("phase %q: the status from before the write was taken for the answer", phase)
+	}
+}
+
 func TestWaitAppliedReadsJSONNumbers(t *testing.T) {
 	// A real API server decodes numbers as float64. Polling for an hour would
 	// only return if that shape still counts as Applied.
@@ -193,7 +235,7 @@ func TestWaitAppliedReadsJSONNumbers(t *testing.T) {
 	if _, err := c.Create(ctx, u); err != nil {
 		t.Fatal(err)
 	}
-	final, err := c.WaitApplied(ctx, "models", "qwen", 3)
+	final, err := c.WaitApplied(ctx, "models", "qwen", 3, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +260,7 @@ func TestWaitAppliedTimesOut(t *testing.T) {
 	if _, err := c.Create(ctx, u); err != nil {
 		t.Fatal(err)
 	}
-	_, err := c.WaitApplied(ctx, "models", "qwen", 1)
+	_, err := c.WaitApplied(ctx, "models", "qwen", 1, "")
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("got %v", err)
 	}

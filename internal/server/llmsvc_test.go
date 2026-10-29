@@ -1168,6 +1168,7 @@ func TestMergeReleaseAnnotations(t *testing.T) {
 		"kubectl.kubernetes.io/last-applied-configuration": "{}",
 		"example.com/owner": "alice",
 	}
+	cur[llmsvc.AnnSkipSchemaValidation] = "true"
 	fresh := map[string]string{
 		llmsvc.AnnAction:   "apply",
 		llmsvc.AnnPlanHash: "sha256:new",
@@ -1180,6 +1181,14 @@ func TestMergeReleaseAnnotations(t *testing.T) {
 	if _, ok := got[llmsvc.AnnForceConflicts]; ok {
 		t.Fatalf("force-conflicts kept: %v", got)
 	}
+	if _, ok := got[llmsvc.AnnSkipSchemaValidation]; ok {
+		t.Fatalf("skip-schema-validation kept after the plan turned it off: %v", got)
+	}
+	fresh[llmsvc.AnnSkipSchemaValidation] = "true"
+	if on := mergeReleaseAnnotations(cur, fresh, ""); on[llmsvc.AnnSkipSchemaValidation] != "true" {
+		t.Fatalf("skip-schema-validation not written: %v", on)
+	}
+	delete(fresh, llmsvc.AnnSkipSchemaValidation)
 	if got[llmsvc.AnnAction] != "apply" || got[llmsvc.AnnPlanHash] != "sha256:new" || got[llmsvc.AnnProfile] != "prod" {
 		t.Fatalf("swiss set %v", got)
 	}

@@ -50,7 +50,7 @@ func (e Exec) Template(ctx context.Context, p *plan.Plan) (string, error) {
 		return "", err
 	}
 
-	vals, err := yaml.Marshal(p.Values)
+	vals, err := yaml.Marshal(p.Values())
 	if err != nil {
 		return "", err
 	}
@@ -72,6 +72,9 @@ func (e Exec) Template(ctx context.Context, p *plan.Plan) (string, error) {
 	}
 	if p.Chart.Repo != "" {
 		args = append(args, "--version", p.Chart.Version)
+	}
+	if p.SkipSchemaValidation {
+		args = append(args, "--skip-schema-validation")
 	}
 
 	var out, errb bytes.Buffer

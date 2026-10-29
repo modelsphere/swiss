@@ -1782,6 +1782,7 @@ components:
         overridesYAML: { type: string, description: "Form-layer values as YAML text." }
         editsYAML: { type: string, description: "The edit layer, exempt from ownership. The autoscale layer is applied after it." }
         createNamespace: { type: boolean }
+        skipSchemaValidation: { type: boolean, description: "Apply without checking the values against the chart's values.schema.json. An upgrade with no `overrides` keeps the release's." }
         chartVersion: { type: string, description: "Must fall in the variant's chart range. Empty is the newest it allows (or the running one on upgrade)." }
 
     Plan:
@@ -1833,6 +1834,7 @@ components:
             edit: { type: object }
             autoscale: { type: object, description: "Only `replicaCount`. swissd writes it when the plan is disaggregated (`pd.enabled` true, `pd.colocate` not true) and the form layer has `sloRequirement.enabled` true, clamping the decision into [1, 64]." }
         createNamespace: { type: boolean }
+        skipSchemaValidation: { type: boolean, description: "helm, helmfile and helm-diff run with --skip-schema-validation; an LLMService gets the annotation `serving.modelsphere.dev/skip-schema-validation: \"true\"`. Not hashed." }
         helmfile: { type: string, description: "The helmfile these values are applied through. Not hashed." }
         warnings: { type: array, items: { type: string }, description: "Accepted but worth seeing. Not hashed." }
         hash: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }

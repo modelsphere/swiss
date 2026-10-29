@@ -582,3 +582,36 @@ func layerNames(t *testing.T, u *unstructured.Unstructured) []string {
 	}
 	return names
 }
+
+// The skip-schema-validation annotation is how the operator learns it, and how
+// the next upgrade of an llmsvc release reads it back.
+func TestSkipSchemaValidationRoundTrips(t *testing.T) {
+	p := realistic(t)
+	p.SkipSchemaValidation = true
+	u, err := FromPlan(p, "install", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := u.GetAnnotations()[AnnSkipSchemaValidation]; v != "true" {
+		t.Fatalf("%s = %q, want true", AnnSkipSchemaValidation, v)
+	}
+	if _, found, _ := unstructured.NestedFieldNoCopy(u.Object, "spec", "skipSchemaValidation"); found {
+		t.Error("it is an annotation, not a spec field")
+	}
+	back, err := ToPlan(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !back.SkipSchemaValidation {
+		t.Error("ToPlan dropped the flag")
+	}
+
+	p.SkipSchemaValidation = false
+	u, err = FromPlan(p, "install", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := u.GetAnnotations()[AnnSkipSchemaValidation]; found {
+		t.Error("off must write nothing")
+	}
+}

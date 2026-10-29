@@ -65,6 +65,9 @@ type planRequest struct {
 	// of the site profile's own setting. helm is what creates the namespace;
 	// this is where the plan says so.
 	CreateNamespace bool `json:"createNamespace,omitempty"`
+	// SkipSchemaValidation is plan.Plan's. An upgrade sending the form sets it;
+	// one sending none keeps the release's.
+	SkipSchemaValidation bool `json:"skipSchemaValidation,omitempty"`
 	// ChartVersion must fall in the variant's chart.version. Empty resolves as
 	// chart.Resolve does.
 	ChartVersion string `json:"chartVersion,omitempty"`
@@ -229,19 +232,20 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 	}
 
 	p, err := compose.Compose(compose.Input{
-		Catalog:         cat.Source(),
-		CatalogName:     repo.Name,
-		Ref:             cat.Ref(),
-		Schema:          cat.Schema(),
-		Resolved:        resolved,
-		ChartVersion:    chartVersion,
-		Profile:         *prof,
-		Release:         release,
-		Namespace:       req.Namespace,
-		Overrides:       overrides,
-		Edits:           edits,
-		CreateNamespace: req.CreateNamespace,
-		Autoscale:       req.autoscale,
+		Catalog:              cat.Source(),
+		CatalogName:          repo.Name,
+		Ref:                  cat.Ref(),
+		Schema:               cat.Schema(),
+		Resolved:             resolved,
+		ChartVersion:         chartVersion,
+		Profile:              *prof,
+		Release:              release,
+		Namespace:            req.Namespace,
+		Overrides:            overrides,
+		Edits:                edits,
+		CreateNamespace:      req.CreateNamespace,
+		SkipSchemaValidation: req.SkipSchemaValidation,
+		Autoscale:            req.autoscale,
 	})
 	if err != nil {
 		return nil, err
@@ -294,8 +298,10 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 		Namespace:    prev.Release.Namespace,
 		Overrides:    prev.Layers[values.LayerForm],
 		ChartVersion: req.ChartVersion,
-		runningChart: prev.Chart,
-		movedFrom:    movedFrom,
+		// Kept unless the form below says otherwise, as edits are.
+		SkipSchemaValidation: prev.SkipSchemaValidation,
+		runningChart:         prev.Chart,
+		movedFrom:            movedFrom,
 	}
 	if req.Variant != "" {
 		out.Variant = req.Variant
@@ -315,8 +321,13 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 		}
 		return s.withAutoscale(prev, out), nil
 	}
+	// A plan composed with no form values has no form layer to merge into.
+	if out.Overrides == nil {
+		out.Overrides = values.Tree{}
+	}
 	values.Merge(out.Overrides, req.Overrides, values.LayerForm, nil)
 	out.EditsYAML = req.EditsYAML
+	out.SkipSchemaValidation = req.SkipSchemaValidation
 	// serviceId is identity, not a setting: the route, the scaler and the SLO
 	// are all named after it. Changing it on an upgrade renames none of them --
 	// helm renders a new set under the new name and orphans the old ones, on a

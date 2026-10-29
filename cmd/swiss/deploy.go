@@ -24,6 +24,7 @@ type deployFlags struct {
 	revision                                                int
 	createNamespace                                         bool
 	forceConflicts                                          bool
+	skipSchema                                              bool
 }
 
 func (d *deployFlags) bind(c *cobra.Command) {
@@ -40,6 +41,7 @@ func (d *deployFlags) bind(c *cobra.Command) {
 	f.StringVarP(&d.planFile, "plan", "p", "", "use an existing plan file")
 	f.StringVar(&d.chartRoot, "chart-root", os.Getenv("SWISS_CHART_ROOT"), "chart directory, when the profile names no repo")
 	f.BoolVar(&d.keepWorkspace, "keep-workspace", false, "leave the generated helmfile on disk")
+	f.BoolVar(&d.skipSchema, "skip-schema-validation", false, skipSchemaUsage)
 }
 
 func (d *deployFlags) plan(cmd *cobra.Command) (*plan.Plan, error) {
@@ -49,6 +51,9 @@ func (d *deployFlags) plan(cmd *cobra.Command) (*plan.Plan, error) {
 		if d.createNamespace {
 			return nil, fmt.Errorf("--create-namespace composes into a plan: recompose with `swiss plan --create-namespace`, or apply %s as it stands", d.planFile)
 		}
+		if d.skipSchema {
+			return nil, fmt.Errorf("--skip-schema-validation composes into a plan: recompose with `swiss plan --skip-schema-validation`, or apply %s as it stands", d.planFile)
+		}
 		return readPlan(d.planFile)
 	}
 	if d.model == "" {
@@ -57,8 +62,9 @@ func (d *deployFlags) plan(cmd *cobra.Command) (*plan.Plan, error) {
 	return buildPlan(cmd.Context(), planInput{
 		model: d.model, modelVersion: d.modelVersion, variant: d.variant,
 		release: d.release, namespace: d.namespace, chartVersion: d.chartVersion,
-		sets:            append(d.sets, kv("serviceId", d.serviceID), kv("model.localPath", d.localPath)),
-		createNamespace: d.createNamespace,
+		sets:                 append(d.sets, kv("serviceId", d.serviceID), kv("model.localPath", d.localPath)),
+		createNamespace:      d.createNamespace,
+		skipSchemaValidation: d.skipSchema,
 	})
 }
 
