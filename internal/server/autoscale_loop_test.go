@@ -194,7 +194,7 @@ func runLLMLoop(t *testing.T, tc loopCase) {
 				return true, nil, err
 			}
 			copied := obj.(*unstructured.Unstructured).DeepCopy()
-			if n >= 6 {
+			if n >= 7 {
 				helm, _, _ := unstructured.NestedMap(copied.Object, "status", "helm")
 				if helm == nil {
 					helm = map[string]any{}
@@ -219,10 +219,9 @@ func runLLMLoop(t *testing.T, tc loopCase) {
 	}
 	assertLoopLog(t, logs, tc)
 	if tc.Conflict {
-		// One more than the loop alone: applyLocked reads the LLMService
-		// once to refuse a release that is being deleted.
-		if gotGets != 8 {
-			t.Errorf("Get calls %d, want 8", gotGets)
+		// applyLocked checks Canary ownership and deletion before applying.
+		if gotGets != 9 {
+			t.Errorf("Get calls %d, want 9", gotGets)
 		}
 		if got.GetAnnotations()[llmsvc.AnnAction] == "autoscale" {
 			t.Fatalf("conflict updated the object: %v", got.GetAnnotations())
