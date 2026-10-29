@@ -37,3 +37,24 @@ func TestCanaryOwnershipProtectsIncompleteMetadata(t *testing.T) {
 		})
 	}
 }
+
+func TestCanarySystemLayerIsEffectiveInReadPlan(t *testing.T) {
+	u, err := ToUnstructured(&LLMService{Spec: Spec{Chart: ChartSpec{Name: "vllm", Repo: "oci://example/charts", Version: "1.0.0"}, Layers: []Layer{
+		{Name: "form", Values: map[string]any{"replicaCount": 1, "scaler": map[string]any{"enabled": true}, "modelRoute": map[string]any{"nginx": map[string]any{"route": "arm-name"}}}},
+		{Name: "canary-system", Values: map[string]any{"scaler": map[string]any{"enabled": false}, "modelRoute": map[string]any{"nginx": map[string]any{"route": "production-route"}}}},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := ToPlan(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := p.Values()
+	if v["scaler"].(map[string]any)["enabled"] != false || v["modelRoute"].(map[string]any)["nginx"].(map[string]any)["route"] != "production-route" {
+		t.Fatalf("system policy ignored: %v", v)
+	}
+	if p.LayerOf("scaler.enabled") != "canary-system" {
+		t.Fatal("wrong provenance")
+	}
+}
