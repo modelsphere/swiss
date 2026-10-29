@@ -24,7 +24,7 @@ func planCmd() *cobra.Command {
 		modelVersion, serviceID, localPath      string
 		chartVersion                            string
 		sets                                    []string
-		explain, createNamespace                bool
+		explain, createNamespace, skipSchema    bool
 	)
 	c := &cobra.Command{
 		Use:   "plan",
@@ -34,8 +34,9 @@ func planCmd() *cobra.Command {
 			p, err := buildPlan(cmd.Context(), planInput{
 				model: model, modelVersion: modelVersion, variant: variant,
 				release: release, namespace: namespace, chartVersion: chartVersion,
-				sets:            append(sets, kv("serviceId", serviceID), kv("model.localPath", localPath)),
-				createNamespace: createNamespace,
+				sets:                 append(sets, kv("serviceId", serviceID), kv("model.localPath", localPath)),
+				createNamespace:      createNamespace,
+				skipSchemaValidation: skipSchema,
 			})
 			if err != nil {
 				return err
@@ -68,6 +69,7 @@ func planCmd() *cobra.Command {
 	c.Flags().StringVarP(&out, "output", "o", "-", "write the plan here")
 	c.Flags().BoolVar(&explain, "explain", false, "print which layer set each value instead of the plan")
 	c.Flags().BoolVar(&createNamespace, "create-namespace", false, "compose helmfile's createNamespace into the plan, so helm creates the namespace on install")
+	c.Flags().BoolVar(&skipSchema, "skip-schema-validation", false, skipSchemaUsage)
 	_ = c.MarkFlagRequired("model")
 	return c
 }
@@ -77,6 +79,7 @@ func renderCmd() *cobra.Command {
 		model, variant, release, namespace, chartRoot, planFile string
 		modelVersion, chartVersion                              string
 		sets                                                    []string
+		skipSchema                                              bool
 	)
 	c := &cobra.Command{
 		Use:   "render",
@@ -91,6 +94,7 @@ func renderCmd() *cobra.Command {
 				p, err = buildPlan(cmd.Context(), planInput{
 					model: model, modelVersion: modelVersion, variant: variant,
 					release: release, namespace: namespace, chartVersion: chartVersion, sets: sets,
+					skipSchemaValidation: skipSchema,
 				})
 			}
 			if err != nil {
@@ -113,6 +117,7 @@ func renderCmd() *cobra.Command {
 	c.Flags().StringArrayVar(&sets, "set", nil, "deploy-time override, key=value")
 	c.Flags().StringVar(&chartRoot, "chart-root", envOr("SWISS_CHART_ROOT", "../charts"), "directory holding the charts, when the profile names no repo")
 	c.Flags().StringVarP(&planFile, "plan", "p", "", "render an existing plan file instead of composing one")
+	c.Flags().BoolVar(&skipSchema, "skip-schema-validation", false, skipSchemaUsage+"; a --plan file carries its own")
 	return c
 }
 
@@ -125,7 +130,10 @@ type planInput struct {
 	chartVersion                                     string
 	sets                                             []string
 	createNamespace                                  bool
+	skipSchemaValidation                             bool
 }
+
+const skipSchemaUsage = "compose skipSchemaValidation into the plan: helm applies it without checking the values against the chart's values.schema.json"
 
 func buildPlan(ctx context.Context, in planInput) (*plan.Plan, error) {
 	catalogLoc, profileFile, err := resolve()
@@ -177,16 +185,17 @@ func buildPlan(ctx context.Context, in planInput) (*plan.Plan, error) {
 		release = resolved.Model
 	}
 	return compose.Compose(compose.Input{
-		Catalog:         cat.Source(),
-		Ref:             cat.Ref(),
-		Schema:          cat.Schema(),
-		Resolved:        resolved,
-		ChartVersion:    chartVersion,
-		Profile:         *prof,
-		Release:         release,
-		Namespace:       in.namespace,
-		Overrides:       overrides,
-		CreateNamespace: in.createNamespace,
+		Catalog:              cat.Source(),
+		Ref:                  cat.Ref(),
+		Schema:               cat.Schema(),
+		Resolved:             resolved,
+		ChartVersion:         chartVersion,
+		Profile:              *prof,
+		Release:              release,
+		Namespace:            in.namespace,
+		Overrides:            overrides,
+		CreateNamespace:      in.createNamespace,
+		SkipSchemaValidation: in.skipSchemaValidation,
 	})
 }
 

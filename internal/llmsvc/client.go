@@ -123,15 +123,17 @@ func (c *Client) List(ctx context.Context, namespaces []string) ([]*unstructured
 }
 
 // WaitApplied returns the object once observedGeneration >= generation and
-// phase is Applied or Failed. The context is the budget.
-func (c *Client) WaitApplied(ctx context.Context, ns, name string, generation int64) (*unstructured.Unstructured, error) {
+// phase is Applied or Failed. A non-empty after is a resourceVersion the
+// object must have moved past: the caller's own write, when it left the
+// generation where it was. The context is the budget.
+func (c *Client) WaitApplied(ctx context.Context, ns, name string, generation int64, after string) (*unstructured.Unstructured, error) {
 	var got *unstructured.Unstructured
 	err := c.poll(ctx, func() (bool, error) {
 		u, err := c.Get(ctx, ns, name)
 		if err != nil {
 			return false, err
 		}
-		done, err := reached(u, generation)
+		done, err := reached(u, generation, after)
 		if err != nil || !done {
 			return false, err
 		}
@@ -193,7 +195,10 @@ func (c *Client) poll(ctx context.Context, fn func() (bool, error)) error {
 	}
 }
 
-func reached(u *unstructured.Unstructured, generation int64) (bool, error) {
+func reached(u *unstructured.Unstructured, generation int64, after string) (bool, error) {
+	if after != "" && u.GetResourceVersion() == after {
+		return false, nil
+	}
 	obj, err := FromUnstructured(u)
 	if err != nil {
 		return false, err
