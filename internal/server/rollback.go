@@ -200,6 +200,10 @@ func (s *Server) handleRevisionDiff(w http.ResponseWriter, r *http.Request) {
 // engine flags come back verbatim -- which is the point. Going back to what
 // worked must not mean going to whatever the catalog now says that version is.
 func (s *Server) handleRollback(w http.ResponseWriter, r *http.Request) {
+	if err := s.refuseCanaryWrite(r.Context(), r.PathValue("namespace"), r.PathValue("release")); err != nil {
+		writeStatus(w, err, http.StatusBadGateway)
+		return
+	}
 	ctx, cancel := contextWithTimeout(r, 15*time.Minute)
 	defer cancel()
 

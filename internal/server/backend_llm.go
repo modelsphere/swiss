@@ -183,6 +183,9 @@ func (b llmBackend) Apply(ctx context.Context, p *plan.Plan, mode exec.Mode, o a
 		if err != nil {
 			return applyResult{}, failErr(http.StatusBadGateway, err)
 		}
+		if err := refuseCanaryService(cur); err != nil {
+			return applyResult{}, err
+		}
 		if llmsvc.IsExternal(cur) {
 			return applyResult{}, fail(http.StatusConflict, "release %s is an external LLMService: swiss did not deploy it, so it cannot be upgraded", ref)
 		}
@@ -318,6 +321,9 @@ func (b llmBackend) Uninstall(ctx context.Context, ns, release string) (uninstal
 	if err != nil {
 		return uninstallResult{}, failErr(http.StatusBadGateway, err)
 	}
+	if err := refuseCanaryService(u); err != nil {
+		return uninstallResult{}, err
+	}
 	// The operator's finalizer holds the object through route removal and pod
 	// termination. This call returns once that delete is accepted; the reap
 	// drops swiss's records when the object is finally gone.
@@ -343,7 +349,7 @@ func (b llmBackend) Uninstall(ctx context.Context, ns, release string) (uninstal
 	}
 
 	started := time.Now()
-	delErr := s.llms.Delete(ctx, ns, release)
+	delErr := s.llms.DeleteObserved(ctx, u)
 	if apierrors.IsNotFound(delErr) {
 		if hadPlan {
 			if rerr := s.restorePlan(ctx, ns, release, prev); rerr != nil {
@@ -360,6 +366,9 @@ func (b llmBackend) Uninstall(ctx context.Context, ns, release string) (uninstal
 			if ferr := s.finishUninstallFailed(ctx, ns, release, delErr); ferr != nil {
 				s.log.ErrorContext(ctx, "plan not marked failed", "namespace", ns, "release", release, "err", ferr)
 			}
+		}
+		if apierrors.IsConflict(delErr) {
+			return uninstallResult{}, failErr(http.StatusConflict, delErr)
 		}
 		return uninstallResult{}, failErr(http.StatusInternalServerError, delErr)
 	}

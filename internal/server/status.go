@@ -53,9 +53,10 @@ type releaseStatus struct {
 	// (llmPlanStatus); Service carries the operator's own words.
 	Plan *planStatus `json:"planStatus,omitempty"`
 	// Backend is helm or llmsvc when swiss manages the release.
-	Backend        string         `json:"backend,omitempty"`
-	CleanupPending bool           `json:"cleanupPending,omitempty"`
-	Service        *llmStatusView `json:"llmservice,omitempty"`
+	Backend        string              `json:"backend,omitempty"`
+	ManagedBy      *llmsvc.CanaryOwner `json:"managedBy,omitempty"`
+	CleanupPending bool                `json:"cleanupPending,omitempty"`
+	Service        *llmStatusView      `json:"llmservice,omitempty"`
 }
 
 // llmStatusView is the operator's status, in place of status.yaml.
@@ -134,6 +135,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadGateway, err.Error())
 			return
 		}
+		out.ManagedBy = llmsvc.CanaryOwnership(u)
 		var obj *llmsvc.LLMService
 		if decoded, err := llmsvc.FromUnstructured(u); err == nil {
 			obj = decoded
