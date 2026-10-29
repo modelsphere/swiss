@@ -711,7 +711,12 @@ paths:
                   required: [planHash]
                   properties:
                     planHash: { type: string }
-                - $ref: "#/components/schemas/PlanRequest"
+                    applyFlags: { $ref: "#/components/schemas/ApplyFlags" }
+                - allOf:
+                    - $ref: "#/components/schemas/PlanRequest"
+                    - type: object
+                      properties:
+                        applyFlags: { $ref: "#/components/schemas/ApplyFlags" }
       responses:
         "200":
           description: The diff.
@@ -1570,7 +1575,7 @@ components:
         cache:
           type: object
           properties:
-            enabled: { type: boolean }
+            enabled: { type: boolean, default: false }
             hostPath: { type: string }
         scaler:
           type: object
@@ -1589,14 +1594,14 @@ components:
               type: object
               description: What a deploy starts each feature at. Unset is on. Routing is `route.enabled`, a site fact.
               properties:
-                cart: { type: boolean }
-                serviceMonitor: { type: boolean }
-                sloRequirement: { type: boolean }
-                scaler: { type: boolean }
+                cart: { type: boolean, default: true }
+                serviceMonitor: { type: boolean, default: true }
+                sloRequirement: { type: boolean, default: true }
+                scaler: { type: boolean, default: true }
         route:
           type: object
           properties:
-            enabled: { type: boolean, description: "`modelRoute.enabled` for every deploy, in the `site` layer above the catalog, so a variant cannot turn it on; a deploy still can. Unset is off." }
+            enabled: { type: boolean, default: false, description: "`modelRoute.enabled` for every deploy, in the `site` layer above the catalog, so a variant cannot turn it on; a deploy still can. Unset is off." }
             nginxConfigMap: { type: string }
             nginxService: { type: string }
             nginxSelector: { type: string }
@@ -1640,8 +1645,8 @@ components:
         name: { type: string }
         url: { type: string }
         schemaVersion: { $ref: "#/components/schemas/CatalogSchema", description: "Unset is v1." }
-        default: { type: boolean }
-        writable: { type: boolean, description: "A catalog-server catalog the console edits; needs schemaVersion v2 and an http(s) url. swissd only reads it." }
+        default: { type: boolean, default: false }
+        writable: { type: boolean, default: false, description: "A catalog-server catalog the console edits; needs schemaVersion v2 and an http(s) url. swissd only reads it." }
 
     Chart:
       type: object
@@ -1777,12 +1782,11 @@ components:
         serviceId: { type: string, description: "The route, scaler and SLO identity. Cannot change on an upgrade." }
         localPath: { type: string, description: "Overrides the profile's path template." }
         gpuProducts: { type: array, items: { type: string }, description: "Any one of these products." }
-        forceGpuProducts: { type: boolean, description: "Accept products the variant does not list, if this cluster has them." }
+        forceGpuProducts: { type: boolean, default: false, description: "Accept products the variant does not list, if this cluster has them." }
         overrides: { type: object, description: "Form-layer values. On an upgrade, merged over the release's form layer." }
         overridesYAML: { type: string, description: "Form-layer values as YAML text." }
         editsYAML: { type: string, description: "The edit layer, exempt from ownership. The autoscale layer is applied after it." }
-        createNamespace: { type: boolean }
-        skipSchemaValidation: { type: boolean, description: "Apply without checking the values against the chart's values.schema.json. An upgrade with no `overrides` keeps the release's." }
+        createNamespace: { type: boolean, default: false, deprecated: true, description: "Use `applyFlags.createNamespace`." }
         chartVersion: { type: string, description: "Must fall in the variant's chart range. Empty is the newest it allows (or the running one on upgrade)." }
 
     Plan:
@@ -1833,8 +1837,7 @@ components:
             form: { type: object }
             edit: { type: object }
             autoscale: { type: object, description: "Only `replicaCount`. swissd writes it when the plan is disaggregated (`pd.enabled` true, `pd.colocate` not true) and the form layer has `sloRequirement.enabled` true, clamping the decision into [1, 64]." }
-        createNamespace: { type: boolean }
-        skipSchemaValidation: { type: boolean, description: "helm, helmfile and helm-diff run with --skip-schema-validation; an LLMService gets the annotation `serving.modelsphere.dev/skip-schema-validation: \"true\"`. Not hashed." }
+        createNamespace: { type: boolean, default: false, deprecated: true, description: "Use `applyFlags.createNamespace`." }
         helmfile: { type: string, description: "The helmfile these values are applied through. Not hashed." }
         warnings: { type: array, items: { type: string }, description: "Accepted but worth seeing. Not hashed." }
         hash: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
@@ -1856,10 +1859,19 @@ components:
         planHash: { type: string, description: "A plan stored by `POST /api/plans`." }
         expectRevision: { type: integer, description: "The live revision the diff saw. Omitted asserts nothing." }
         note: { type: string, description: "Why; recorded in the log and beside the release." }
-        forceConflicts: { type: boolean, description: "Upgrade only. Take fields another field manager owns (a hand `kubectl edit`)." }
+        forceConflicts: { type: boolean, default: false, deprecated: true, description: "Use `applyFlags.forceConflicts`, which overrides this when sent." }
+        applyFlags: { $ref: "#/components/schemas/ApplyFlags" }
         applyWith:
           $ref: "#/components/schemas/ApplyWith"
           description: Install only; empty is the site profile's. An upgrade naming the other method is a 409.
+
+    ApplyFlags:
+      type: object
+      description: Per-request options for diff, install and apply. Not stored in the plan. Each endpoint uses the flags that apply to it and ignores the rest.
+      properties:
+        skipSchemaValidation: { type: boolean, default: false, description: "Skip the chart's values.schema.json check: helm, helmfile and helm-diff run with --skip-schema-validation; an LLMService gets the annotation `serving.modelsphere.dev/skip-schema-validation: \"true\"`." }
+        forceConflicts: { type: boolean, default: false, description: "Take fields another field manager owns (a hand `kubectl edit`)." }
+        createNamespace: { type: boolean, default: false, description: "Create the release's namespace if it does not exist." }
 
     ApplyResult:
       type: object
