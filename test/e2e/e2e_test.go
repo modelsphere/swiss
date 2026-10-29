@@ -497,7 +497,8 @@ type releaseStatusBody struct {
 	HelmStatus string `json:"helmStatus"`
 	Model      string `json:"model"`
 	Plan       *struct {
-		Phase string `json:"phase"`
+		Phase    string `json:"phase"`
+		Revision int    `json:"revision"`
 	} `json:"planStatus"`
 }
 
