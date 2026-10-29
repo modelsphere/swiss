@@ -207,7 +207,7 @@ func (b llmBackend) Apply(ctx context.Context, p *plan.Plan, mode exec.Mode, o a
 		}
 	}
 
-	if mode == exec.Install && p.CreateNamespace && s.writer != nil {
+	if mode == exec.Install && (p.CreateNamespace || o.CreateNamespace) && s.writer != nil {
 		if err := s.writer.EnsureNamespace(ctx, p.Release.Namespace); err != nil {
 			return applyResult{}, fail(http.StatusInternalServerError, "namespace not created, nothing applied: %s", err.Error())
 		}
@@ -216,6 +216,14 @@ func (b llmBackend) Apply(ctx context.Context, p *plan.Plan, mode exec.Mode, o a
 	fresh, err := llmsvc.FromPlan(p, o.Action, o.Note)
 	if err != nil {
 		return applyResult{}, failErr(fromPlanStatus(err), err)
+	}
+	if o.SkipSchemaValidation {
+		anns := fresh.GetAnnotations()
+		if anns == nil {
+			anns = map[string]string{}
+		}
+		anns[llmsvc.AnnSkipSchemaValidation] = "true"
+		fresh.SetAnnotations(anns)
 	}
 	// Spec decides the generation. The force-conflicts annotation is named
 	// after that generation, so it is applied after the prediction.

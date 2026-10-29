@@ -37,10 +37,13 @@ type backend interface {
 
 // applyOpts is what an apply, install, or rollback asks of either backend.
 type applyOpts struct {
-	ExpectRevision int
-	Action         string
-	Note           string
-	ForceConflicts bool
+	ExpectRevision       int
+	Action               string
+	Note                 string
+	ForceConflicts       bool
+	SkipSchemaValidation bool
+	// CreateNamespace is an install's, on top of a plan's own (deprecated) one.
+	CreateNamespace bool
 }
 
 // applyResult is the success body both backends produce. Failures are errors.

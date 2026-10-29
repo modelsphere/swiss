@@ -51,9 +51,6 @@ func (d *deployFlags) plan(cmd *cobra.Command) (*plan.Plan, error) {
 		if d.createNamespace {
 			return nil, fmt.Errorf("--create-namespace composes into a plan: recompose with `swiss plan --create-namespace`, or apply %s as it stands", d.planFile)
 		}
-		if d.skipSchema {
-			return nil, fmt.Errorf("--skip-schema-validation composes into a plan: recompose with `swiss plan --skip-schema-validation`, or apply %s as it stands", d.planFile)
-		}
 		return readPlan(d.planFile)
 	}
 	if d.model == "" {
@@ -62,10 +59,13 @@ func (d *deployFlags) plan(cmd *cobra.Command) (*plan.Plan, error) {
 	return buildPlan(cmd.Context(), planInput{
 		model: d.model, modelVersion: d.modelVersion, variant: d.variant,
 		release: d.release, namespace: d.namespace, chartVersion: d.chartVersion,
-		sets:                 append(d.sets, kv("serviceId", d.serviceID), kv("model.localPath", d.localPath)),
-		createNamespace:      d.createNamespace,
-		skipSchemaValidation: d.skipSchema,
+		sets:            append(d.sets, kv("serviceId", d.serviceID), kv("model.localPath", d.localPath)),
+		createNamespace: d.createNamespace,
 	})
+}
+
+func (d *deployFlags) options() exec.ApplyOptions {
+	return exec.ApplyOptions{ForceConflicts: d.forceConflicts, SkipSchemaValidation: d.skipSchema}
 }
 
 func (d *deployFlags) runner() exec.Runner {
@@ -97,7 +97,7 @@ func diffCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			res, err := d.runner().Diff(cmd.Context(), p)
+			res, err := d.runner().Diff(cmd.Context(), p, d.options())
 			if err != nil {
 				return err
 			}
@@ -143,8 +143,7 @@ func applyCmd(mode exec.Mode) *cobra.Command {
 				return err
 			}
 
-			res, err := d.runner().Apply(cmd.Context(), p,
-				exec.ApplyOptions{ForceConflicts: d.forceConflicts})
+			res, err := d.runner().Apply(cmd.Context(), p, d.options())
 			fmt.Print(res.Output)
 			if err != nil {
 				return err

@@ -156,6 +156,9 @@ http {
 		}).WithTimeout(4 * time.Minute).WithPolling(2 * time.Second).Should(Succeed())
 
 		By("scaling 2 to 1")
+		// The DS spec and helm's revision change while the scale's apply still
+		// holds the release lock, and a DELETE then is a 409. The applied phase
+		// at that revision is written last, under the lock.
 		Eventually(func(g Gomega) {
 			obj, err := dynClient.Resource(dsGVR).Namespace(ns).Get(context.Background(), e2ePDRelease, metav1.GetOptions{})
 			g.Expect(err).NotTo(HaveOccurred())
@@ -170,6 +173,9 @@ http {
 			g.Expect(st.Revision).To(BeNumerically(">", installed.Revision))
 			g.Expect(layer).NotTo(BeNil())
 			g.Expect(layer["replicaCount"]).To(BeNumerically("==", 1))
+			g.Expect(st.Plan).NotTo(BeNil())
+			g.Expect(st.Plan.Phase).To(Equal("applied"))
+			g.Expect(st.Plan.Revision).To(Equal(st.Revision))
 		}).WithTimeout(10 * time.Minute).WithPolling(5 * time.Second).Should(Succeed())
 		markDSCurrent(ns, e2ePDRelease)
 

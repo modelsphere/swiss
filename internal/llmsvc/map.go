@@ -90,9 +90,6 @@ func annotations(p *plan.Plan, action, note string) map[string]string {
 	put(AnnProfile, p.Profile)
 	put(AnnAction, action)
 	put(AnnNote, note)
-	if p.SkipSchemaValidation {
-		ann[AnnSkipSchemaValidation] = "true"
-	}
 	if len(ann) == 0 {
 		return nil
 	}
@@ -174,9 +171,8 @@ func ToPlan(u *unstructured.Unstructured) (*plan.Plan, error) {
 			Version: obj.Spec.Chart.Version,
 			Repo:    obj.Spec.Chart.Repo,
 		},
-		Profile:              ann[AnnProfile],
-		Layers:               layers,
-		SkipSchemaValidation: ann[AnnSkipSchemaValidation] == "true",
+		Profile: ann[AnnProfile],
+		Layers:  layers,
 	}
 	if m := obj.Spec.Model; m != nil {
 		p.Source.Model = m.Name

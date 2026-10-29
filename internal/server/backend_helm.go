@@ -92,7 +92,8 @@ func (b helmBackend) Apply(ctx context.Context, p *plan.Plan, mode exec.Mode, o 
 	// Creating it here rather than dropping the write-ahead: an empty namespace
 	// is the one cluster change that costs nothing if the apply then fails, and
 	// helm still applies its own Namespace object afterwards.
-	if p.CreateNamespace && s.writer != nil {
+	createNS := p.CreateNamespace || o.CreateNamespace
+	if createNS && s.writer != nil {
 		if err := s.writer.EnsureNamespace(ctx, p.Release.Namespace); err != nil {
 			return applyResult{}, fail(http.StatusInternalServerError, "namespace not created, nothing applied: %s", err.Error())
 		}
@@ -108,8 +109,8 @@ func (b helmBackend) Apply(ctx context.Context, p *plan.Plan, mode exec.Mode, o 
 		Forced: o.ForceConflicts,
 	}); err != nil {
 		msg := "plan not recorded, nothing applied: " + err.Error()
-		if !p.CreateNamespace && apierrors.IsNotFound(err) {
-			msg += "\n\nThe namespace does not exist. Recompose with createNamespace to have it created, or ask an admin for it -- createNamespace has to be in the plan, so setting it on the apply does nothing."
+		if !createNS && apierrors.IsNotFound(err) {
+			msg += "\n\nThe namespace does not exist. Install with applyFlags.createNamespace to have it created, or ask an admin for it."
 		}
 		return applyResult{}, fail(http.StatusInternalServerError, "%s", msg)
 	}
@@ -125,7 +126,11 @@ func (b helmBackend) Apply(ctx context.Context, p *plan.Plan, mode exec.Mode, o 
 		s.log.WarnContext(ctx, "applying with --force-conflicts: fields owned by another manager will be overwritten",
 			"release", p.Release.Name, "namespace", p.Release.Namespace, "action", o.Action)
 	}
-	res, applyErr := s.runner().Apply(ctx, p, exec.ApplyOptions{ForceConflicts: o.ForceConflicts})
+	res, applyErr := s.runner().Apply(ctx, p, exec.ApplyOptions{
+		ForceConflicts:       o.ForceConflicts,
+		SkipSchemaValidation: o.SkipSchemaValidation,
+		CreateNamespace:      o.CreateNamespace,
+	})
 
 	// Looked up before the audit write, so the row can name the revision this
 	// produced -- which is what makes the log a list of rollback targets rather
