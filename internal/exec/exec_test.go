@@ -73,7 +73,7 @@ func TestApplyPassesForceConflictsToHelmfile(t *testing.T) {
 }
 
 func TestMaterializeWritesAValuesFileAndAOneReleaseHelmfile(t *testing.T) {
-	ws, err := Runner{}.Materialize(testPlan())
+	ws, err := Runner{}.Materialize(testPlan(), ApplyOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestMaterializeWritesAValuesFileAndAOneReleaseHelmfile(t *testing.T) {
 // These are load-bearing for a 20-40 minute cold load, and swissd must behave
 // the same as `make apply` rather than approximately the same.
 func TestHelmDefaultsMatchTheRepo(t *testing.T) {
-	ws, err := Runner{}.Materialize(testPlan())
+	ws, err := Runner{}.Materialize(testPlan(), ApplyOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestHelmDefaultsMatchTheRepo(t *testing.T) {
 }
 
 func TestWorkspaceIsRemovedUnlessKept(t *testing.T) {
-	ws, err := Runner{}.Materialize(testPlan())
+	ws, err := Runner{}.Materialize(testPlan(), ApplyOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestWorkspaceIsRemovedUnlessKept(t *testing.T) {
 		t.Error("workspace should be removed")
 	}
 
-	kept, err := Runner{KeepWorkspace: true}.Materialize(testPlan())
+	kept, err := Runner{KeepWorkspace: true}.Materialize(testPlan(), ApplyOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestWorkspaceIsRemovedUnlessKept(t *testing.T) {
 func TestClassicChartRepoBecomesARepositoriesEntry(t *testing.T) {
 	p := testPlan()
 	p.Chart.Repo = "https://modelsphere.github.io/helm-charts/"
-	ws, err := Runner{}.Materialize(p)
+	ws, err := Runner{}.Materialize(p, ApplyOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestClassicChartRepoBecomesARepositoriesEntry(t *testing.T) {
 
 // OCI needs no repositories entry: the reference is the chart.
 func TestOCIRegistryIsAddressedDirectly(t *testing.T) {
-	ws, err := Runner{}.Materialize(testPlan())
+	ws, err := Runner{}.Materialize(testPlan(), ApplyOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +222,7 @@ func TestOCIRegistryIsAddressedDirectly(t *testing.T) {
 func TestLocalChartPathIsAbsolute(t *testing.T) {
 	p := testPlan()
 	p.Chart.Repo, p.Chart.Path = "", "../charts"
-	ws, err := Runner{}.Materialize(p)
+	ws, err := Runner{}.Materialize(p, ApplyOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +243,69 @@ func TestLocalChartPathIsAbsolute(t *testing.T) {
 func TestNoChartSourceIsAnError(t *testing.T) {
 	p := testPlan()
 	p.Chart.Repo, p.Chart.Path = "", ""
-	if _, err := (Runner{}).Materialize(p); err == nil || !strings.Contains(err.Error(), "no chart source") {
+	if _, err := (Runner{}).Materialize(p, ApplyOptions{}); err == nil || !strings.Contains(err.Error(), "no chart source") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+// The run's flags reach the helmfile this run executes, not the one the plan
+// carries: the plan ConfigMap must not say "skip" or "create" for every later
+// apply that replays it.
+func TestRunFlagsReachTheWorkspaceNotThePlan(t *testing.T) {
+	read := func(opts ApplyOptions, p *plan.Plan) plan.HelmDefaults {
+		t.Helper()
+		ws, err := Runner{}.Materialize(p, opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ws.Close()
+		doc, _ := os.ReadFile(ws.Helmfile)
+		var hf plan.HelmfileDoc
+		if err := yaml.Unmarshal(doc, &hf); err != nil {
+			t.Fatal(err)
+		}
+		return hf.HelmDefaults
+	}
+
+	if d := read(ApplyOptions{}, testPlan()); d.SkipSchemaValidation || d.CreateNS {
+		t.Errorf("nothing asked for either: %+v", d)
+	}
+	if d := read(ApplyOptions{SkipSchemaValidation: true, CreateNamespace: true}, testPlan()); !d.SkipSchemaValidation || !d.CreateNS {
+		t.Errorf("both were asked for: %+v", d)
+	}
+	deprecated := testPlan()
+	deprecated.CreateNamespace = true
+	if d := read(ApplyOptions{}, deprecated); !d.CreateNS {
+		t.Error("a plan that still carries createNamespace must keep it")
+	}
+
+	files, err := testPlan().Files("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc := files[plan.HelmfileFile]; strings.Contains(doc, "skipSchemaValidation") || strings.Contains(doc, "createNamespace: true") {
+		t.Errorf("the plan's own helmfile must carry neither:\n%s", doc)
+	}
+}
+
+// The diff runs against the same workspace as the apply, so a release whose
+// values the schema refuses can be previewed with the check skipped.
+func TestDiffSkipsTheSchemaWhenAsked(t *testing.T) {
+	dir := t.TempDir()
+	bin, log := filepath.Join(dir, "helmfile"), filepath.Join(dir, "helmfile.log")
+	// $2 is the helmfile document: Runner.run passes --file first.
+	script := "#!/bin/sh\ncat \"$2\" >> " + log + "\nexit 0\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (Runner{HelmfileBin: bin}).Diff(t.Context(), testPlan(), ApplyOptions{SkipSchemaValidation: true}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "skipSchemaValidation: true") {
+		t.Errorf("helm-diff must run with the check skipped:\n%s", raw)
 	}
 }

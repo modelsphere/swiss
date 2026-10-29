@@ -40,15 +40,10 @@ type Plan struct {
 	Layers map[string]values.Tree `json:"layers,omitempty"`
 
 	// CreateNamespace passes --create-namespace to helm.
+	//
+	// Deprecated: an install's exec.ApplyOptions.CreateNamespace does the same
+	// without the plan carrying it.
 	CreateNamespace bool `json:"createNamespace,omitempty"`
-
-	// SkipSchemaValidation turns off the chart's values.schema.json for this
-	// release: helm, helmfile and helm-diff take --skip-schema-validation, and
-	// the operator the LLMService's serving.modelsphere.dev/skip-schema-validation
-	// annotation. An escape hatch
-	// for a variant whose values the chart's schema refuses. Excluded from
-	// Hash: the values render the same either way.
-	SkipSchemaValidation bool `json:"skipSchemaValidation,omitempty"`
 
 	// Helmfile is the release declaration these values are applied through, so
 	// a plan is a complete deploy on its own. Derived, and excluded from Hash:

@@ -35,6 +35,9 @@ type Exec struct {
 	// repo. Local paths are fine for the CLI and not for a server, which has no
 	// checkout to point at.
 	ChartRoot string
+	// SkipSchemaValidation leaves the values unchecked against the chart's
+	// values.schema.json, as the apply does when asked to.
+	SkipSchemaValidation bool
 }
 
 func (e Exec) bin() string {
@@ -73,7 +76,7 @@ func (e Exec) Template(ctx context.Context, p *plan.Plan) (string, error) {
 	if p.Chart.Repo != "" {
 		args = append(args, "--version", p.Chart.Version)
 	}
-	if p.SkipSchemaValidation {
+	if e.SkipSchemaValidation {
 		args = append(args, "--skip-schema-validation")
 	}
 

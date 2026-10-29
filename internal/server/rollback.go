@@ -174,7 +174,7 @@ func (s *Server) handleRevisionDiff(w http.ResponseWriter, r *http.Request) {
 
 	// Not audited, like every other diff: it changes nothing, and the rollback
 	// that follows carries the diff in its own output.
-	res, err := s.runner().Diff(ctx, p)
+	res, err := s.runner().Diff(ctx, p, exec.ApplyOptions{})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -235,7 +235,7 @@ func (s *Server) handleRollback(w http.ResponseWriter, r *http.Request) {
 	// No force here: a rollback restores a plan that was applied cleanly once,
 	// and taking fields from another manager during one would be a second
 	// surprise on top of the one being undone.
-	s.applyPlan(ctx, w, p, exec.Upgrade, "", req.ExpectRevision, "rollback", req.Note, false)
+	s.applyPlan(ctx, w, p, exec.Upgrade, "", applyOpts{ExpectRevision: req.ExpectRevision, Action: "rollback", Note: req.Note})
 }
 
 // archivedPlan reads the workspace that produced a revision, and checks it

@@ -544,19 +544,3 @@ func TestEditLayerWinsLast(t *testing.T) {
 		}
 	}
 }
-
-func TestSkipSchemaValidationLandsOnThePlan(t *testing.T) {
-	in := testInput()
-	in.Profile.ChartRepo = "oci://ghcr.io/modelsphere/charts"
-	in.SkipSchemaValidation = true
-	p, err := Compose(in)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !p.SkipSchemaValidation {
-		t.Fatal("the plan must carry the flag")
-	}
-	if !strings.Contains(p.Helmfile, "skipSchemaValidation: true") {
-		t.Errorf("the helmfile must carry it:\n%s", p.Helmfile)
-	}
-}

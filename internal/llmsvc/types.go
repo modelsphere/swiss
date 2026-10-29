@@ -46,10 +46,10 @@ const (
 
 	AnnDeletionPolicy = Group + "/deletion-policy"
 	AnnForceConflicts = Group + "/force-conflicts"
-	// AnnSkipSchemaValidation is plan.Plan's SkipSchemaValidation, "true" while
-	// on. swiss owns it like its own annotations: written from the plan on every
-	// apply and read back by ToPlan. An operator that predates it ignores it, and
-	// the release is applied with the schema checked.
+	// AnnSkipSchemaValidation is "true" while an apply asked to skip the
+	// chart's values schema. swiss owns it like its own annotations: written by
+	// an apply that asks, removed by the next one that does not. An operator that
+	// predates it ignores it, and the release is applied with the schema checked.
 	AnnSkipSchemaValidation = Group + "/skip-schema-validation"
 )
 
