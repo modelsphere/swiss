@@ -1,0 +1,70 @@
+name: pages
+
+# swissd's API reference on the repo's GitHub Pages: docs/openapi.yaml rendered by
+# Redocly as index.html, with the spec itself beside it as openapi.yaml.
+#
+#   push to master   lint, build, deploy
+#   pull request     lint and build; nothing deployed
+#
+# Pages must be set to deploy from GitHub Actions (Settings > Pages > Source).
+on:
+  push:
+    branches: [master]
+    paths:
+      - docs/openapi.yaml
+      - .github/workflows/pages.yml
+  pull_request:
+    paths:
+      - docs/openapi.yaml
+      - .github/workflows/pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  REDOCLY_CLI: "@redocly/cli@2.72.1"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 22
+
+      - name: Lint
+        run: npx --yes "$REDOCLY_CLI" lint docs/openapi.yaml
+
+      - name: Build
+        run: |
+          set -eu
+          mkdir -p _site
+          npx --yes "$REDOCLY_CLI" build-docs docs/openapi.yaml -o _site/index.html
+          cp docs/openapi.yaml _site/openapi.yaml
+
+      - uses: actions/upload-pages-artifact@v5.0.0
+        with:
+          path: _site
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v5.0.1

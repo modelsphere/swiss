@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 )
@@ -17,7 +18,12 @@ import (
 // The SLO may have no maximumDeployment; that is decision-gen's business.
 var ErrNoDecision = errors.New("no decision")
 
-const decisionsAPIVersion = "llmscaling.inference.x-k8s.io/v1alpha1"
+// The second is the first renamed off inference.x-k8s.io; decision-gen switches
+// to it once its consumers read both.
+var decisionsAPIVersions = []string{
+	"llmscaling.inference.x-k8s.io/v1alpha1",
+	"llmscaling.inference.modelsphere.dev/v1alpha1",
+}
 
 // decisionsResponse is the part of the decision-server payload we read.
 type decisionsResponse struct {
@@ -84,9 +90,9 @@ func ParseDecisions(body []byte, namespace, serviceID string) (int, error) {
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		return 0, fmt.Errorf("failed to decode decision response: %w", err)
 	}
-	if decoded.APIVersion != decisionsAPIVersion {
+	if !slices.Contains(decisionsAPIVersions, decoded.APIVersion) {
 		return 0, fmt.Errorf("unsupported decision schema %q, this client only understands %q",
-			decoded.APIVersion, decisionsAPIVersion)
+			decoded.APIVersion, decisionsAPIVersions)
 	}
 	var matches []decision
 	for _, d := range decoded.Decisions {

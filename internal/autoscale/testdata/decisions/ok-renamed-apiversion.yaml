@@ -1,0 +1,7 @@
+name: ok-renamed-apiversion
+description: the apiVersion renamed off inference.x-k8s.io reads the same
+namespace: models
+serviceId: pd
+status: 200
+body: '{"apiVersion":"llmscaling.inference.modelsphere.dev/v1alpha1","decisions":[{"namespace":"models","serviceId":"pd","replicas":{"active": 2}}]}'
+want: 2
