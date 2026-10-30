@@ -1050,12 +1050,20 @@ paths:
     post:
       tags: [releases]
       summary: Dry-run a rollback
-      description: Diffs the revision's archived plan against the live release. Pass `revision` as the rollback's `expectRevision`.
+      description: Diffs the revision's archived plan against the live release. Pass `revision` as the rollback's `expectRevision`. only `skipSchemaValidation` is used in applyFlags.
       operationId: diffRevision
       parameters:
         - $ref: "#/components/parameters/namespace"
         - $ref: "#/components/parameters/release"
         - $ref: "#/components/parameters/revision"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                applyFlags: { $ref: "#/components/schemas/ApplyFlags" }
       responses:
         "200":
           description: The diff.
@@ -1097,6 +1105,7 @@ paths:
                 toRevision: { type: integer, minimum: 1 }
                 expectRevision: { type: integer, minimum: 1, description: "The live revision you were looking at." }
                 note: { type: string }
+                applyFlags: { $ref: "#/components/schemas/ApplyFlags" }
       responses:
         "200":
           description: Submitted.
@@ -1867,7 +1876,7 @@ components:
 
     ApplyFlags:
       type: object
-      description: Per-request options for diff, install and apply. Not stored in the plan. Each endpoint uses the flags that apply to it and ignores the rest.
+      description: Per-request options for diff, install, apply and rollback. Not stored in the plan. Each endpoint uses the flags that apply to it and ignores the rest.
       properties:
         skipSchemaValidation: { type: boolean, default: false, description: "Skip the chart's values.schema.json check: helm, helmfile and helm-diff run with --skip-schema-validation; an LLMService gets the annotation `serving.modelsphere.dev/skip-schema-validation: \"true\"`." }
         forceConflicts: { type: boolean, default: false, description: "Take fields another field manager owns (a hand `kubectl edit`)." }

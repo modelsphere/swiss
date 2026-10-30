@@ -3,7 +3,9 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"sync"
@@ -26,6 +28,8 @@ type rollbackRequest struct {
 	// diff: the plan says what came back, never what was wrong with what it
 	// replaced.
 	Note string `json:"note,omitempty"`
+	// Only skipSchemaValidation: a rollback never forces, and its namespace exists.
+	ApplyFlags applyFlags `json:"applyFlags,omitempty"`
 }
 
 type revision struct {
@@ -161,6 +165,14 @@ func (s *Server) handleRevisionDiff(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "revision must be a number")
 		return
 	}
+	// Optional, like the dry run itself.
+	var req struct {
+		ApplyFlags applyFlags `json:"applyFlags,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	p, err := s.archivedPlan(ctx, ns, release, rev)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
@@ -171,10 +183,15 @@ func (s *Server) handleRevisionDiff(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	// The plan the rollback would apply, so the dry run shows its replicaCount.
+	if err := s.overlayAutoscale(ctx, ns, release, p); err != nil {
+		writeStatus(w, err, http.StatusBadGateway)
+		return
+	}
 
 	// Not audited, like every other diff: it changes nothing, and the rollback
 	// that follows carries the diff in its own output.
-	res, err := s.runner().Diff(ctx, p, exec.ApplyOptions{})
+	res, err := s.runner().Diff(ctx, p, exec.ApplyOptions{SkipSchemaValidation: req.ApplyFlags.SkipSchemaValidation})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -235,7 +252,10 @@ func (s *Server) handleRollback(w http.ResponseWriter, r *http.Request) {
 	// No force here: a rollback restores a plan that was applied cleanly once,
 	// and taking fields from another manager during one would be a second
 	// surprise on top of the one being undone.
-	s.applyPlan(ctx, w, p, exec.Upgrade, "", applyOpts{ExpectRevision: req.ExpectRevision, Action: "rollback", Note: req.Note})
+	s.applyPlan(ctx, w, p, exec.Upgrade, "", applyOpts{
+		ExpectRevision: req.ExpectRevision, Action: "rollback", Note: req.Note,
+		SkipSchemaValidation: req.ApplyFlags.SkipSchemaValidation,
+	})
 }
 
 // archivedPlan reads the workspace that produced a revision, and checks it
