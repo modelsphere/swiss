@@ -164,3 +164,26 @@ func TestLLMSkipSchemaValidationIsPerApply(t *testing.T) {
 		t.Fatalf("an apply that did not ask must remove it: %v", u.GetAnnotations())
 	}
 }
+
+// A rollback takes it too, onto the LLMService it writes.
+func TestLLMRollbackSkipsSchemaValidationWhenAsked(t *testing.T) {
+	rig := startRig(t, llmProbe(), true, true, backendLLMSVC)
+	hash := rig.storePlan(t, map[string]any{"release": llmRelease})
+	if code, out := post(t, rig.srv, "/api/install", map[string]any{"planHash": hash}); code != 200 {
+		t.Fatalf("install %d %v", code, out)
+	}
+	next := rig.storePlan(t, map[string]any{"release": llmRelease, "overrides": map[string]any{"replicaCount": 7}})
+	if code, out := post(t, rig.srv, "/api/apply", map[string]any{"planHash": next, "expectRevision": 1}); code != 200 {
+		t.Fatalf("apply %d %v", code, out)
+	}
+	code, out := post(t, rig.srv, "/api/releases/models/"+llmRelease+"/rollback", map[string]any{
+		"toRevision": 1, "expectRevision": 2, "applyFlags": map[string]any{"skipSchemaValidation": true},
+	})
+	if code != 200 {
+		t.Fatalf("rollback %d %v", code, out)
+	}
+	u, _ := rig.mustGet(t, "models", llmRelease)
+	if got := u.GetAnnotations()[llmsvc.AnnSkipSchemaValidation]; got != "true" {
+		t.Fatalf("annotation %q after a rollback that asked", got)
+	}
+}

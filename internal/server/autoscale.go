@@ -51,15 +51,15 @@ func (s *Server) overlayAutoscale(ctx context.Context, ns, release string, p *pl
 	if !autoscaleOn(cur) {
 		return nil
 	}
-	layer := cur.Layers[values.LayerAutoscale]
-	if len(layer) == 0 {
+	curAutoScaleLayer := cur.Layers[values.LayerAutoscale]
+	if len(curAutoScaleLayer) == 0 {
 		return nil
 	}
 	cp := make(map[string]values.Tree, len(p.Layers)+1)
 	for k, v := range p.Layers {
 		cp[k] = v
 	}
-	cp[values.LayerAutoscale] = cloneTree(layer)
+	cp[values.LayerAutoscale] = cloneTree(curAutoScaleLayer)
 	target := *p
 	target.Layers = cp
 	if !autoscaleOn(&target) {
