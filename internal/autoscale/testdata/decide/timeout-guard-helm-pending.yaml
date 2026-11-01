@@ -1,0 +1,16 @@
+name: timeout-guard-helm-pending
+description: a timeout does not skip a fixed hold; a pending helm release holds the tick
+live:
+  backend: helm
+  helmStatus: pending-upgrade
+  pd: true
+  planReplicaCount: 1
+timedOut: true
+decision:
+  ok: true
+  replicas: 2
+wantHold: helm pending
+wantScale: false
+wantCurrent: 1
+want: 0
+hasDecision: true

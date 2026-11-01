@@ -495,15 +495,15 @@ func runNoAutoscaleProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Name != "prod" || p.Namespace != "models" || p.Scaler.AutoscalePeriod != "" {
-		t.Fatalf("profile name=%s namespace=%s period=%q", p.Name, p.Namespace, p.Scaler.AutoscalePeriod)
+	if p.Name != "prod" || p.Namespace != "models" || p.PDScale != (site.PDScale{}) {
+		t.Fatalf("profile name=%s namespace=%s pdScale=%+v", p.Name, p.Namespace, p.PDScale)
 	}
 	def, err := site.Parse([]byte(site.DefaultYAML("prod-b300")), "default")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if def.Scaler.AutoscalePeriod != "" {
-		t.Fatalf("default period %q", def.Scaler.AutoscalePeriod)
+	if def.PDScale != (site.PDScale{}) {
+		t.Fatalf("default pdScale %+v", def.PDScale)
 	}
 	if def.Scaler.ServerAddress != "http://decision-gen.llm-scaler.svc:80" {
 		t.Fatalf("serverAddress %q", def.Scaler.ServerAddress)
@@ -512,8 +512,8 @@ func runNoAutoscaleProfile(t *testing.T) {
 		t.Fatalf("decision server %q", def.Scaler.DecisionServer())
 	}
 	_, composed := composeNoAutoscale(t, backendHelm)
-	if _, ok := values.Get(composed.Values(), "scaler.autoscalePeriod"); ok {
-		t.Fatal("autoscalePeriod was copied into chart values")
+	if _, ok := values.Get(composed.Values(), "pdScale"); ok {
+		t.Fatal("pdScale was copied into chart values")
 	}
 }
 

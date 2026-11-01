@@ -1,0 +1,14 @@
+name: release-failed
+description: a failed helm release scales down once it has been failed for the defer timeout
+deferTimeoutSeconds: 600
+decision: 1
+slices: 2
+helmStatus: failed
+ticks:
+  - wantOutcome: held
+    wantHold: release failed
+    wantDeferredFor: 0s
+  - advance: 11m
+    wantOutcome: scaled-down
+    wantTimedOut: release failed
+    wantDeferredFor: 11m

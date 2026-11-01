@@ -107,7 +107,7 @@ http {
 		})
 
 		text, _ := renderProfile()
-		text += fmt.Sprintf("scaler:\n  serverAddress: http://e2e-decisions.%s.svc:80\n  autoscalePeriod: 2s\n", ns)
+		text += fmt.Sprintf("scaler:\n  serverAddress: http://e2e-decisions.%s.svc:80\npdScale:\n  syncPeriodSeconds: 2\n", ns)
 		api.must(http.MethodPut, "/api/profile", profilePut{YAML: text}, nil, apiTimeout)
 
 		By("planning a 2-slice PD release")

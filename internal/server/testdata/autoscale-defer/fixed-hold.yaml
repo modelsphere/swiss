@@ -1,0 +1,13 @@
+name: fixed-hold
+description: a pending helm release is an apply in flight; the clock never starts and the defer timeout never applies past it
+deferTimeoutSeconds: 600
+decision: 2
+slices: 1
+helmStatus: pending-upgrade
+roleNotReady: true
+ticks:
+  - wantOutcome: held
+    wantHold: helm pending
+  - advance: 1h
+    wantOutcome: held
+    wantHold: helm pending
