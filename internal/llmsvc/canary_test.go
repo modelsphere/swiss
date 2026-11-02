@@ -58,3 +58,34 @@ func TestCanarySystemLayerIsEffectiveInReadPlan(t *testing.T) {
 		t.Fatal("wrong provenance")
 	}
 }
+
+func TestCanaryAssignedProtectsArmAndMalformedMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name                        string
+		raw                         string
+		present, verified, blocking bool
+	}{
+		{"none", "", false, false, false},
+		{"valid arm", `{"apiVersion":"canary.modelsphere.dev/v1alpha1","kind":"LLMCanary","namespace":"canary","name":"demo","uid":"parent-uid","role":"arm","arm":"baseline","configDigest":"sha256:abc","configVersion":"7"}`, true, true, true},
+		{"valid production", `{"apiVersion":"canary.modelsphere.dev/v1alpha1","kind":"LLMCanary","namespace":"canary","name":"demo","uid":"parent-uid","role":"production"}`, true, true, false},
+		{"empty annotation", " ", true, false, true},
+		{"malformed json", "{not-json", true, false, true},
+		{"missing uid", `{"apiVersion":"canary.modelsphere.dev/v1alpha1","kind":"LLMCanary","namespace":"canary","name":"demo","role":"arm","arm":"baseline"}`, true, false, true},
+		{"arm without arm name", `{"apiVersion":"canary.modelsphere.dev/v1alpha1","kind":"LLMCanary","namespace":"canary","name":"demo","uid":"parent-uid","role":"arm"}`, true, false, true},
+		{"production with arm name", `{"apiVersion":"canary.modelsphere.dev/v1alpha1","kind":"LLMCanary","namespace":"canary","name":"demo","uid":"parent-uid","role":"production","arm":"baseline"}`, true, false, true},
+		{"cross namespace production", `{"apiVersion":"canary.modelsphere.dev/v1alpha1","kind":"LLMCanary","namespace":"other","name":"demo","uid":"parent-uid","role":"production"}`, true, true, false},
+		{"cross namespace", `{"apiVersion":"canary.modelsphere.dev/v1alpha1","kind":"LLMCanary","namespace":"other","name":"demo","uid":"parent-uid","role":"arm","arm":"baseline"}`, true, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			u := &unstructured.Unstructured{}
+			u.SetNamespace("canary")
+			if tc.present {
+				u.SetAnnotations(map[string]string{AssignmentKey: tc.raw})
+			}
+			got := CanaryAssigned(u)
+			if (got != nil) != tc.present || (got != nil && got.Verified != tc.verified) || got.WriteBlocked() != tc.blocking {
+				t.Fatalf("got %+v, blocking=%v", got, got.WriteBlocked())
+			}
+		})
+	}
+}

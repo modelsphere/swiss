@@ -87,6 +87,10 @@ func (s *Server) putAutoscale(ctx context.Context, w http.ResponseWriter, r *htt
 		writeError(w, http.StatusBadGateway, "no cluster writer")
 		return
 	}
+	if err := s.refuseCanaryWrite(ctx, ns, release); err != nil {
+		writeStatus(w, err, http.StatusBadGateway)
+		return
+	}
 	b, _, err := s.backendFor(ctx, ns, release)
 	if err != nil {
 		writeStatus(w, err, http.StatusBadGateway)
@@ -120,6 +124,10 @@ func (s *Server) putAutoscale(ctx context.Context, w http.ResponseWriter, r *htt
 func (s *Server) deleteAutoscale(ctx context.Context, w http.ResponseWriter, ns, release string) {
 	if s.writer == nil {
 		writeError(w, http.StatusBadGateway, "no cluster writer")
+		return
+	}
+	if err := s.refuseCanaryWrite(ctx, ns, release); err != nil {
+		writeStatus(w, err, http.StatusBadGateway)
 		return
 	}
 	b, _, err := s.backendFor(ctx, ns, release)

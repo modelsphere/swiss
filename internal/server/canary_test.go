@@ -108,3 +108,77 @@ func TestCanaryArmReadAndWriteBoundaries(t *testing.T) {
 		}
 	}
 }
+
+func TestCanaryAssignedArmReadAndWriteBoundaries(t *testing.T) {
+	rig := startRig(t, llmProbe(), true, false, backendLLMSVC)
+	u := llmObject("models", "demo-existing-arm", map[string]string{
+		llmsvc.AnnProfile:    "prod",
+		llmsvc.AssignmentKey: `{"apiVersion":"canary.modelsphere.dev/v1alpha1","kind":"LLMCanary","namespace":"models","name":"demo","uid":"parent-uid","role":"arm","arm":"candidate","configDigest":"sha256:abc","configVersion":"3"}`,
+	})
+	u.SetUID("arm-uid")
+	u.SetResourceVersion("19")
+	u.Object["status"] = map[string]any{"phase": "Applied", "helm": map[string]any{"revision": int64(1), "status": "deployed"}}
+	if _, err := rig.c.Create(t.Context(), u); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/api/deployments", "/api/releases/models/demo-existing-arm/status"} {
+		code, body := get(t, rig.srv, path)
+		if code != 200 {
+			t.Fatalf("%s: %d %v", path, code, body)
+		}
+		if path == "/api/deployments" {
+			body = body["deployments"].([]any)[0].(map[string]any)
+		}
+		if body["uid"] != "arm-uid" {
+			t.Fatalf("missing service UID: %v", body)
+		}
+		assigned, _ := body["assignedTo"].(map[string]any)
+		if assigned["name"] != "demo" || assigned["uid"] != "parent-uid" || assigned["role"] != "arm" || assigned["arm"] != "candidate" || assigned["verified"] != true {
+			t.Fatalf("unexpected assignedTo: %v", body)
+		}
+	}
+	hash := rig.storePlan(t, map[string]any{"release": "demo-existing-arm"})
+	rig.dyn.ClearActions()
+	checks := []struct {
+		path string
+		call func() (int, map[string]any)
+	}{
+		{"apply", func() (int, map[string]any) {
+			return post(t, rig.srv, "/api/apply", map[string]any{"planHash": hash, "expectRevision": 1, "forceConflicts": true})
+		}},
+		{"install", func() (int, map[string]any) {
+			return post(t, rig.srv, "/api/install", map[string]any{"planHash": hash})
+		}},
+		{"rollback", func() (int, map[string]any) {
+			return post(t, rig.srv, "/api/releases/models/demo-existing-arm/rollback", map[string]any{"toRevision": 1, "expectRevision": 1})
+		}},
+		{"uninstall", func() (int, map[string]any) { return del(t, rig.srv, "/api/releases/models/demo-existing-arm") }},
+		{"slo write", func() (int, map[string]any) {
+			return put(t, rig.srv, "/api/releases/models/demo-existing-arm/slo", map[string]any{"priority": 10})
+		}},
+		{"slo reset", func() (int, map[string]any) { return del(t, rig.srv, "/api/releases/models/demo-existing-arm/slo") }},
+		{"autoscale write", func() (int, map[string]any) {
+			return put(t, rig.srv, "/api/releases/models/demo-existing-arm/autoscaling", map[string]any{"enabled": true, "minSlices": 1, "maxSlices": 2})
+		}},
+		{"autoscale delete", func() (int, map[string]any) {
+			return del(t, rig.srv, "/api/releases/models/demo-existing-arm/autoscaling")
+		}},
+	}
+	for _, check := range checks {
+		t.Run(check.path, func(t *testing.T) {
+			code, body := check.call()
+			if code != http.StatusConflict || body["code"] != "CANARY_ASSIGNED_SERVICE" {
+				t.Fatalf("%d %v", code, body)
+			}
+			assigned, _ := body["assignedTo"].(map[string]any)
+			if assigned["uid"] != "parent-uid" || assigned["arm"] != "candidate" {
+				t.Fatal(body)
+			}
+		})
+	}
+	for _, a := range rig.dyn.Actions() {
+		if a.GetVerb() == "delete" || a.GetVerb() == "update" || a.GetVerb() == "patch" || a.GetVerb() == "create" {
+			t.Fatalf("blocked write reached Kubernetes: %v", a)
+		}
+	}
+}

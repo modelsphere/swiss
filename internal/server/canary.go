@@ -16,9 +16,21 @@ func (e *canaryManagedError) Error() string {
 	return fmt.Sprintf("service is managed by LLMCanary %s/%s (UID %s); manage configuration and cleanup from the experiment", e.Owner.Namespace, e.Owner.Name, e.Owner.UID)
 }
 
+type canaryAssignedError struct{ Assignment *llmsvc.CanaryAssignment }
+
+func (e *canaryAssignedError) Error() string {
+	if e.Assignment != nil && e.Assignment.Namespace != "" && e.Assignment.Name != "" {
+		return fmt.Sprintf("service is assigned to LLMCanary %s/%s (UID %s) as arm %s; release or delete the experiment before modifying this service", e.Assignment.Namespace, e.Assignment.Name, e.Assignment.UID, e.Assignment.Arm)
+	}
+	return "service has incomplete LLMCanary assignment metadata; refusal protects the experiment arm"
+}
+
 func refuseCanaryService(u *unstructured.Unstructured) error {
 	if owner := llmsvc.CanaryOwnership(u); owner != nil {
 		return &canaryManagedError{Owner: owner}
+	}
+	if assigned := llmsvc.CanaryAssigned(u); assigned.WriteBlocked() {
+		return &canaryAssignedError{Assignment: assigned}
 	}
 	return nil
 }

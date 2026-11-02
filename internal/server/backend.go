@@ -87,6 +87,11 @@ func writeStatus(w http.ResponseWriter, err error, fallback int) {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": managed.Error(), "code": "CANARY_MANAGED_SERVICE", "owner": managed.Owner})
 		return
 	}
+	var assigned *canaryAssignedError
+	if errors.As(err, &assigned) {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": assigned.Error(), "code": "CANARY_ASSIGNED_SERVICE", "assignedTo": assigned.Assignment})
+		return
+	}
 	code := fallback
 	var hf *httpFailure
 	if errors.As(err, &hf) {

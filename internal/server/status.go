@@ -22,6 +22,7 @@ import (
 )
 
 type releaseStatus struct {
+	UID        string        `json:"uid,omitempty"`
 	Release    string        `json:"release"`
 	Namespace  string        `json:"namespace"`
 	Exists     bool          `json:"exists"`
@@ -53,10 +54,11 @@ type releaseStatus struct {
 	// (llmPlanStatus); Service carries the operator's own words.
 	Plan *planStatus `json:"planStatus,omitempty"`
 	// Backend is helm or llmsvc when swiss manages the release.
-	Backend        string              `json:"backend,omitempty"`
-	ManagedBy      *llmsvc.CanaryOwner `json:"managedBy,omitempty"`
-	CleanupPending bool                `json:"cleanupPending,omitempty"`
-	Service        *llmStatusView      `json:"llmservice,omitempty"`
+	Backend        string                   `json:"backend,omitempty"`
+	ManagedBy      *llmsvc.CanaryOwner      `json:"managedBy,omitempty"`
+	AssignedTo     *llmsvc.CanaryAssignment `json:"assignedTo,omitempty"`
+	CleanupPending bool                     `json:"cleanupPending,omitempty"`
+	Service        *llmStatusView           `json:"llmservice,omitempty"`
 }
 
 // llmStatusView is the operator's status, in place of status.yaml.
@@ -135,7 +137,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadGateway, err.Error())
 			return
 		}
+		out.UID = string(u.GetUID())
 		out.ManagedBy = llmsvc.CanaryOwnership(u)
+		out.AssignedTo = llmsvc.CanaryAssigned(u)
 		var obj *llmsvc.LLMService
 		if decoded, err := llmsvc.FromUnstructured(u); err == nil {
 			obj = decoded

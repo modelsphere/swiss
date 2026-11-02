@@ -1,12 +1,16 @@
 package llmsvc
 
 import (
+	"encoding/json"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-const CanaryPrefix = "canary.modelsphere.dev/"
+const (
+	CanaryPrefix  = "canary.modelsphere.dev/"
+	AssignmentKey = CanaryPrefix + "assignment"
+)
 
 type CanaryOwner struct {
 	APIVersion string `json:"apiVersion"`
@@ -15,6 +19,23 @@ type CanaryOwner struct {
 	Name       string `json:"name"`
 	UID        string `json:"uid"`
 	Verified   bool   `json:"verified"`
+}
+
+type CanaryAssignment struct {
+	APIVersion    string `json:"apiVersion"`
+	Kind          string `json:"kind"`
+	Namespace     string `json:"namespace"`
+	Name          string `json:"name"`
+	UID           string `json:"uid"`
+	Role          string `json:"role,omitempty"`
+	Arm           string `json:"arm,omitempty"`
+	ConfigDigest  string `json:"configDigest,omitempty"`
+	ConfigVersion string `json:"configVersion,omitempty"`
+	Verified      bool   `json:"verified"`
+}
+
+func (a *CanaryAssignment) WriteBlocked() bool {
+	return a != nil && (!a.Verified || a.Role == "arm")
 }
 
 // CanaryOwnership keeps orphaned or inconsistent ownership protected too.
@@ -38,4 +59,56 @@ func CanaryOwnership(u *unstructured.Unstructured) *CanaryOwner {
 		}
 	}
 	return nil
+}
+
+// CanaryAssigned parses canary.modelsphere.dev/assignment and keeps malformed
+// or incomplete assignment metadata protected too.
+func CanaryAssigned(u *unstructured.Unstructured) *CanaryAssignment {
+	if u == nil {
+		return nil
+	}
+	raw, ok := u.GetAnnotations()[AssignmentKey]
+	if !ok {
+		return nil
+	}
+	var a CanaryAssignment
+	if strings.TrimSpace(raw) == "" || json.Unmarshal([]byte(raw), &a) != nil {
+		return &CanaryAssignment{
+			APIVersion: CanaryPrefix + "v1alpha1",
+			Kind:       "LLMCanary",
+			Namespace:  u.GetNamespace(),
+			Verified:   false,
+		}
+	}
+	a.APIVersion = strings.TrimSpace(a.APIVersion)
+	a.Kind = strings.TrimSpace(a.Kind)
+	a.Namespace = strings.TrimSpace(a.Namespace)
+	a.Name = strings.TrimSpace(a.Name)
+	a.UID = strings.TrimSpace(a.UID)
+	a.Role = strings.TrimSpace(a.Role)
+	a.Arm = strings.TrimSpace(a.Arm)
+	a.ConfigDigest = strings.TrimSpace(a.ConfigDigest)
+	a.ConfigVersion = strings.TrimSpace(a.ConfigVersion)
+
+	validRole := a.Role == "production" || a.Role == "arm"
+	validArm := (a.Role == "arm" && a.Arm != "") || (a.Role == "production" && a.Arm == "")
+	sameNS := a.Role == "production" || u.GetNamespace() == "" || a.Namespace == u.GetNamespace()
+	a.Verified = a.APIVersion == CanaryPrefix+"v1alpha1" &&
+		a.Kind == "LLMCanary" &&
+		a.Namespace != "" &&
+		a.Name != "" &&
+		a.UID != "" &&
+		validRole &&
+		validArm &&
+		sameNS
+	if a.APIVersion == "" {
+		a.APIVersion = CanaryPrefix + "v1alpha1"
+	}
+	if a.Kind == "" {
+		a.Kind = "LLMCanary"
+	}
+	if a.Namespace == "" {
+		a.Namespace = u.GetNamespace()
+	}
+	return &a
 }
