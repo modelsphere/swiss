@@ -367,16 +367,39 @@ func (b llmBackend) Uninstall(ctx context.Context, ns, release string) (uninstal
 		return uninstallResult{}, fail(http.StatusInternalServerError, "plan not marked, nothing uninstalled: %s", err.Error())
 	}
 
-	started := time.Now()
-	delErr := s.llms.DeleteObserved(ctx, u)
-	if apierrors.IsNotFound(delErr) {
+	restoreRejected := func(cause error) (uninstallResult, error) {
 		if hadPlan {
-			if rerr := s.restorePlan(ctx, ns, release, prev); rerr != nil {
-				s.log.ErrorContext(ctx, "plan not restored after delete NotFound", "namespace", ns, "release", release, "err", rerr)
+			if err := s.restorePlan(ctx, ns, release, prev); err != nil {
+				return uninstallResult{}, fail(http.StatusInternalServerError, "delete rejected (%s), plan not restored: %s", cause, err)
 			}
 		}
 		s.forgetUninstalling(ns, release)
-		return uninstallResult{}, fail(http.StatusNotFound, "no release %s/%s", ns, release)
+		return uninstallResult{}, cause
+	}
+
+	started := time.Now()
+	delErr := s.llms.DeleteObserved(ctx, u)
+	if apierrors.IsConflict(delErr) {
+		fresh, err := s.llms.Get(ctx, ns, release)
+		if apierrors.IsNotFound(err) {
+			return restoreRejected(fail(http.StatusNotFound, "no release %s/%s", ns, release))
+		}
+		if err != nil {
+			return restoreRejected(failErr(http.StatusBadGateway, err))
+		}
+		if fresh.GetUID() != u.GetUID() {
+			return restoreRejected(fail(http.StatusConflict, "service %s/%s was replaced; refresh before uninstalling", ns, release))
+		}
+		if err := refuseCanaryService(fresh); err != nil {
+			return restoreRejected(err)
+		}
+		delErr = s.llms.DeleteObserved(ctx, fresh)
+	}
+	if apierrors.IsNotFound(delErr) {
+		return restoreRejected(fail(http.StatusNotFound, "no release %s/%s", ns, release))
+	}
+	if apierrors.IsConflict(delErr) {
+		return restoreRejected(failErr(http.StatusConflict, delErr))
 	}
 	out := llmDeleteRequested(ns, release)
 	if delErr != nil {
@@ -385,9 +408,6 @@ func (b llmBackend) Uninstall(ctx context.Context, ns, release string) (uninstal
 			if ferr := s.finishUninstallFailed(ctx, ns, release, delErr); ferr != nil {
 				s.log.ErrorContext(ctx, "plan not marked failed", "namespace", ns, "release", release, "err", ferr)
 			}
-		}
-		if apierrors.IsConflict(delErr) {
-			return uninstallResult{}, failErr(http.StatusConflict, delErr)
 		}
 		return uninstallResult{}, failErr(http.StatusInternalServerError, delErr)
 	}

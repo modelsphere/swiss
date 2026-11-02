@@ -22,6 +22,7 @@ func TestCanaryOwnershipProtectsIncompleteMetadata(t *testing.T) {
 		{"removed labels", []metav1.OwnerReference{ref}, nil, true, false},
 		{"removed reference", nil, labels, true, false},
 		{"different UID", []metav1.OwnerReference{ref}, map[string]string{CanaryPrefix + "canary-uid": "new-uid"}, true, false},
+		{"missing namespace label", nil, map[string]string{CanaryPrefix + "canary-name": "demo"}, true, false},
 		{"empty marker", nil, map[string]string{CanaryPrefix + "canary-name": ""}, true, false},
 		{"unrelated owner", []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "demo", UID: "old-uid"}}, nil, false, false},
 	} {
@@ -31,6 +32,9 @@ func TestCanaryOwnershipProtectsIncompleteMetadata(t *testing.T) {
 			u.SetOwnerReferences(tc.refs)
 			u.SetLabels(tc.labels)
 			owner := CanaryOwnership(u)
+			if owner != nil && owner.Namespace != "canary" {
+				t.Fatalf("owner namespace %q, want canary", owner.Namespace)
+			}
 			if (owner != nil) != tc.protected || (owner != nil && owner.Verified != tc.verified) {
 				t.Fatalf("%+v", owner)
 			}

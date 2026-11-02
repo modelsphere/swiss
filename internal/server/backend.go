@@ -143,7 +143,8 @@ type llmsvcAccess struct {
 }
 
 // visible is true when get/list may run. A discovery error and a cached
-// Forbidden both hide the API, which is how a helm install keeps working.
+// Forbidden both hide the API for reads. Writes separately require ownership
+// verification, including when the selected backend is helm.
 func (a llmsvcAccess) visible() bool {
 	return a.served && a.discErr == nil && !a.forbidden
 }

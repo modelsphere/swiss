@@ -36,8 +36,15 @@ func refuseCanaryService(u *unstructured.Unstructured) error {
 }
 
 func (s *Server) refuseCanaryWrite(ctx context.Context, ns, release string) error {
+	return s.refuseCanaryAccess(ctx, ns, release, true)
+}
+
+func (s *Server) refuseCanaryAccess(ctx context.Context, ns, release string, write bool) error {
 	access := s.llmsvcAccess(ctx)
 	if access.discErr != nil || access.forbidden {
+		if !write {
+			return nil
+		}
 		return fail(http.StatusBadGateway, "cannot verify service ownership: %s", access.why())
 	}
 	if !access.served || s.llms == nil {
@@ -45,6 +52,9 @@ func (s *Server) refuseCanaryWrite(ctx context.Context, ns, release string) erro
 	}
 	ns, err := s.resolveNamespace(ctx, ns, release)
 	if err != nil {
+		if !write {
+			return nil
+		}
 		return failErr(http.StatusBadGateway, err)
 	}
 	u, err := s.llms.Get(ctx, ns, release)
@@ -54,6 +64,9 @@ func (s *Server) refuseCanaryWrite(ctx context.Context, ns, release string) erro
 	if err != nil {
 		if apierrors.IsForbidden(err) {
 			s.noteLLMSVCForbidden()
+		}
+		if !write {
+			return nil
 		}
 		return fail(http.StatusBadGateway, "cannot verify service ownership: %s", err)
 	}

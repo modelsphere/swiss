@@ -71,3 +71,12 @@ form / flags  ─┘             (hash)     ↓
 | `GET /api/nodes` | the GPU inventory: type, allocatable, in use, and what holds it |
 | `GET /api/profile` | the site profile as parsed, after defaults |
 | `GET /api/autoscaling`, `GET /api/releases/{ns}/{release}/autoscaling` | the autoscale loop's last pass per PD release with the form SLO on; in memory only, lost on restart |
+
+## Canary concurrency limits
+
+Ownership checks protect server operations but do not lock external controllers.
+
+- Apply and rollback recheck ownership inside the per-release apply lock; the rollback handler's earlier check is only an early rejection.
+- Uninstall checks at the handler and again in the LLMService backend. Deletes retain UID and resourceVersion preconditions. A conflict triggers one fresh read, an identity/ownership recheck and one retry. Rejected conflicts, replacements or newly adopted arms restore the plan without recording a failed uninstall.
+- The Helm uninstall handler's initial check and SLO checks are outside the apply lock. Helm/SLO upstream writes have no atomic LLMService ownership precondition. Adoption after a check can therefore overlap these operations; the local apply lock cannot serialize the Canary operator or another Swiss instance.
+- Finish pending Swiss operations before assigning a service to an experiment. Atomic exclusion across controllers requires a shared admission/claim protocol.

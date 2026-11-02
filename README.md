@@ -70,6 +70,21 @@ POST /api/plans /api/diff /api/apply /api/install     (allowDeploy only)
 
 `applyWith` on the site profile chooses the backend for a new install: `helm` (the default when the field is omitted) or `llmsvc` when the LLMService CRD is served. A release already in the cluster stays on the backend that owns it. `llmsvc` requires the plan's `source.schema` to be v2; empty means v1 and is rejected with 400 and nothing is written. Helm accepts v1 and v2. The CLI `swiss install` and `swiss apply` stay on helm. See [docs/architecture.md](docs/architecture.md).
 
+## Canary ownership checks
+
+Server writes verify LLMService ownership even for Helm releases.
+
+| LLMService access | Install, apply, rollback, uninstall, SLO writes | Reads, including SLO GET |
+| --- | --- | --- |
+| CRD absent or no LLMService client configured | Normal backend behavior | Normal fallback |
+| Discovery fails or LLMServices access is Forbidden | HTTP 502; nothing written | Preserve read fallback |
+| Canary-owned child or assigned arm observed | HTTP 409 with parent identity | List/status remain visible; SLO GET returns 409 |
+
+- This deliberately fails closed for writes: an invisible object cannot be distinguished from an experiment arm. Custom RBAC must grant LLMService reads even for Helm-only deployments when that API is present. The bundled chart includes this grant.
+- Discovery failures and Forbidden results are cached for up to 30 seconds. Restore API access/RBAC and retry after that interval.
+- Production-only assignments permit normal operations; malformed assignment or ownership metadata stays protected.
+- See [concurrency limits](docs/architecture.md#canary-concurrency-limits) before adopting a live service.
+
 ## Deploy
 
 CI publishes the image to `ghcr.io/modelsphere/swissd` and

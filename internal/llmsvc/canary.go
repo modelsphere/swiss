@@ -55,7 +55,11 @@ func CanaryOwnership(u *unstructured.Unstructured) *CanaryOwner {
 	}
 	for _, key := range []string{"canary-name", "canary-namespace", "canary-uid"} {
 		if _, ok := labels[CanaryPrefix+key]; ok {
-			return &CanaryOwner{APIVersion: CanaryPrefix + "v1alpha1", Kind: "LLMCanary", Namespace: labels[CanaryPrefix+"canary-namespace"], Name: labels[CanaryPrefix+"canary-name"], UID: labels[CanaryPrefix+"canary-uid"]}
+			ns := labels[CanaryPrefix+"canary-namespace"]
+			if ns == "" {
+				ns = u.GetNamespace()
+			}
+			return &CanaryOwner{APIVersion: CanaryPrefix + "v1alpha1", Kind: "LLMCanary", Namespace: ns, Name: labels[CanaryPrefix+"canary-name"], UID: labels[CanaryPrefix+"canary-uid"]}
 		}
 	}
 	return nil
