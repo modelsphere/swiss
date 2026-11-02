@@ -1,0 +1,16 @@
+name: timeout-guard-lock-busy
+description: a timeout does not skip a fixed hold; a busy apply lock holds the tick
+live:
+  backend: helm
+  pd: true
+  planReplicaCount: 1
+  lockBusy: true
+timedOut: true
+decision:
+  ok: true
+  replicas: 2
+wantHold: apply in progress
+wantScale: false
+wantCurrent: 1
+want: 0
+hasDecision: true

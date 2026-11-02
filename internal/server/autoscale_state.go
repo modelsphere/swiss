@@ -30,6 +30,10 @@ type autoscaleState struct {
 	LastEvaluated *time.Time `json:"lastEvaluated,omitempty"`
 	// LastScaled is when this process applied a scale. Later passes keep it.
 	LastScaled *time.Time `json:"lastScaled,omitempty"`
+	// DeferredSince is when a hold that times out first deferred a scale, by
+	// this process's clock. TimedOut is the hold the defer timeout then skipped.
+	DeferredSince *time.Time `json:"deferredSince,omitempty"`
+	TimedOut      string     `json:"timedOut,omitempty"`
 }
 
 func autoscaleKey(ns, release string) string { return ns + "/" + release }

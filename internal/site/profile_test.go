@@ -3,6 +3,7 @@ package site
 import (
 	"maps"
 	"testing"
+	"time"
 )
 
 func profile() Profile {
@@ -328,5 +329,45 @@ func TestFeatureDefaultsUnsetIsOn(t *testing.T) {
 	}
 	if p.Route.Enabled {
 		t.Error("the default profile routes nothing until a deploy asks")
+	}
+}
+
+func TestPDScale(t *testing.T) {
+	const head = "name: prod\nmodel:\n  pathTemplate: /models/{{name}}\n"
+
+	p, err := Parse([]byte(head), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.PDScale.SyncPeriod() != 60*time.Second || p.PDScale.DeferTimeout() != 600*time.Second {
+		t.Fatalf("unset: sync %s defer %s, want 60s 600s", p.PDScale.SyncPeriod(), p.PDScale.DeferTimeout())
+	}
+
+	p, err = Parse([]byte(head+"pdScale:\n  syncPeriodSeconds: 5\n  deferTimeoutSeconds: 0\n"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.PDScale.SyncPeriod() != 5*time.Second || p.PDScale.DeferTimeout() != 0 {
+		t.Fatalf("set: sync %s defer %s, want 5s 0s", p.PDScale.SyncPeriod(), p.PDScale.DeferTimeout())
+	}
+
+	for raw, want := range map[string]int{
+		"scaler:\n  autoscalePeriod: 2s\n":                                   2,
+		"scaler:\n  autoscalePeriod: 2s\npdScale:\n  syncPeriodSeconds: 7\n": 7,
+		"scaler:\n  autoscalePeriod: soon\n":                                 0,
+	} {
+		p, err = Parse([]byte(head+raw), "test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.PDScale.SyncPeriodSeconds != want || p.Scaler.AutoscalePeriod != "" {
+			t.Errorf("%q: syncPeriodSeconds %d autoscalePeriod %q, want %d and moved", raw, p.PDScale.SyncPeriodSeconds, p.Scaler.AutoscalePeriod, want)
+		}
+	}
+
+	for _, bad := range []string{"pdScale:\n  syncPeriodSeconds: -1\n", "pdScale:\n  deferTimeoutSeconds: -1\n"} {
+		if _, err := Parse([]byte(head+bad), "test"); err == nil {
+			t.Errorf("%q must be refused", bad)
+		}
 	}
 }

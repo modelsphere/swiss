@@ -73,8 +73,6 @@ cache:
 scaler:
   # What the chart receives.
   serverAddress: http://decision-gen.llm-scaler.svc:80
-  # How often swissd asks decision-gen for a PD slice count. Empty is 60s.
-  # autoscalePeriod: 60s
   # Same service. swissd calls this to read and edit LLMSLORequirement
   # thresholds after install. It is not copied into chart values.
   sloAddress: http://slo-api.llm-scaler.svc:80
@@ -82,6 +80,17 @@ scaler:
   # not written here. Key defaults to "token". A bare name is swissd's namespace.
   # sloTokenSecret: llm-scaler/slo-api
   # sloTokenKey: token
+
+# swissd's PD slice autoscaler, for releases planned with PD on and the form
+# SLO on. Field names follow the LLMScaler's.
+# pdScale:
+#   # How often swissd asks decision-gen for a slice count. Unset is 60.
+#   syncPeriodSeconds: 60
+#   # How long a hold may defer a scale before it is applied anyway: a
+#   # DisaggregatedSet rollout that never lands, a failed release, pods that
+#   # never get ready. Uninstalling, a missing DisaggregatedSet and an apply
+#   # in flight still hold. Unset is 600; 0 defers indefinitely.
+#   deferTimeoutSeconds: 600
 
 # The site's preferences, beneath the catalog: a variant that sets one of these
 # overrides it, and a deploy can still choose either way. Every other section

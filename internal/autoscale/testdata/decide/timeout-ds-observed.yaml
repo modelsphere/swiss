@@ -1,0 +1,20 @@
+name: timeout-ds-observed
+description: a timeout lets a scale-up through a DisaggregatedSet whose status lags its generation
+live:
+  backend: helm
+  helmStatus: deployed
+  pd: true
+  dsGeneration: 3
+  dsObservedGeneration: 2
+  dsSlices: 1
+  planReplicaCount: 1
+timedOut: true
+decision:
+  ok: true
+  replicas: 2
+wantHold: ""
+wantTimedOut: disaggregatedset observedGeneration behind
+wantScale: true
+wantCurrent: 1
+want: 2
+hasDecision: true

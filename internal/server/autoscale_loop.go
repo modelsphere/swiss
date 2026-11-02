@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -13,16 +12,15 @@ import (
 	"github.com/modelsphere/swiss/internal/exec"
 	"github.com/modelsphere/swiss/internal/llmsvc"
 	"github.com/modelsphere/swiss/internal/plan"
+	"github.com/modelsphere/swiss/internal/site"
 	"github.com/modelsphere/swiss/internal/values"
 )
-
-const defaultAutoscalePeriod = 60 * time.Second
 
 // runAutoscaler polls decision-gen until ctx is cancelled. The first tick
 // waits one period. A tick never delays shutdown: helm apply detaches, and
 // this goroutine returns as soon as ctx is done.
 func (s *Server) runAutoscaler(ctx context.Context) {
-	timer := time.NewTimer(s.autoscalePeriod(ctx))
+	timer := time.NewTimer(s.syncPeriod(ctx))
 	defer timer.Stop()
 	for {
 		select {
@@ -30,21 +28,25 @@ func (s *Server) runAutoscaler(ctx context.Context) {
 			return
 		case <-timer.C:
 			s.autoscaleTick(ctx)
-			timer.Reset(s.autoscalePeriod(ctx))
+			timer.Reset(s.syncPeriod(ctx))
 		}
 	}
 }
 
-func (s *Server) autoscalePeriod(ctx context.Context) time.Duration {
+func (s *Server) syncPeriod(ctx context.Context) time.Duration {
 	p, err := s.Profile(ctx)
 	if err != nil || p == nil {
-		return defaultAutoscalePeriod
+		return site.PDScale{}.SyncPeriod()
 	}
-	d, err := time.ParseDuration(strings.TrimSpace(p.Scaler.AutoscalePeriod))
-	if err != nil || d <= 0 {
-		return defaultAutoscalePeriod
+	return p.PDScale.SyncPeriod()
+}
+
+func (s *Server) deferTimeout(ctx context.Context) time.Duration {
+	p, err := s.Profile(ctx)
+	if err != nil || p == nil {
+		return site.PDScale{}.DeferTimeout()
 	}
-	return d
+	return p.PDScale.DeferTimeout()
 }
 
 func (s *Server) autoscaleTick(ctx context.Context) {
@@ -88,6 +90,9 @@ func (s *Server) autoscaleOne(ctx context.Context, ns, release string) bool {
 		return false
 	}
 	st := autoscaleState{Namespace: ns, Release: release, Enabled: true, Current: planReplicaCount(p)}
+	if prev, ok := s.autoscaleStateOf(ns, release); ok {
+		st.DeferredSince = prev.DeferredSince
+	}
 	live, rev, err := s.autoscaleLive(ctx, ns, release, b.Name(), p)
 	if err != nil {
 		s.log.WarnContext(ctx, "autoscale", "release", release, "err", err)
@@ -112,9 +117,12 @@ func (s *Server) autoscaleOne(ctx context.Context, ns, release string) bool {
 		s.recordAutoscale(st)
 		return true
 	}
-	res := autoscale.Decide(live, d)
+	timeout := s.deferTimeout(ctx)
+	res, since := autoscale.DecideWithTimeout(live, d, st.DeferredSince, s.clock(), timeout)
+	st.DeferredSince = since
 	st.Current = res.Current
 	st.Decision = res.Decision
+	st.TimedOut = res.TimedOut
 	if !res.Scale {
 		if res.HoldReason != "" {
 			s.log.DebugContext(ctx, "autoscale hold", "release", release, "hold", res.HoldReason)
@@ -131,7 +139,11 @@ func (s *Server) autoscaleOne(ctx context.Context, ns, release string) bool {
 	}
 	want := res.Want
 	st.Want = &want
-	if _, scaleErr := s.scaleTo(ctx, ns, release, res.Current, res.Want, rev); scaleErr != nil {
+	if res.TimedOut != "" {
+		s.log.InfoContext(ctx, "autoscale deferral timed out", "release", release, "hold", res.TimedOut,
+			"deferredSince", *st.DeferredSince, "deferTimeout", timeout, "from", res.Current, "to", res.Want)
+	}
+	if _, scaleErr := s.scaleTo(ctx, ns, release, res.Current, res.Want, rev, res.TimedOut); scaleErr != nil {
 		if errors.Is(scaleErr, errAutoscaleInactive) {
 			s.dropAutoscale(autoscaleKey(ns, release))
 			return false
@@ -295,7 +307,7 @@ func (s *Server) autoscaleLive(ctx context.Context, ns, release, backend string,
 // The tick stops. It is not a failure and it writes nothing.
 var errAutoscaleInactive = errors.New("autoscale inactive")
 
-func (s *Server) scaleTo(ctx context.Context, ns, release string, from, want, expectRev int) (int, error) {
+func (s *Server) scaleTo(ctx context.Context, ns, release string, from, want, expectRev int, timedOut string) (int, error) {
 	if s.store == nil {
 		return 0, fmt.Errorf("no database: autoscale needs a stored plan")
 	}
@@ -329,10 +341,14 @@ func (s *Server) scaleTo(ctx context.Context, ns, release string, from, want, ex
 	if err := s.store.PutPlan(ctx, p); err != nil {
 		return 0, err
 	}
+	note := fmt.Sprintf("autoscale %d -> %d (decision-gen)", from, want)
+	if timedOut != "" {
+		note = fmt.Sprintf("autoscale %d -> %d (decision-gen, deferral timed out: %s)", from, want, timedOut)
+	}
 	res, err := s.applyLocked(ctx, p, exec.Upgrade, "", applyOpts{
 		ExpectRevision: expectRev,
 		Action:         "autoscale",
-		Note:           fmt.Sprintf("autoscale %d -> %d (decision-gen)", from, want),
+		Note:           note,
 	})
 	// An uninstall that started after Decide stops the tick the same way:
 	// applyLocked refused it under the lock, before anything was applied.

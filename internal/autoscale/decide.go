@@ -2,7 +2,10 @@
 // a cluster: the server applies whatever Decide returns.
 package autoscale
 
-import "strings"
+import (
+	"strings"
+	"time"
+)
 
 const (
 	HoldApplyInProgress = "apply in progress"
@@ -18,7 +21,7 @@ const (
 	HoldRoleNotUpdated  = "role not updated"
 	HoldRouterNotReady  = "router not ready"
 	// HoldReleaseFailed is a failed helm release, plan, or LLMService.
-	// The tick holds until an operator applies or rolls back.
+	// It holds until an operator applies or rolls back, or the defer timeout.
 	HoldReleaseFailed = "release failed"
 	// HoldUninstalling is a release on its way out: the plan is marked
 	// uninstalling, or the LLMService is being deleted. Nothing is applied.
@@ -81,19 +84,25 @@ type Result struct {
 	Want       int
 	HoldReason string
 	Decision   *int
+	// TimedOut is the workload or readiness hold that timedOut skipped.
+	TimedOut string
 }
 
-// Decide is pure. A rollout hold always waits. A readiness hold waits only
-// when the next count would be higher, so a scale-down is not blocked by a
-// role or router that is not ready yet. want is clamp(decision, MinSlices, MaxSlices).
-func Decide(live Live, d Decision) Result {
+// Decide is pure. Holds come in three classes:
+//
+//	fixed     uninstalling, not PD, DS missing, an apply in flight   never times out, either direction
+//	workload  DS observedGeneration behind, release failed           times out, either direction
+//	readiness role or router not ready or not updated                times out, scale-up only
+//
+// timedOut skips the workload and readiness holds. want is clamp(decision, MinSlices, MaxSlices).
+func Decide(live Live, d Decision, timedOut bool) Result {
 	cur := current(live)
 	res := Result{Current: cur}
 	if d.OK {
 		n := d.Replicas
 		res.Decision = &n
 	}
-	if hold := rolloutHold(live); hold != "" {
+	if hold := fixedHold(live); hold != "" {
 		res.HoldReason = hold
 		return res
 	}
@@ -104,18 +113,58 @@ func Decide(live Live, d Decision) Result {
 		}
 		return res
 	}
-	if releaseFailed(live) {
-		res.HoldReason = HoldReleaseFailed
-		return res
+	if hold := workloadHold(live); hold != "" {
+		if !timedOut {
+			res.HoldReason = hold
+			return res
+		}
+		res.TimedOut = hold
 	}
 	want := clamp(d.Replicas, MinSlices, MaxSlices)
 	if hold := readinessHold(live); hold != "" && want > cur {
-		res.HoldReason = hold
-		return res
+		if !timedOut {
+			res.HoldReason = hold
+			return res
+		}
+		if res.TimedOut == "" {
+			res.TimedOut = hold
+		}
 	}
 	res.Want = want
 	res.Scale = want != cur
 	return res
+}
+
+// DecideWithTimeout is Decide under the defer timeout, the clock of the
+// LLMScaler's status.deferredSince. deferredSince is when a workload or
+// readiness hold first deferred a write; nil is not deferring. It returns the
+// clock for the next pass:
+//
+//	hold that times out, write wanted   start if nil; past timeout, apply and keep it
+//	hold that times out, no-op          keep, do not start
+//	no hold that times out              clear
+//	fixed hold or no decision           leave as is
+//
+// Once past the timeout every pass applies while the hold lasts. timeout <= 0
+// defers indefinitely.
+func DecideWithTimeout(live Live, d Decision, deferredSince *time.Time, now time.Time, timeout time.Duration) (Result, *time.Time) {
+	held := Decide(live, d, false)
+	forced := Decide(live, d, true)
+	switch {
+	case forced.HoldReason != "":
+		return held, deferredSince
+	case forced.TimedOut == "":
+		return held, nil
+	case !forced.Scale:
+		return held, deferredSince
+	}
+	if deferredSince == nil {
+		deferredSince = &now
+	}
+	if timeout > 0 && now.Sub(*deferredSince) >= timeout {
+		return forced, deferredSince
+	}
+	return held, deferredSince
 }
 
 func releaseFailed(live Live) bool {
@@ -135,8 +184,9 @@ func current(live Live) int {
 	return live.PlanReplicaCount
 }
 
-// rolloutHold is a change still landing. It waits in either direction.
-func rolloutHold(live Live) string {
+// fixedHold is a release that is going away or cannot scale, or an apply
+// still in flight that a new one would be refused by or race.
+func fixedHold(live Live) string {
 	if live.PlanPhase == "uninstalling" || live.LLMDeleting || live.LLMPhase == "Deleting" {
 		return HoldUninstalling
 	}
@@ -166,8 +216,17 @@ func rolloutHold(live Live) string {
 	if live.DSMissing {
 		return HoldDSMissing
 	}
+	return ""
+}
+
+// workloadHold is a DisaggregatedSet rollout that has not landed, or a
+// failed release.
+func workloadHold(live Live) string {
 	if live.DSObservedGeneration < live.DSGeneration {
 		return HoldDSObserved
+	}
+	if releaseFailed(live) {
+		return HoldReleaseFailed
 	}
 	return ""
 }
@@ -183,11 +242,8 @@ func readinessHold(live Live) string {
 			return HoldRoleNotUpdated
 		}
 	}
-	n := current(live)
-	if n < 0 {
-		n = 0
-	}
-	for i := 0; i < n; i++ {
+	n := max(current(live), 0)
+	for i := range n {
 		if i >= len(live.Routers) || routerHeld(live.Routers[i]) {
 			return HoldRouterNotReady
 		}

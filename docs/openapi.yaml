@@ -1594,7 +1594,12 @@ components:
             sloTokenSecret: { type: string }
             sloTokenKey: { type: string }
             serverHeaders: { type: object, additionalProperties: { type: string } }
-            autoscalePeriod: { type: string, description: "How often swissd asks decision-gen for a PD slice count. A Go duration. Empty, invalid, or <= 0 is 60s." }
+        pdScale:
+          type: object
+          description: swissd's PD slice autoscaler. Field names follow the LLMScaler's. A profile that still sets scaler.autoscalePeriod has it moved to syncPeriodSeconds on read.
+          properties:
+            syncPeriodSeconds: { type: integer, minimum: 0, description: "How often swissd asks decision-gen for a PD slice count. Unset or 0 is 60." }
+            deferTimeoutSeconds: { type: integer, minimum: 0, description: "How long a hold may defer a scale before it is applied anyway. Times out a DisaggregatedSet observedGeneration behind, a failed release, and a role or router not ready. Never times out uninstalling, not disaggregated, a missing DisaggregatedSet, or an apply in flight (lock, helm pending, plan applying, LLMService applying, pending or observedGeneration behind). Unset is 600; 0 defers indefinitely." }
         defaults:
           type: object
           description: The site's preferences, composed beneath the catalog as the `defaults` layer, so a variant overrides them. Every other section is a site fact, composed above the catalog.
@@ -2185,6 +2190,8 @@ components:
         error: { type: string }
         lastEvaluated: { type: string, format: date-time }
         lastScaled: { type: string, format: date-time, description: "When this process applied a scale. Kept across later passes." }
+        deferredSince: { type: string, format: date-time, description: "When a hold that times out first deferred a scale, as the LLMScaler's status.deferredSince. Kept across hold changes, no-ops and timed-out applies; cleared on a pass where no such hold matches. In memory, so a restart starts it over." }
+        timedOut: { type: string, description: "The hold this pass applied past, because deferredSince is older than pdScale.deferTimeoutSeconds." }
 
     AutoscaleStateList:
       type: object
