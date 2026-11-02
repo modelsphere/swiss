@@ -174,6 +174,7 @@ func (b llmBackend) Apply(ctx context.Context, p *plan.Plan, mode exec.Mode, o a
 	}
 
 	var cur *unstructured.Unstructured
+	failed := false
 	if mode != exec.Install {
 		var err error
 		cur, err = s.llms.Get(ctx, p.Release.Namespace, p.Release.Name)
@@ -203,12 +204,13 @@ func (b llmBackend) Apply(ctx context.Context, p *plan.Plan, mode exec.Mode, o a
 		if phase == llmsvc.PhaseApplying {
 			return applyResult{}, fail(http.StatusConflict, "release %s is %s: wait for it, or `helm rollback` first", ref, phase)
 		}
+		failed = phase == llmsvc.PhaseFailed
 		if err := exec.CheckRevision(exec.State{Exists: true, Revision: helmRev}, o.ExpectRevision); err != nil {
 			return applyResult{}, failErr(http.StatusConflict, err)
 		}
 	}
 
-	if mode == exec.Install && p.CreateNamespace && s.writer != nil {
+	if mode == exec.Install && (p.CreateNamespace || o.CreateNamespace) && s.writer != nil {
 		if err := s.writer.EnsureNamespace(ctx, p.Release.Namespace); err != nil {
 			return applyResult{}, fail(http.StatusInternalServerError, "namespace not created, nothing applied: %s", err.Error())
 		}
@@ -217,6 +219,14 @@ func (b llmBackend) Apply(ctx context.Context, p *plan.Plan, mode exec.Mode, o a
 	fresh, err := llmsvc.FromPlan(p, o.Action, o.Note)
 	if err != nil {
 		return applyResult{}, failErr(fromPlanStatus(err), err)
+	}
+	if o.SkipSchemaValidation {
+		anns := fresh.GetAnnotations()
+		if anns == nil {
+			anns = map[string]string{}
+		}
+		anns[llmsvc.AnnSkipSchemaValidation] = "true"
+		fresh.SetAnnotations(anns)
 	}
 	// Spec decides the generation. The force-conflicts annotation is named
 	// after that generation, so it is applied after the prediction.
@@ -269,7 +279,16 @@ func (b llmBackend) Apply(ctx context.Context, p *plan.Plan, mode exec.Mode, o a
 		}
 	}
 
-	got, waitErr := s.llms.WaitApplied(ctx, p.Release.Namespace, p.Release.Name, wrote.GetGeneration())
+	// A write that changes only annotations leaves the generation alone, so a
+	// failed release's status is already "observed" -- the last attempt's.
+	// Turning skip-schema-validation on for a release its schema refused is
+	// exactly that write. The operator marks it Applying before it tries
+	// again, so wait for a status written after ours.
+	after := ""
+	if failed && wrote.GetGeneration() == cur.GetGeneration() && wrote.GetResourceVersion() != cur.GetResourceVersion() {
+		after = wrote.GetResourceVersion()
+	}
+	got, waitErr := s.llms.WaitApplied(ctx, p.Release.Namespace, p.Release.Name, wrote.GetGeneration(), after)
 	summary := ""
 	var obj *llmsvc.LLMService
 	if got != nil {
@@ -435,18 +454,22 @@ func fromPlanStatus(err error) int {
 }
 
 // mergeReleaseAnnotations keeps every annotation swiss does not own, replaces
-// the swiss.modelsphere.dev/ set with fresh (so a stale note is dropped), and
-// removes force-conflicts unless this apply sets it.
+// the swiss.modelsphere.dev/ set and skip-schema-validation with fresh (so a
+// stale note, or a flag turned off, is dropped), and removes force-conflicts
+// unless this apply sets it.
 func mergeReleaseAnnotations(cur, fresh map[string]string, setForce string) map[string]string {
+	owned := func(k string) bool {
+		return strings.HasPrefix(k, llmsvc.SwissAnnotationPrefix) || k == llmsvc.AnnSkipSchemaValidation
+	}
 	out := make(map[string]string, len(cur)+len(fresh)+1)
 	for k, v := range cur {
-		if strings.HasPrefix(k, llmsvc.SwissAnnotationPrefix) || k == llmsvc.AnnForceConflicts {
+		if owned(k) || k == llmsvc.AnnForceConflicts {
 			continue
 		}
 		out[k] = v
 	}
 	for k, v := range fresh {
-		if strings.HasPrefix(k, llmsvc.SwissAnnotationPrefix) {
+		if owned(k) {
 			out[k] = v
 		}
 	}

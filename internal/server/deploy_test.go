@@ -32,12 +32,6 @@ type fakeWriter struct {
 	namespaces map[string]bool
 	strictNS   bool
 	ensured    []string
-	// cm is the probe's ConfigMap store when a test wires one. Status writes
-	// go through it so resourceVersion conflicts and NotFound are real.
-	cm              *cluster.Fake
-	keyUpdates      int
-	conflicts       int
-	beforeKeyUpdate func(ref string)
 }
 
 // missingNS is the apiserver's own answer, so a test exercises the error the
@@ -76,22 +70,6 @@ func (f *fakeWriter) PutConfigMap(_ context.Context, ref string, data, _ map[str
 	return nil
 }
 
-func (f *fakeWriter) PutLabeledConfigMap(_ context.Context, ref string, data, labels map[string]string) error {
-	if err := f.missingNS(ref); err != nil {
-		return err
-	}
-	if f.written == nil {
-		f.written = map[string]map[string]string{}
-		f.labels = map[string]map[string]string{}
-	}
-	if f.labels == nil {
-		f.labels = map[string]map[string]string{}
-	}
-	f.written[ref] = cloneData(data)
-	f.labels[ref] = cloneData(labels)
-	return nil
-}
-
 func cloneData(m map[string]string) map[string]string {
 	if m == nil {
 		return nil
@@ -123,29 +101,6 @@ func (f *fakeWriter) DeleteSecret(_ context.Context, ref string) error {
 func (f *fakeWriter) DeleteConfigMap(_ context.Context, ref string) error {
 	f.deleted = append(f.deleted, ref)
 	delete(f.written, ref)
-	return nil
-}
-
-func (f *fakeWriter) UpdateConfigMapKey(ctx context.Context, ref, key, value, rv string) error {
-	if f.beforeKeyUpdate != nil {
-		f.beforeKeyUpdate(ref)
-	}
-	if f.cm == nil {
-		return apierrors.NewNotFound(schema.GroupResource{Resource: "configmaps"}, ref)
-	}
-	err := f.cm.UpdateConfigMapKey(ctx, ref, key, value, rv)
-	if apierrors.IsConflict(err) {
-		f.conflicts++
-		return err
-	}
-	if err != nil {
-		return err
-	}
-	f.keyUpdates++
-	if f.written == nil {
-		f.written = map[string]map[string]string{}
-	}
-	f.written[ref] = cloneData(f.cm.Maps[ref])
 	return nil
 }
 
@@ -302,10 +257,9 @@ func TestApplyOnAMissingReleaseIsAConflict(t *testing.T) {
 	}
 }
 
-// helm creates the namespace, so the request to create it is composed into the
-// plan rather than passed to the install: the helmfile the plan carries is the
-// one helmfile runs, and a toggle on the apply would make the reviewed document
-// disagree with it.
+// The deprecated path, kept working: createNamespace on the plan request is
+// composed into the plan and its helmfile. applyFlags.createNamespace on the
+// install is the replacement.
 func TestCreateNamespaceIsComposedIntoThePlan(t *testing.T) {
 	// A profile naming a chart repo, so the plan renders its helmfile: that
 	// rendered document is what the plan view shows.
@@ -345,8 +299,8 @@ func TestCreateNamespaceIsComposedIntoThePlan(t *testing.T) {
 	}
 }
 
-// Nothing asks for it unless the plan does: no flag on the apply, and no
-// carrying one forward from a form.
+// Nothing puts it into the plan unless the plan request does: not a flag on the
+// apply, and not a form carried forward.
 func TestCreateNamespaceIsOffUnlessComposed(t *testing.T) {
 	srv, s := deployServer(t, true)
 	_, body := post(t, srv, "/api/plans", map[string]any{"model": "qwen3.6-35b-a3b", "release": "glm-53"})
@@ -354,7 +308,7 @@ func TestCreateNamespaceIsOffUnlessComposed(t *testing.T) {
 	post(t, srv, "/api/apply", map[string]any{"planHash": hash, "createNamespace": true})
 
 	if writtenPlan(t, s, "models", "glm-53").CreateNamespace {
-		t.Error("an apply must not be able to turn it on behind the plan's back")
+		t.Error("an apply must not put it into the plan")
 	}
 }
 
@@ -492,10 +446,6 @@ func (failingWriter) PutConfigMap(context.Context, string, map[string]string, ma
 	return errors.New("forbidden")
 }
 
-func (failingWriter) PutLabeledConfigMap(context.Context, string, map[string]string, map[string]string) error {
-	return errors.New("forbidden")
-}
-
 func (failingWriter) DeleteConfigMap(context.Context, string) error {
 	return errors.New("forbidden")
 }
@@ -505,10 +455,6 @@ func (failingWriter) PutSecret(context.Context, string, map[string]string, map[s
 }
 
 func (failingWriter) DeleteSecret(context.Context, string) error {
-	return errors.New("forbidden")
-}
-
-func (failingWriter) UpdateConfigMapKey(context.Context, string, string, string, string) error {
 	return errors.New("forbidden")
 }
 

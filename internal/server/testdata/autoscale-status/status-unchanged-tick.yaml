@@ -1,5 +1,0 @@
-name: status-unchanged-tick
-description: a second identical tick does not write the ConfigMap
-kind: tick
-wantKeyWrites: 1
-wantApplies: 0

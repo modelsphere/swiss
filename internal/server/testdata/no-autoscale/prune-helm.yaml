@@ -1,5 +1,5 @@
 name: prune-helm
-description: plan history keeps the newest archives and writes no autoscale ConfigMap
+description: plan history keeps the newest archives
 kind: prune
 backend: helm
 keep: 5

@@ -1,0 +1,8 @@
+name: helm-non-pd
+description: a helm release that is not disaggregated is not queried
+backend: helm
+pd: false
+colocate: false
+slo: true
+wantQueries: 0
+wantApplies: 0

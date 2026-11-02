@@ -1,0 +1,36 @@
+name: hold-release-failed-helm
+description: a helm status of failed holds even when the plan phase is applied
+live:
+  backend: helm
+  helmStatus: failed
+  planPhase: applied
+  pd: true
+  dsGeneration: 1
+  dsObservedGeneration: 1
+  dsSlices: 3
+  planReplicaCount: 3
+  roles:
+    - replicas: 1
+      readyReplicas: 1
+      updatedReplicas: 1
+  routers:
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
+decision:
+  ok: true
+  replicas: 1
+wantHold: "release failed"
+wantScale: false
+wantCurrent: 3
+want: 0
+hasDecision: true

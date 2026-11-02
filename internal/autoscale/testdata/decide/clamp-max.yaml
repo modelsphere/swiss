@@ -1,9 +1,5 @@
 name: clamp-max
-description: a decision above maxSlices clamps down
-config:
-  enabled: true
-  minSlices: 1
-  maxSlices: 3
+description: a decision above the safety ceiling clamps down
 live:
   backend: helm
   helmStatus: deployed
@@ -23,10 +19,9 @@ live:
       observedGeneration: 1
 decision:
   ok: true
-  replicas: 9
+  replicas: 80
 wantHold: ""
 wantScale: true
 wantCurrent: 1
-want: 3
-wantFailed: false
+want: 64
 hasDecision: true

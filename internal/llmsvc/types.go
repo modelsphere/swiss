@@ -46,6 +46,11 @@ const (
 
 	AnnDeletionPolicy = Group + "/deletion-policy"
 	AnnForceConflicts = Group + "/force-conflicts"
+	// AnnSkipSchemaValidation is "true" while an apply asked to skip the
+	// chart's values schema. swiss owns it like its own annotations: written by
+	// an apply that asks, removed by the next one that does not. An operator that
+	// predates it ignores it, and the release is applied with the schema checked.
+	AnnSkipSchemaValidation = Group + "/skip-schema-validation"
 )
 
 var GVR = schema.GroupVersionResource{Group: Group, Version: Version, Resource: Resource}

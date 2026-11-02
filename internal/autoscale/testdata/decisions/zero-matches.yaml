@@ -5,3 +5,4 @@ serviceId: pd
 status: 200
 body: '{"apiVersion":"llmscaling.inference.x-k8s.io/v1alpha1","decisions":[{"namespace":"models","serviceId":"other","replicas":{"active": 2}}]}'
 errorContains: no decision for serviceId
+wantNoDecision: true

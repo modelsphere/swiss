@@ -1,7 +1,0 @@
-name: scale-deleted
-description: config deleted between decide and scale is not applied
-kind: scale
-mutate: delete
-wantApplies: 0
-wantReads: 2
-wantPresent: false

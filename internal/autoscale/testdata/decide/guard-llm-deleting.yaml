@@ -1,9 +1,5 @@
 name: guard-llm-deleting
 description: an LLMService being deleted holds, even on a scale-down
-config:
-  enabled: true
-  minSlices: 1
-  maxSlices: 4
 live:
   backend: llmsvc
   llmPhase: Applied
@@ -15,9 +11,8 @@ live:
 decision:
   ok: true
   replicas: 1
-wantHold: "uninstalling"
+wantHold: uninstalling
 wantScale: false
 wantCurrent: 3
 want: 0
-wantFailed: false
 hasDecision: true

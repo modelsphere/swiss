@@ -157,12 +157,6 @@ func TestCanaryAssignedArmReadAndWriteBoundaries(t *testing.T) {
 			return put(t, rig.srv, "/api/releases/models/demo-existing-arm/slo", map[string]any{"priority": 10})
 		}},
 		{"slo reset", func() (int, map[string]any) { return del(t, rig.srv, "/api/releases/models/demo-existing-arm/slo") }},
-		{"autoscale write", func() (int, map[string]any) {
-			return put(t, rig.srv, "/api/releases/models/demo-existing-arm/autoscaling", map[string]any{"enabled": true, "minSlices": 1, "maxSlices": 2})
-		}},
-		{"autoscale delete", func() (int, map[string]any) {
-			return del(t, rig.srv, "/api/releases/models/demo-existing-arm/autoscaling")
-		}},
 	}
 	for _, check := range checks {
 		t.Run(check.path, func(t *testing.T) {
@@ -175,6 +169,20 @@ func TestCanaryAssignedArmReadAndWriteBoundaries(t *testing.T) {
 				t.Fatal(body)
 			}
 		})
+	}
+	for _, method := range []string{http.MethodPut, http.MethodDelete} {
+		req, err := http.NewRequest(method, rig.srv.URL+"/api/releases/models/demo-existing-arm/autoscaling", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := rig.srv.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusMethodNotAllowed {
+			t.Fatalf("removed autoscaling mutation %s: %d", method, resp.StatusCode)
+		}
 	}
 	for _, a := range rig.dyn.Actions() {
 		if a.GetVerb() == "delete" || a.GetVerb() == "update" || a.GetVerb() == "patch" || a.GetVerb() == "create" {

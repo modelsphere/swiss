@@ -1,4 +1,4 @@
 name: uninstall-helm
-description: uninstall with no autoscale ConfigMap deletes the plan ConfigMap and nothing autoscale
+description: uninstall deletes the plan ConfigMap
 kind: uninstall
 backend: helm

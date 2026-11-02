@@ -20,44 +20,18 @@ const (
 	HoldRoleNotReady    = "role not ready"
 	HoldRoleNotUpdated  = "role not updated"
 	HoldRouterNotReady  = "router not ready"
-	HoldConfigInvalid   = "autoscale config invalid"
-	// HoldBackoff skips the same count until retryAfter.
-	HoldBackoff = "backing off"
-	// HoldReleaseFailed is a helm or plan failure this loop did not record.
-	// The tick holds instead of applying again.
+	// HoldReleaseFailed is a failed helm release, plan, or LLMService.
+	// It holds until an operator applies or rolls back, or the defer timeout.
 	HoldReleaseFailed = "release failed"
 	// HoldUninstalling is a release on its way out: the plan is marked
 	// uninstalling, or the LLMService is being deleted. Nothing is applied.
 	HoldUninstalling = "uninstalling"
 
-	backoffBase = time.Minute
-	backoffCap  = 30 * time.Minute
+	// MinSlices and MaxSlices are the only bounds swiss applies. decision-gen
+	// already clamps to the LLMSLORequirement; this is a safety clamp.
+	MinSlices = 1
+	MaxSlices = 64
 )
-
-// Config is what the API stores. The loop clamps a decision into [min, max].
-type Config struct {
-	Enabled   bool `json:"enabled" yaml:"enabled"`
-	MinSlices int  `json:"minSlices" yaml:"minSlices"`
-	MaxSlices int  `json:"maxSlices" yaml:"maxSlices"`
-}
-
-// Status is what the loop last did. Pointers distinguish "unset" from 0.
-type Status struct {
-	LastTickAt     string `json:"lastTickAt,omitempty" yaml:"lastTickAt,omitempty"`
-	LastDecision   *int   `json:"lastDecision,omitempty" yaml:"lastDecision,omitempty"`
-	Current        *int   `json:"current,omitempty" yaml:"current,omitempty"`
-	Desired        *int   `json:"desired,omitempty" yaml:"desired,omitempty"`
-	HoldReason     string `json:"holdReason,omitempty" yaml:"holdReason,omitempty"`
-	LastScaleAt    string `json:"lastScaleAt,omitempty" yaml:"lastScaleAt,omitempty"`
-	LastScaleFrom  *int   `json:"lastScaleFrom,omitempty" yaml:"lastScaleFrom,omitempty"`
-	LastScaleTo    *int   `json:"lastScaleTo,omitempty" yaml:"lastScaleTo,omitempty"`
-	LastRevision   *int   `json:"lastRevision,omitempty" yaml:"lastRevision,omitempty"`
-	LastError      string `json:"lastError,omitempty" yaml:"lastError,omitempty"`
-	LastFailedWant *int   `json:"lastFailedWant,omitempty" yaml:"lastFailedWant,omitempty"`
-	LastFailedAt   string `json:"lastFailedAt,omitempty" yaml:"lastFailedAt,omitempty"`
-	Failures       int    `json:"failures,omitempty" yaml:"failures,omitempty"`
-	RetryAfter     string `json:"retryAfter,omitempty" yaml:"retryAfter,omitempty"`
-}
 
 // Live is the cluster, as the loop saw it this tick.
 type Live struct {
@@ -103,48 +77,33 @@ type Decision struct {
 	Error    string `json:"error,omitempty" yaml:"error,omitempty"`
 }
 
-// Result is what the loop should do. Scale means apply Want. Failed means the
-// error belongs in lastError; a guard hold does not. The backoff fields are
-// the state to store: Decide updates them when the wanted count changes, and
-// NoteApply updates them after the apply.
+// Result is what the loop should do. Scale means apply Want.
 type Result struct {
-	Scale          bool
-	Current        int
-	Want           int
-	HoldReason     string
-	Decision       *int
-	Failed         bool
-	LastFailedWant *int
-	LastFailedAt   string
-	Failures       int
-	RetryAfter     string
+	Scale      bool
+	Current    int
+	Want       int
+	HoldReason string
+	Decision   *int
+	// TimedOut is the workload or readiness hold that timedOut skipped.
+	TimedOut string
 }
 
-// ApplyKind is how an autoscale apply ended. Busy and Conflict are not failures.
-type ApplyKind int
-
-const (
-	ApplyNone ApplyKind = iota
-	ApplyOK
-	ApplyFailed
-	ApplyBusy
-	ApplyConflict
-)
-
-// Decide is pure. now and prev are the clock and the stored backoff.
-// A rollout hold always waits. A readiness hold waits only when the next
-// count would be higher, so a scale-down is not blocked by a role or router
-// that is not ready yet. want is clamp(decision, min, max).
-func Decide(now time.Time, cfg Config, prev Status, live Live, d Decision) Result {
+// Decide is pure. Holds come in three classes:
+//
+//	fixed     uninstalling, not PD, DS missing, an apply in flight   never times out, either direction
+//	workload  DS observedGeneration behind, release failed           times out, either direction
+//	readiness role or router not ready or not updated                times out, scale-up only
+//
+// timedOut skips the workload and readiness holds. want is clamp(decision, MinSlices, MaxSlices).
+func Decide(live Live, d Decision, timedOut bool) Result {
 	cur := current(live)
 	res := Result{Current: cur}
 	if d.OK {
 		n := d.Replicas
 		res.Decision = &n
 	}
-	if hold := rolloutHold(live); hold != "" {
+	if hold := fixedHold(live); hold != "" {
 		res.HoldReason = hold
-		carryBackoff(&res, prev)
 		return res
 	}
 	if !d.OK {
@@ -152,110 +111,67 @@ func Decide(now time.Time, cfg Config, prev Status, live Live, d Decision) Resul
 		if res.HoldReason == "" {
 			res.HoldReason = "no decision"
 		}
-		res.Failed = true
-		carryBackoff(&res, prev)
 		return res
 	}
-	if cfg.MinSlices < 1 || cfg.MinSlices > cfg.MaxSlices {
-		res.HoldReason = HoldConfigInvalid
-		res.Failed = true
-		carryBackoff(&res, prev)
-		return res
+	if hold := workloadHold(live); hold != "" {
+		if !timedOut {
+			res.HoldReason = hold
+			return res
+		}
+		res.TimedOut = hold
 	}
-	want := clamp(d.Replicas, cfg.MinSlices, cfg.MaxSlices)
-	changed := prev.LastFailedWant != nil && *prev.LastFailedWant != want
-	if changed {
-		clearBackoff(&res)
-	} else {
-		carryBackoff(&res, prev)
-	}
-	// A failed release with no recorded autoscale failure is somebody else's
-	// apply. Hold. One this loop recorded keeps the backoff below instead.
-	if releaseFailed(live) && !changed && !ownedFailure(prev, want) {
-		res.HoldReason = HoldReleaseFailed
-		return res
-	}
-	if backingOff(now, res, want) {
-		res.HoldReason = HoldBackoff
-		return res
-	}
+	want := clamp(d.Replicas, MinSlices, MaxSlices)
 	if hold := readinessHold(live); hold != "" && want > cur {
-		res.HoldReason = hold
-		return res
+		if !timedOut {
+			res.HoldReason = hold
+			return res
+		}
+		if res.TimedOut == "" {
+			res.TimedOut = hold
+		}
 	}
 	res.Want = want
 	res.Scale = want != cur
 	return res
 }
 
-// NoteApply updates backoff after the apply Decide asked for. Success clears
-// it. A counted failure waits 1m, doubled for each consecutive failure, and
-// never longer than 30m. A busy lock and a revision conflict leave it as it was.
-func NoteApply(now time.Time, res Result, kind ApplyKind) Result {
-	switch kind {
-	case ApplyOK:
-		clearBackoff(&res)
-	case ApplyFailed:
-		res.Failures++
-		w := res.Want
-		res.LastFailedWant = &w
-		res.LastFailedAt = now.UTC().Format(time.RFC3339)
-		res.RetryAfter = now.UTC().Add(backoffDelay(res.Failures)).Format(time.RFC3339)
+// DecideWithTimeout is Decide under the defer timeout, the clock of the
+// LLMScaler's status.deferredSince. deferredSince is when a workload or
+// readiness hold first deferred a write; nil is not deferring. It returns the
+// clock for the next pass:
+//
+//	hold that times out, write wanted   start if nil; past timeout, apply and keep it
+//	hold that times out, no-op          keep, do not start
+//	no hold that times out              clear
+//	fixed hold or no decision           leave as is
+//
+// Once past the timeout every pass applies while the hold lasts. timeout <= 0
+// defers indefinitely.
+func DecideWithTimeout(live Live, d Decision, deferredSince *time.Time, now time.Time, timeout time.Duration) (Result, *time.Time) {
+	held := Decide(live, d, false)
+	forced := Decide(live, d, true)
+	switch {
+	case forced.HoldReason != "":
+		return held, deferredSince
+	case forced.TimedOut == "":
+		return held, nil
+	case !forced.Scale:
+		return held, deferredSince
 	}
-	return res
-}
-
-func backoffDelay(failures int) time.Duration {
-	if failures < 1 {
-		failures = 1
+	if deferredSince == nil {
+		deferredSince = &now
 	}
-	d := backoffBase
-	for i := 1; i < failures; i++ {
-		if d > backoffCap/2 {
-			return backoffCap
-		}
-		d *= 2
+	if timeout > 0 && now.Sub(*deferredSince) >= timeout {
+		return forced, deferredSince
 	}
-	if d > backoffCap {
-		return backoffCap
-	}
-	return d
-}
-
-func carryBackoff(res *Result, prev Status) {
-	if prev.LastFailedWant != nil {
-		w := *prev.LastFailedWant
-		res.LastFailedWant = &w
-	}
-	res.LastFailedAt = prev.LastFailedAt
-	res.Failures = prev.Failures
-	res.RetryAfter = prev.RetryAfter
-}
-
-func clearBackoff(res *Result) {
-	res.LastFailedWant = nil
-	res.LastFailedAt = ""
-	res.Failures = 0
-	res.RetryAfter = ""
-}
-
-func ownedFailure(prev Status, want int) bool {
-	return prev.LastFailedWant != nil && *prev.LastFailedWant == want
-}
-
-func backingOff(now time.Time, res Result, want int) bool {
-	if res.LastFailedWant == nil || *res.LastFailedWant != want || res.RetryAfter == "" {
-		return false
-	}
-	t, err := time.Parse(time.RFC3339, res.RetryAfter)
-	if err != nil {
-		return false
-	}
-	return now.Before(t)
+	return held, deferredSince
 }
 
 func releaseFailed(live Live) bool {
-	return live.HelmStatus == "failed" || live.PlanPhase == "failed"
+	if live.HelmStatus == "failed" || live.PlanPhase == "failed" {
+		return true
+	}
+	return live.Backend == "llmsvc" && live.LLMPhase == "Failed"
 }
 
 func current(live Live) int {
@@ -268,8 +184,9 @@ func current(live Live) int {
 	return live.PlanReplicaCount
 }
 
-// rolloutHold is a change still landing. It waits in either direction.
-func rolloutHold(live Live) string {
+// fixedHold is a release that is going away or cannot scale, or an apply
+// still in flight that a new one would be refused by or race.
+func fixedHold(live Live) string {
 	if live.PlanPhase == "uninstalling" || live.LLMDeleting || live.LLMPhase == "Deleting" {
 		return HoldUninstalling
 	}
@@ -299,8 +216,17 @@ func rolloutHold(live Live) string {
 	if live.DSMissing {
 		return HoldDSMissing
 	}
+	return ""
+}
+
+// workloadHold is a DisaggregatedSet rollout that has not landed, or a
+// failed release.
+func workloadHold(live Live) string {
 	if live.DSObservedGeneration < live.DSGeneration {
 		return HoldDSObserved
+	}
+	if releaseFailed(live) {
+		return HoldReleaseFailed
 	}
 	return ""
 }
@@ -316,11 +242,8 @@ func readinessHold(live Live) string {
 			return HoldRoleNotUpdated
 		}
 	}
-	n := current(live)
-	if n < 0 {
-		n = 0
-	}
-	for i := 0; i < n; i++ {
+	n := max(current(live), 0)
+	for i := range n {
 		if i >= len(live.Routers) || routerHeld(live.Routers[i]) {
 			return HoldRouterNotReady
 		}

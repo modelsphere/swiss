@@ -1,0 +1,35 @@
+name: hold-release-failed
+description: a failed helm release holds until an operator applies or rolls back
+live:
+  backend: helm
+  helmStatus: failed
+  pd: true
+  dsGeneration: 1
+  dsObservedGeneration: 1
+  dsSlices: 3
+  planReplicaCount: 3
+  roles:
+    - replicas: 1
+      readyReplicas: 1
+      updatedReplicas: 1
+  routers:
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
+decision:
+  ok: true
+  replicas: 1
+wantHold: "release failed"
+wantScale: false
+wantCurrent: 3
+want: 0
+hasDecision: true

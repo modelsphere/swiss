@@ -64,6 +64,8 @@ type planRequest struct {
 	// CreateNamespace composes helmfile's createNamespace into the plan, on top
 	// of the site profile's own setting. helm is what creates the namespace;
 	// this is where the plan says so.
+	//
+	// Deprecated: applyFlags.createNamespace on the install.
 	CreateNamespace bool `json:"createNamespace,omitempty"`
 	// ChartVersion must fall in the variant's chart.version. Empty resolves as
 	// chart.Resolve does.
@@ -72,8 +74,9 @@ type planRequest struct {
 	// Set by carryForward, never by the caller.
 	runningChart plan.ChartRef
 	movedFrom    *plan.Plan
-	// autoscale is the live replicaCount layer, copied while autoscaling is
-	// enabled. Unexported so a request body cannot set it.
+	// autoscale is the live replicaCount layer, copied while the previous plan
+	// is autoscaling and the new form keeps the rule. Unexported so a request
+	// body cannot set it.
 	autoscale values.Tree
 }
 
@@ -96,10 +99,43 @@ type applyRequest struct {
 	// ForceConflicts lets the upgrade take fields another manager owns, which
 	// is what a hand `kubectl edit` leaves behind. Per apply, never stored in
 	// the plan -- see exec.ApplyOptions.
-	ForceConflicts bool `json:"forceConflicts,omitempty"`
+	//
+	// Deprecated: applyFlags.forceConflicts, which wins when sent.
+	ForceConflicts bool       `json:"forceConflicts,omitempty"`
+	ApplyFlags     applyFlags `json:"applyFlags,omitempty"`
 	// ApplyWith is a new install's backend, helm or llmsvc; empty is the site
 	// profile's. An existing release keeps its own.
 	ApplyWith string `json:"applyWith,omitempty"`
+}
+
+// applyFlags are per-request options for diff, install and apply, never stored
+// in the plan. Each endpoint takes the ones that apply to it and ignores the rest.
+type applyFlags struct {
+	SkipSchemaValidation bool `json:"skipSchemaValidation,omitempty"`
+	// A pointer so that a false sent here overrides the deprecated top-level
+	// forceConflicts.
+	ForceConflicts  *bool `json:"forceConflicts,omitempty"`
+	CreateNamespace bool  `json:"createNamespace,omitempty"`
+}
+
+// opts is what an install (or, without createNamespace, an upgrade) takes from
+// the request.
+func (req applyRequest) opts(mode exec.Mode) applyOpts {
+	o := applyOpts{
+		ExpectRevision:       req.ExpectRevision,
+		Action:               actionName(mode),
+		Note:                 req.Note,
+		ForceConflicts:       req.ForceConflicts,
+		SkipSchemaValidation: req.ApplyFlags.SkipSchemaValidation,
+	}
+	if f := req.ApplyFlags.ForceConflicts; f != nil {
+		o.ForceConflicts = *f
+	}
+	// An upgrade's namespace exists already.
+	if mode == exec.Install {
+		o.CreateNamespace = req.ApplyFlags.CreateNamespace
+	}
+	return o
 }
 
 func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
@@ -245,6 +281,16 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 	if err != nil {
 		return nil, err
 	}
+	// The carried layer belongs only on a plan that is itself autoscaling. An
+	// upgrade can leave PD through its edits or a non-PD variant, which the
+	// form alone does not show; left in place, the layer would win over the
+	// operator's replicaCount on a plan the loop never touches.
+	if _, ok := p.Layers[values.LayerAutoscale]; ok && !autoscaleOn(p) {
+		delete(p.Layers, values.LayerAutoscale)
+		if err := p.ComputeHash(); err != nil {
+			return nil, err
+		}
+	}
 	p.Warnings = warnings
 	return p, nil
 }
@@ -302,7 +348,11 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 		if edits := prev.Layers[values.LayerEdit]; len(edits) > 0 {
 			out.EditsYAML = mustYAML(edits)
 		}
-		return s.withAutoscale(ctx, prev, out)
+		return s.withAutoscale(prev, out), nil
+	}
+	// A plan composed with no form values has no form layer to merge into.
+	if out.Overrides == nil {
+		out.Overrides = values.Tree{}
 	}
 	values.Merge(out.Overrides, req.Overrides, values.LayerForm, nil)
 	out.EditsYAML = req.EditsYAML
@@ -323,29 +373,22 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 		out.GPUProducts = req.GPUProducts
 		out.ForceGPUProducts = req.ForceGPUProducts
 	}
-	return s.withAutoscale(ctx, prev, out)
+	return s.withAutoscale(prev, out), nil
 }
 
-// withAutoscale copies the live autoscale layer onto an upgrade while that
-// release has autoscaling enabled. Otherwise the layer is left behind and
-// replicaCount falls back to form and edit.
-func (s *Server) withAutoscale(ctx context.Context, prev *plan.Plan, out planRequest) (planRequest, error) {
-	if prev == nil {
-		return out, nil
+// withAutoscale copies the live autoscale layer onto an upgrade while the
+// previous plan is autoscaling. Compose drops it again when the plan it builds
+// is not autoscaling, so replicaCount falls back to form and edit.
+func (s *Server) withAutoscale(prev *plan.Plan, out planRequest) planRequest {
+	if prev == nil || !autoscaleOn(prev) {
+		return out
 	}
 	layer := prev.Layers[values.LayerAutoscale]
 	if len(layer) == 0 {
-		return out, nil
-	}
-	on, err := s.autoscalingEnabled(ctx, prev.Release.Namespace, prev.Release.Name)
-	if err != nil {
-		return planRequest{}, err
-	}
-	if !on {
-		return out, nil
+		return out
 	}
 	out.autoscale = cloneTree(layer)
-	return out, nil
+	return out
 }
 
 // checkMove refuses a cross-catalog upgrade that would put another model, or the
@@ -575,7 +618,7 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := contextWithTimeout(r, 5*time.Minute)
 	defer cancel()
 
-	p, err := s.planFromRequest(ctx, r)
+	p, flags, err := s.planFromRequest(ctx, r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -589,7 +632,8 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 	// Not audited: a diff changes nothing, and one row per preview buried the
 	// applies. What it would have recorded is in the apply's own output, which
 	// is helmfile's diff.
-	res, err := s.runner().Diff(ctx, p)
+	// Only skipSchemaValidation changes what a diff computes.
+	res, err := s.runner().Diff(ctx, p, exec.ApplyOptions{SkipSchemaValidation: flags.SkipSchemaValidation})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -629,7 +673,7 @@ func (s *Server) handleApply(mode exec.Mode) http.HandlerFunc {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		s.applyPlan(ctx, w, p, mode, req.ApplyWith, req.ExpectRevision, actionName(mode), req.Note, req.ForceConflicts)
+		s.applyPlan(ctx, w, p, mode, req.ApplyWith, req.opts(mode))
 	}
 }
 
@@ -666,13 +710,8 @@ func (s *Server) applyLocked(ctx context.Context, p *plan.Plan, mode exec.Mode, 
 
 // applyPlan is apply plus the HTTP response. Handlers stay here; the
 // autoscaler calls apply and records the error itself.
-func (s *Server) applyPlan(ctx context.Context, w http.ResponseWriter, p *plan.Plan, mode exec.Mode, applyWith string, expectRevision int, action, note string, forceConflicts bool) {
-	res, err := s.apply(ctx, p, mode, applyWith, applyOpts{
-		ExpectRevision: expectRevision,
-		Action:         action,
-		Note:           note,
-		ForceConflicts: forceConflicts,
-	})
+func (s *Server) applyPlan(ctx context.Context, w http.ResponseWriter, p *plan.Plan, mode exec.Mode, applyWith string, o applyOpts) {
+	res, err := s.apply(ctx, p, mode, applyWith, o)
 	if err != nil {
 		writeStatus(w, err, http.StatusInternalServerError)
 		return
@@ -913,21 +952,24 @@ func phaseLabel(phase string) map[string]string {
 	return nil
 }
 
-func (s *Server) planFromRequest(ctx context.Context, r *http.Request) (*plan.Plan, error) {
+func (s *Server) planFromRequest(ctx context.Context, r *http.Request) (*plan.Plan, applyFlags, error) {
 	var body struct {
 		planRequest
-		PlanHash string `json:"planHash,omitempty"`
+		PlanHash   string     `json:"planHash,omitempty"`
+		ApplyFlags applyFlags `json:"applyFlags,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		return nil, err
+		return nil, applyFlags{}, err
 	}
 	if body.PlanHash != "" {
 		if s.store == nil {
-			return nil, fmt.Errorf("no database: pass a model instead of a planHash")
+			return nil, body.ApplyFlags, fmt.Errorf("no database: pass a model instead of a planHash")
 		}
-		return s.store.Plan(ctx, body.PlanHash)
+		p, err := s.store.Plan(ctx, body.PlanHash)
+		return p, body.ApplyFlags, err
 	}
-	return s.compose(ctx, body.planRequest)
+	p, err := s.compose(ctx, body.planRequest)
+	return p, body.ApplyFlags, err
 }
 
 func (s *Server) runner() exec.Runner {

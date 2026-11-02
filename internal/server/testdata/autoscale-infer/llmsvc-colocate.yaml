@@ -1,0 +1,8 @@
+name: llmsvc-colocate
+description: a colocated llmsvc release is not queried
+backend: llmsvc
+pd: true
+colocate: true
+slo: true
+wantQueries: 0
+wantApplies: 0

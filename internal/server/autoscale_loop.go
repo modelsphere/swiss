@@ -4,27 +4,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
-	"strings"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"github.com/modelsphere/swiss/internal/autoscale"
-	"github.com/modelsphere/swiss/internal/cluster"
 	"github.com/modelsphere/swiss/internal/exec"
 	"github.com/modelsphere/swiss/internal/llmsvc"
 	"github.com/modelsphere/swiss/internal/plan"
+	"github.com/modelsphere/swiss/internal/site"
 	"github.com/modelsphere/swiss/internal/values"
 )
-
-const defaultAutoscalePeriod = 30 * time.Second
 
 // runAutoscaler polls decision-gen until ctx is cancelled. The first tick
 // waits one period. A tick never delays shutdown: helm apply detaches, and
 // this goroutine returns as soon as ctx is done.
 func (s *Server) runAutoscaler(ctx context.Context) {
-	timer := time.NewTimer(s.autoscalePeriod(ctx))
+	timer := time.NewTimer(s.syncPeriod(ctx))
 	defer timer.Stop()
 	for {
 		select {
@@ -32,193 +28,178 @@ func (s *Server) runAutoscaler(ctx context.Context) {
 			return
 		case <-timer.C:
 			s.autoscaleTick(ctx)
-			timer.Reset(s.autoscalePeriod(ctx))
+			timer.Reset(s.syncPeriod(ctx))
 		}
 	}
 }
 
-func (s *Server) autoscalePeriod(ctx context.Context) time.Duration {
+func (s *Server) syncPeriod(ctx context.Context) time.Duration {
 	p, err := s.Profile(ctx)
 	if err != nil || p == nil {
-		return defaultAutoscalePeriod
+		return site.PDScale{}.SyncPeriod()
 	}
-	d, err := time.ParseDuration(strings.TrimSpace(p.Scaler.AutoscalePeriod))
-	if err != nil || d <= 0 {
-		return defaultAutoscalePeriod
+	return p.PDScale.SyncPeriod()
+}
+
+func (s *Server) deferTimeout(ctx context.Context) time.Duration {
+	p, err := s.Profile(ctx)
+	if err != nil || p == nil {
+		return site.PDScale{}.DeferTimeout()
 	}
-	return d
+	return p.PDScale.DeferTimeout()
 }
 
 func (s *Server) autoscaleTick(ctx context.Context) {
 	if ctx.Err() != nil || s.probe == nil {
 		return
 	}
-	nss := s.releaseNamespaces()
-	if len(nss) == 0 {
-		nss = []string{""}
+	refs, err := s.deploymentRefs(ctx)
+	if err != nil {
+		s.log.WarnContext(ctx, "autoscale list", "err", err)
+		return
 	}
-	var cms []cluster.ConfigMapObj
-	for _, ns := range nss {
-		listed, err := s.probe.ConfigMapList(ctx, ns, "owner=swiss")
-		if err != nil {
-			s.log.WarnContext(ctx, "autoscale list", "namespace", ns, "err", err)
-			continue
+	seen := make(map[string]bool, len(refs))
+	for _, ref := range refs {
+		if s.autoscaleOne(ctx, ref.Namespace, ref.Name) {
+			seen[autoscaleKey(ref.Namespace, ref.Name)] = true
 		}
-		cms = append(cms, listed...)
 	}
-	sort.Slice(cms, func(i, j int) bool {
-		if cms[i].Namespace != cms[j].Namespace {
-			return cms[i].Namespace < cms[j].Namespace
-		}
-		return cms[i].Name < cms[j].Name
-	})
-	for _, cm := range cms {
-		if !strings.HasPrefix(cm.Name, autoscalePrefix) {
-			continue
-		}
-		release := strings.TrimPrefix(cm.Name, autoscalePrefix)
-		if cm.Labels["name"] != "" && cm.Labels["name"] != release {
-			continue
-		}
-		if release == "" {
-			continue
-		}
-		s.autoscaleOne(ctx, cm.Namespace, release)
-	}
+	// Releases this pass did not mark are no longer autoscaling.
+	s.pruneAutoscale(seen)
 }
 
-func (s *Server) autoscaleOne(ctx context.Context, ns, release string) {
-	view, err := s.readAutoscale(ctx, ns, release)
-	if err != nil {
-		s.log.WarnContext(ctx, "autoscale config", "release", release, "err", err)
-		return
-	}
-	if !view.Found || view.Config == nil || !view.Config.Enabled {
-		return
-	}
-	cfg := *view.Config
-
+// autoscaleOne reports whether this release stays in the pass. False drops it.
+// A read that fails before the plan is known keeps the previous entry.
+func (s *Server) autoscaleOne(ctx context.Context, ns, release string) bool {
 	b, _, err := s.backendFor(ctx, ns, release)
 	if err != nil {
-		s.noteAutoscaleError(ctx, ns, release, err)
-		return
+		s.log.WarnContext(ctx, "autoscale", "release", release, "err", err)
+		s.noteAutoscaleError(ns, release, err)
+		return true
 	}
 	if b == nil {
-		s.noteAutoscaleError(ctx, ns, release, fmt.Errorf("release %s/%s is not managed by swiss", ns, release))
-		return
+		return false
 	}
 	p, err := b.Current(ctx, ns, release)
 	if err != nil {
-		s.noteAutoscaleError(ctx, ns, release, err)
-		return
+		s.log.WarnContext(ctx, "autoscale", "release", release, "err", err)
+		s.noteAutoscaleError(ns, release, err)
+		return true
+	}
+	if !autoscaleOn(p) {
+		return false
+	}
+	st := autoscaleState{Namespace: ns, Release: release, Enabled: true, Current: planReplicaCount(p)}
+	if prev, ok := s.autoscaleStateOf(ns, release); ok {
+		st.DeferredSince = prev.DeferredSince
 	}
 	live, rev, err := s.autoscaleLive(ctx, ns, release, b.Name(), p)
 	if err != nil {
-		s.noteAutoscaleError(ctx, ns, release, err)
-		return
+		s.log.WarnContext(ctx, "autoscale", "release", release, "err", err)
+		st.Outcome = outcomeError
+		st.Error = err.Error()
+		s.recordAutoscale(st)
+		return true
 	}
-
-	d := s.queryDecision(ctx, ns, autoscaleServiceID(p))
-	var prev autoscale.Status
-	if view.Status != nil {
-		prev = *view.Status
-	}
-	now := time.Now()
-	res := autoscale.Decide(now, cfg, prev, live, d)
-	if !res.Scale {
-		s.recordAutoscale(ctx, ns, release, res, nil, 0, 0, false)
-		return
-	}
-	produced, scaleErr := s.scaleTo(ctx, ns, release, res.Current, res.Want, rev)
-	if errors.Is(scaleErr, errAutoscaleInactive) {
-		return
-	}
-	res = autoscale.NoteApply(now, res, applyKind(scaleErr))
-	s.recordAutoscale(ctx, ns, release, res, scaleErr, res.Current, produced, scaleErr == nil)
-}
-
-func applyKind(err error) autoscale.ApplyKind {
-	switch {
-	case err == nil:
-		return autoscale.ApplyOK
-	case errors.Is(err, errApplyBusy):
-		return autoscale.ApplyBusy
-	case revisionConflict(err):
-		return autoscale.ApplyConflict
-	default:
-		return autoscale.ApplyFailed
-	}
-}
-
-func revisionConflict(err error) bool {
-	var rc *exec.RevisionConflictError
-	return errors.As(err, &rc)
-}
-
-func (s *Server) noteAutoscaleError(ctx context.Context, ns, release string, err error) {
-	if err == nil {
-		return
-	}
-	s.log.WarnContext(ctx, "autoscale", "release", release, "err", err)
-	_ = s.writeAutoscaleStatus(ctx, ns, release, func(st *autoscale.Status) {
-		st.LastTickAt = time.Now().UTC().Format(time.RFC3339)
-		st.LastError = err.Error()
-		st.HoldReason = err.Error()
-	})
-}
-
-func (s *Server) recordAutoscale(ctx context.Context, ns, release string, res autoscale.Result, scaleErr error, from, rev int, scaled bool) {
-	now := time.Now().UTC().Format(time.RFC3339)
-	err := s.writeAutoscaleStatus(ctx, ns, release, func(st *autoscale.Status) {
-		st.LastTickAt = now
-		st.LastDecision = res.Decision
-		st.Current = intPtr(res.Current)
-		st.HoldReason = ""
-		st.LastError = ""
-		st.LastFailedWant = res.LastFailedWant
-		st.LastFailedAt = res.LastFailedAt
-		st.Failures = res.Failures
-		st.RetryAfter = res.RetryAfter
-		if scaleErr != nil {
-			st.Desired = intPtr(res.Want)
-			if errors.Is(scaleErr, errApplyBusy) {
-				st.HoldReason = autoscale.HoldApplyInProgress
-				return
-			}
-			st.LastError = scaleErr.Error()
-			return
-		}
-		if res.HoldReason != "" {
-			st.HoldReason = res.HoldReason
-			if res.Failed {
-				st.LastError = res.HoldReason
-			}
-			return
-		}
-		st.Desired = intPtr(res.Want)
-		if scaled {
-			st.LastScaleAt = now
-			st.LastScaleFrom = intPtr(from)
-			st.LastScaleTo = intPtr(res.Want)
-			st.LastRevision = intPtr(rev)
-		}
-	})
+	st.Current = liveReplicaCount(live)
+	d, err := s.queryDecision(ctx, ns, autoscaleServiceID(p))
 	if err != nil {
-		s.log.WarnContext(ctx, "autoscale status", "release", release, "err", err)
+		if errors.Is(err, autoscale.ErrNoDecision) {
+			s.log.DebugContext(ctx, "autoscale", "release", release, "err", err)
+			st.Outcome = outcomeNoDecision
+			st.NoDecision = true
+			s.recordAutoscale(st)
+			return true
+		}
+		s.log.WarnContext(ctx, "autoscale", "release", release, "err", err)
+		st.Outcome = outcomeError
+		st.Error = err.Error()
+		s.recordAutoscale(st)
+		return true
 	}
+	timeout := s.deferTimeout(ctx)
+	res, since := autoscale.DecideWithTimeout(live, d, st.DeferredSince, s.clock(), timeout)
+	st.DeferredSince = since
+	st.Current = res.Current
+	st.Decision = res.Decision
+	st.TimedOut = res.TimedOut
+	if !res.Scale {
+		if res.HoldReason != "" {
+			s.log.DebugContext(ctx, "autoscale hold", "release", release, "hold", res.HoldReason)
+			st.Outcome = outcomeHeld
+			st.Hold = res.HoldReason
+			s.recordAutoscale(st)
+			return true
+		}
+		want := res.Want
+		st.Want = &want
+		st.Outcome = outcomeUnchanged
+		s.recordAutoscale(st)
+		return true
+	}
+	want := res.Want
+	st.Want = &want
+	if res.TimedOut != "" {
+		s.log.InfoContext(ctx, "autoscale deferral timed out", "release", release, "hold", res.TimedOut,
+			"deferredSince", *st.DeferredSince, "deferTimeout", timeout, "from", res.Current, "to", res.Want)
+	}
+	if _, scaleErr := s.scaleTo(ctx, ns, release, res.Current, res.Want, rev, res.TimedOut); scaleErr != nil {
+		if errors.Is(scaleErr, errAutoscaleInactive) {
+			s.dropAutoscale(autoscaleKey(ns, release))
+			return false
+		}
+		s.log.WarnContext(ctx, "autoscale", "release", release, "err", scaleErr)
+		st.Outcome = outcomeError
+		st.Error = scaleErr.Error()
+		s.recordAutoscale(st)
+		return true
+	}
+	st.Outcome = outcomeScaledDown
+	if res.Want > res.Current {
+		st.Outcome = outcomeScaledUp
+	}
+	now := s.clock()
+	st.LastScaled = &now
+	s.recordAutoscale(st)
+	return true
 }
 
-func (s *Server) queryDecision(ctx context.Context, ns, serviceID string) autoscale.Decision {
+// noteAutoscaleError marks a failed read on the entry this process already
+// has. A release with no entry yet is left absent; the caller still counts
+// the key as seen so a transient error does not prune it once it exists.
+func (s *Server) noteAutoscaleError(ns, release string, err error) {
+	st, ok := s.autoscaleStateOf(ns, release)
+	if !ok {
+		return
+	}
+	st.Outcome = outcomeError
+	st.Error = err.Error()
+	s.recordAutoscale(st)
+}
+
+// liveReplicaCount is the count the loop saw: DisaggregatedSet slices when
+// set, otherwise the plan's replicaCount.
+func liveReplicaCount(live autoscale.Live) int {
+	if live.DSSlices != nil && *live.DSSlices >= 0 {
+		return *live.DSSlices
+	}
+	if live.PlanReplicaCount < 0 {
+		return 0
+	}
+	return live.PlanReplicaCount
+}
+
+func (s *Server) queryDecision(ctx context.Context, ns, serviceID string) (autoscale.Decision, error) {
 	prof, err := s.Profile(ctx)
 	if err != nil {
-		return autoscale.Decision{Error: err.Error()}
+		return autoscale.Decision{}, err
 	}
 	base := prof.Scaler.DecisionServer()
 	n, err := autoscale.Query(ctx, s.decisionHTTP, base, prof.Scaler.ServerHeaders, ns, serviceID)
 	if err != nil {
-		return autoscale.Decision{Error: err.Error()}
+		return autoscale.Decision{}, err
 	}
-	return autoscale.Decision{OK: true, Replicas: n}
+	return autoscale.Decision{OK: true, Replicas: n}, nil
 }
 
 func (s *Server) autoscaleLive(ctx context.Context, ns, release, backend string, p *plan.Plan) (autoscale.Live, int, error) {
@@ -322,11 +303,11 @@ func (s *Server) autoscaleLive(ctx context.Context, ns, release, backend string,
 	return live, rev, nil
 }
 
-// errAutoscaleInactive is a config that was disabled or deleted after Decide.
-// The tick stops. It is not a failure and it does not write status.
+// errAutoscaleInactive is a release that stopped autoscaling after Decide.
+// The tick stops. It is not a failure and it writes nothing.
 var errAutoscaleInactive = errors.New("autoscale inactive")
 
-func (s *Server) scaleTo(ctx context.Context, ns, release string, from, want, expectRev int) (int, error) {
+func (s *Server) scaleTo(ctx context.Context, ns, release string, from, want, expectRev int, timedOut string) (int, error) {
 	if s.store == nil {
 		return 0, fmt.Errorf("no database: autoscale needs a stored plan")
 	}
@@ -334,24 +315,20 @@ func (s *Server) scaleTo(ctx context.Context, ns, release string, from, want, ex
 		return 0, &applyBusyError{ns: ns, release: release}
 	}
 	defer s.unlockApply(ns, release)
-	// Re-read under the lock. A disable or delete after Decide must not apply.
-	on, err := s.autoscalingEnabled(ctx, ns, release)
-	if err != nil {
-		return 0, err
-	}
-	if !on {
-		return 0, errAutoscaleInactive
-	}
+	// Re-read under the lock. A plan that is no longer autoscaling must not apply.
 	b, _, err := s.backendFor(ctx, ns, release)
 	if err != nil {
 		return 0, err
 	}
 	if b == nil {
-		return 0, fmt.Errorf("release %s/%s is not managed by swiss", ns, release)
+		return 0, errAutoscaleInactive
 	}
 	cur, err := b.Current(ctx, ns, release)
 	if err != nil {
 		return 0, err
+	}
+	if !autoscaleOn(cur) {
+		return 0, errAutoscaleInactive
 	}
 	p := clonePlan(cur)
 	if p.Layers == nil {
@@ -364,10 +341,14 @@ func (s *Server) scaleTo(ctx context.Context, ns, release string, from, want, ex
 	if err := s.store.PutPlan(ctx, p); err != nil {
 		return 0, err
 	}
+	note := fmt.Sprintf("autoscale %d -> %d (decision-gen)", from, want)
+	if timedOut != "" {
+		note = fmt.Sprintf("autoscale %d -> %d (decision-gen, deferral timed out: %s)", from, want, timedOut)
+	}
 	res, err := s.applyLocked(ctx, p, exec.Upgrade, "", applyOpts{
 		ExpectRevision: expectRev,
 		Action:         "autoscale",
-		Note:           fmt.Sprintf("autoscale %d -> %d (decision-gen)", from, want),
+		Note:           note,
 	})
 	// An uninstall that started after Decide stops the tick the same way:
 	// applyLocked refused it under the lock, before anything was applied.

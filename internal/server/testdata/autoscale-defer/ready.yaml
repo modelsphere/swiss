@@ -1,0 +1,7 @@
+name: ready
+description: a ready release scales as before and carries no deferredSince
+deferTimeoutSeconds: 600
+decision: 2
+slices: 1
+ticks:
+  - wantOutcome: scaled-up

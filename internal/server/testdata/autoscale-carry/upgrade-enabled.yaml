@@ -1,8 +1,7 @@
 name: upgrade-enabled
-description: an upgrade keeps the autoscale layer while autoscaling is enabled
+description: an upgrade keeps the autoscale layer while the previous plan is autoscaling and the new form keeps the rule
 kind: upgrade
-enabled: true
-hasConfig: true
+rule: true
 overrides: true
 liveAutoscale: 2
 wantLayer: true

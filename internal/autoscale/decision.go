@@ -3,16 +3,27 @@ package autoscale
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 )
 
-const decisionsAPIVersion = "llmscaling.inference.x-k8s.io/v1alpha1"
+// ErrNoDecision is a 200 whose decisions contain no row for this service.
+// The SLO may have no maximumDeployment; that is decision-gen's business.
+var ErrNoDecision = errors.New("no decision")
+
+// The second is the first renamed off inference.x-k8s.io; decision-gen switches
+// to it once its consumers read both.
+var decisionsAPIVersions = []string{
+	"llmscaling.inference.x-k8s.io/v1alpha1",
+	"llmscaling.inference.modelsphere.dev/v1alpha1",
+}
 
 // decisionsResponse is the part of the decision-server payload we read.
 type decisionsResponse struct {
@@ -79,9 +90,9 @@ func ParseDecisions(body []byte, namespace, serviceID string) (int, error) {
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		return 0, fmt.Errorf("failed to decode decision response: %w", err)
 	}
-	if decoded.APIVersion != decisionsAPIVersion {
+	if !slices.Contains(decisionsAPIVersions, decoded.APIVersion) {
 		return 0, fmt.Errorf("unsupported decision schema %q, this client only understands %q",
-			decoded.APIVersion, decisionsAPIVersion)
+			decoded.APIVersion, decisionsAPIVersions)
 	}
 	var matches []decision
 	for _, d := range decoded.Decisions {
@@ -93,8 +104,8 @@ func ParseDecisions(body []byte, namespace, serviceID string) (int, error) {
 	switch len(matches) {
 	case 1:
 	case 0:
-		return 0, fmt.Errorf("no decision for serviceId %q in namespace %q among the %d returned",
-			serviceID, namespace, len(decoded.Decisions))
+		return 0, fmt.Errorf("%w for serviceId %q in namespace %q among the %d returned",
+			ErrNoDecision, serviceID, namespace, len(decoded.Decisions))
 	default:
 		return 0, fmt.Errorf("%d decisions match serviceId %q in namespace %q, expected 1",
 			len(matches), serviceID, namespace)

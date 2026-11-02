@@ -77,6 +77,7 @@ func renderCmd() *cobra.Command {
 		model, variant, release, namespace, chartRoot, planFile string
 		modelVersion, chartVersion                              string
 		sets                                                    []string
+		skipSchema                                              bool
 	)
 	c := &cobra.Command{
 		Use:   "render",
@@ -96,7 +97,7 @@ func renderCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			manifests, err := render.Exec{ChartRoot: chartRoot}.Template(cmd.Context(), p)
+			manifests, err := render.Exec{ChartRoot: chartRoot, SkipSchemaValidation: skipSchema}.Template(cmd.Context(), p)
 			if err != nil {
 				return err
 			}
@@ -113,6 +114,7 @@ func renderCmd() *cobra.Command {
 	c.Flags().StringArrayVar(&sets, "set", nil, "deploy-time override, key=value")
 	c.Flags().StringVar(&chartRoot, "chart-root", envOr("SWISS_CHART_ROOT", "../charts"), "directory holding the charts, when the profile names no repo")
 	c.Flags().StringVarP(&planFile, "plan", "p", "", "render an existing plan file instead of composing one")
+	c.Flags().BoolVar(&skipSchema, "skip-schema-validation", false, skipSchemaUsage)
 	return c
 }
 
@@ -126,6 +128,8 @@ type planInput struct {
 	sets                                             []string
 	createNamespace                                  bool
 }
+
+const skipSchemaUsage = "don't check the values against the chart's values.schema.json; this run only, the plan does not carry it"
 
 func buildPlan(ctx context.Context, in planInput) (*plan.Plan, error) {
 	catalogLoc, profileFile, err := resolve()

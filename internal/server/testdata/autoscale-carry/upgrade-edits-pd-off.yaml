@@ -1,0 +1,8 @@
+name: upgrade-edits-pd-off
+description: an upgrade whose edits turn pd off drops the autoscale layer, so the form replicaCount applies
+kind: upgrade
+rule: true
+overrides: true
+edits: "pd:\n  enabled: false\n"
+liveAutoscale: 2
+wantLayer: false

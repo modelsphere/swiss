@@ -11,7 +11,10 @@
 # "works on my builder" difference for no size benefit worth having.
 
 # --- 1. the SPA ------------------------------------------------------------
-FROM node:24-bookworm-slim AS web
+# Multi-arch: the SPA is architecture-independent, Go cross-compiles and the helm
+# tools are downloaded per target, so every build stage runs on the builder's own
+# platform and only the runtime stage is per-target -- no emulation needed.
+FROM --platform=$BUILDPLATFORM node:24-bookworm-slim AS web
 
 WORKDIR /src/web
 COPY web/console/web/package.json web/console/web/package-lock.json ./
@@ -22,9 +25,10 @@ COPY web/console/web/ ./
 RUN npm run build:swiss
 
 # --- 2. the binary ---------------------------------------------------------
-FROM golang:1.26 AS build
+FROM --platform=$BUILDPLATFORM golang:1.26 AS build
 
 ARG GO_MOD_MODE=auto
+ARG TARGETOS TARGETARCH
 
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -42,7 +46,7 @@ RUN set -eu ; \
     fi; \
     echo "building with -mod=${mod}"; \
     if [ "${mod}" != "vendor" ]; then go mod download; fi; \
-    CGO_ENABLED=0 GOOS=linux go build \
+    CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build \
       -trimpath -mod="${mod}"\
       -ldflags="-s -w" \
       -o /out/swissd ./cmd/swissd
@@ -54,12 +58,13 @@ RUN set -eu ; \
 #
 # Pinned: docs/deploy.md warns that helm here is v4 while much of the helm-diff
 # ecosystem still assumes v3, and that mismatch now lives in this image.
-FROM debian:bookworm-slim AS tools
+FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS tools
 
 ARG HELM_VERSION=v4.3.0
 ARG HELMFILE_VERSION=1.8.0
 ARG HELM_DIFF_VERSION=3.15.13
-ARG TARGETARCH=amd64
+# Set by buildx to the platform being built; the downloads below pick that arch.
+ARG TARGETARCH
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl tar gzip \

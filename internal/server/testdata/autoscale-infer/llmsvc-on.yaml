@@ -1,0 +1,9 @@
+name: llmsvc-on
+description: a PD llmsvc release with the form SLO on queries decision-gen and scales
+backend: llmsvc
+pd: true
+colocate: false
+slo: true
+wantQueries: 1
+wantApplies: 1
+wantReplicas: 2

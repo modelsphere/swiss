@@ -63,8 +63,8 @@ func TestInstallCreatesTheNamespaceBeforeRecordingThePlan(t *testing.T) {
 }
 
 // Without createNamespace the write still fails -- correct, swiss must not
-// invent namespaces nobody asked for -- but the message has to say what to do,
-// because the flag lives on the plan and setting it on the apply is ignored.
+// invent namespaces nobody asked for -- but the message has to name the flag
+// that fixes it.
 func TestInstallIntoAMissingNamespaceExplainsItself(t *testing.T) {
 	srv, w := strictNSServer(t, "models")
 

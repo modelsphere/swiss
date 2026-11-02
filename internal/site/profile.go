@@ -11,6 +11,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/modelsphere/swiss/internal/catalog"
 	"github.com/modelsphere/swiss/internal/values"
@@ -67,6 +68,7 @@ type Profile struct {
 	Schedule Schedule   `yaml:"schedule,omitempty" json:"schedule"`
 	Cache    Cache      `yaml:"cache,omitempty" json:"cache"`
 	Scaler   Scaler     `yaml:"scaler,omitempty" json:"scaler"`
+	PDScale  PDScale    `yaml:"pdScale,omitempty" json:"pdScale"`
 	Route    Route      `yaml:"route,omitempty" json:"route"`
 	Nodes    Nodes      `yaml:"nodes,omitempty" json:"nodes"`
 
@@ -140,9 +142,40 @@ type Scaler struct {
 	SLOTokenSecret string            `yaml:"sloTokenSecret,omitempty" json:"sloTokenSecret,omitempty"`
 	SLOTokenKey    string            `yaml:"sloTokenKey,omitempty" json:"sloTokenKey,omitempty"`
 	ServerHeaders  map[string]string `yaml:"serverHeaders,omitempty" json:"serverHeaders,omitempty"`
-	// AutoscalePeriod is how often swissd asks decision-gen for a PD slice
-	// count. A Go duration. Empty is 30s.
-	AutoscalePeriod string `yaml:"autoscalePeriod,omitempty" json:"autoscalePeriod,omitempty"`
+	// AutoscalePeriod is read only to move it into pdScale.syncPeriodSeconds:
+	// profiles from before pdScale set it here.
+	AutoscalePeriod string `yaml:"autoscalePeriod,omitempty" json:"-"`
+}
+
+// PDScale is swissd's PD slice autoscaler. The fields are named after the
+// LLMScaler spec fields they mirror.
+type PDScale struct {
+	// SyncPeriodSeconds is how often swissd asks decision-gen for a slice
+	// count. Unset is 60.
+	SyncPeriodSeconds int `yaml:"syncPeriodSeconds,omitempty" json:"syncPeriodSeconds,omitempty"`
+	// DeferTimeoutSeconds is how long a hold may defer a scale before it is
+	// applied anyway. Unset is 600; 0 never times out.
+	DeferTimeoutSeconds *int `yaml:"deferTimeoutSeconds,omitempty" json:"deferTimeoutSeconds,omitempty"`
+}
+
+const (
+	DefaultSyncPeriodSeconds   = 60
+	DefaultDeferTimeoutSeconds = 600
+)
+
+func (ps PDScale) SyncPeriod() time.Duration {
+	if ps.SyncPeriodSeconds > 0 {
+		return time.Duration(ps.SyncPeriodSeconds) * time.Second
+	}
+	return DefaultSyncPeriodSeconds * time.Second
+}
+
+// DeferTimeout is 0 when the scale is deferred indefinitely.
+func (ps PDScale) DeferTimeout() time.Duration {
+	if ps.DeferTimeoutSeconds != nil {
+		return time.Duration(*ps.DeferTimeoutSeconds) * time.Second
+	}
+	return DefaultDeferTimeoutSeconds * time.Second
 }
 
 type Defaults struct {
@@ -418,6 +451,16 @@ func Parse(raw []byte, origin string) (*Profile, error) {
 	}
 	if p.Model.PathTemplate == "" {
 		return nil, fmt.Errorf("%s: model.pathTemplate is required -- the catalog gives an identity, not a path", origin)
+	}
+	if d, err := time.ParseDuration(strings.TrimSpace(p.Scaler.AutoscalePeriod)); err == nil && d >= time.Second && p.PDScale.SyncPeriodSeconds == 0 {
+		p.PDScale.SyncPeriodSeconds = int(d / time.Second)
+	}
+	p.Scaler.AutoscalePeriod = ""
+	if p.PDScale.SyncPeriodSeconds < 0 {
+		return nil, fmt.Errorf("%s: pdScale.syncPeriodSeconds %d is negative", origin, p.PDScale.SyncPeriodSeconds)
+	}
+	if t := p.PDScale.DeferTimeoutSeconds; t != nil && *t < 0 {
+		return nil, fmt.Errorf("%s: pdScale.deferTimeoutSeconds %d is negative", origin, *t)
 	}
 	p.ApplyWith = strings.TrimSpace(p.ApplyWith)
 	switch p.ApplyWith {

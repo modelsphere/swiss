@@ -3,8 +3,6 @@ description: status.phase Deleting holds and is not updated
 backend: llmsvc
 decision: 3
 slices: 1
-min: 1
-max: 4
 revision: 2
 llmPhase: Deleting
 wantApplies: 0

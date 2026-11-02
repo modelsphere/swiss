@@ -3,21 +3,18 @@ release: qwen
 namespace: models
 operatorPhase: Applied
 seedArchive: true
-seedAutoscale: true
 seedPlanConfigMap: true
 planPhase: uninstalling
 steps:
   - do: reap
     archives: 1
     configMap: true
-    autoscale: true
     audits: 0
     llmService: true
   - do: clearDeletion
   - do: reap
     archives: 1
     configMap: true
-    autoscale: true
     audits: 0
     llmService: true
   - do: list

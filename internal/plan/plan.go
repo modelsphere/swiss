@@ -40,6 +40,9 @@ type Plan struct {
 	Layers map[string]values.Tree `json:"layers,omitempty"`
 
 	// CreateNamespace passes --create-namespace to helm.
+	//
+	// Deprecated: an install's exec.ApplyOptions.CreateNamespace does the same
+	// without the plan carrying it.
 	CreateNamespace bool `json:"createNamespace,omitempty"`
 
 	// Helmfile is the release declaration these values are applied through, so

@@ -1,0 +1,9 @@
+name: llmsvc-no-decision
+description: decision-gen returning no row for an llmsvc release is a quiet no-op
+backend: llmsvc
+pd: true
+colocate: false
+slo: true
+noDecision: true
+wantQueries: 1
+wantApplies: 0

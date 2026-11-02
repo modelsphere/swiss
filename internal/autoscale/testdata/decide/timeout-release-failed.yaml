@@ -1,0 +1,28 @@
+name: timeout-release-failed
+description: a timeout lets a failed helm release scale; the router not ready behind it is not reported
+live:
+  backend: helm
+  helmStatus: failed
+  pd: true
+  dsGeneration: 1
+  dsObservedGeneration: 1
+  dsSlices: 1
+  planReplicaCount: 1
+  roles:
+  - replicas: 1
+    readyReplicas: 1
+    updatedReplicas: 1
+  routers:
+  - missing: true
+    specReplicas: 1
+    readyReplicas: 0
+decision:
+  ok: true
+  replicas: 3
+timedOut: true
+wantHold: ""
+wantTimedOut: release failed
+wantScale: true
+wantCurrent: 1
+want: 3
+hasDecision: true

@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/modelsphere/swiss/internal/plan"
+	"gopkg.in/yaml.v3"
 )
 
 type Runner struct {
@@ -60,15 +61,29 @@ func (w Workspace) Close() {
 
 // Materialize writes the plan to a temp directory. helmfile needs files, not a
 // repository, so the server can produce them per operation and discard them.
-func (r Runner) Materialize(p *plan.Plan) (Workspace, error) {
+func (r Runner) Materialize(p *plan.Plan, opts ApplyOptions) (Workspace, error) {
 	// The same directory the plan ConfigMap holds, so a mounted ConfigMap and a
-	// temp workspace are the same tree rather than two renderings of one plan.
+	// temp workspace are the same tree rather than two renderings of one plan --
+	// except for this run's own helmDefaults, which the plan does not carry.
 	files, err := p.Files(r.ChartRoot)
 	if err != nil {
 		return Workspace{}, err
 	}
 	if _, ok := files[plan.HelmfileFile]; !ok {
 		return Workspace{}, fmt.Errorf("no chart source: set chartRepo or chartPath in the site profile, or pass --chart-root")
+	}
+	if opts.CreateNamespace || opts.SkipSchemaValidation {
+		doc, err := p.HelmfileDocument(r.ChartRoot)
+		if err != nil {
+			return Workspace{}, err
+		}
+		doc.HelmDefaults.CreateNS = doc.HelmDefaults.CreateNS || opts.CreateNamespace
+		doc.HelmDefaults.SkipSchemaValidation = opts.SkipSchemaValidation
+		b, err := yaml.Marshal(doc)
+		if err != nil {
+			return Workspace{}, err
+		}
+		files[plan.HelmfileFile] = string(b)
 	}
 
 	dir, err := os.MkdirTemp("", "swiss-"+p.Release.Name+"-")
@@ -92,9 +107,10 @@ func (r Runner) Materialize(p *plan.Plan) (Workspace, error) {
 }
 
 // Diff reports what applying the plan would change. Changed is true when
-// helm-diff reports differences.
-func (r Runner) Diff(ctx context.Context, p *plan.Plan) (Result, error) {
-	ws, err := r.Materialize(p)
+// helm-diff reports differences. opts are the apply's, so the dry run runs
+// against the same workspace; ForceConflicts never reaches helm-diff.
+func (r Runner) Diff(ctx context.Context, p *plan.Plan, opts ApplyOptions) (Result, error) {
+	ws, err := r.Materialize(p, opts)
 	if err != nil {
 		return Result{}, err
 	}
@@ -123,10 +139,10 @@ const (
 
 // ApplyOptions are the apply-time decisions that are not part of the plan.
 //
-// Deliberately not composed into the plan, unlike createNamespace: this is a
-// recovery choice for one apply. A plan carrying it would force again on every
-// later apply and on every rollback that replays it, and the plan is also the
-// record of what was done -- "always force" is not what anyone meant by it.
+// Deliberately not composed into the plan: each is a choice for one apply. A
+// plan carrying one would make it again on every later apply and on every
+// rollback that replays it, and the plan is also the record of what was done --
+// "always force" is not what anyone meant by it.
 type ApplyOptions struct {
 	// ForceConflicts lets helm's server-side apply overwrite fields another
 	// field manager owns.
@@ -141,6 +157,13 @@ type ApplyOptions struct {
 	// a release holding a 40-minute model load that is an outage, and it is not
 	// what a field-ownership conflict asks for.
 	ForceConflicts bool
+	// SkipSchemaValidation leaves the values unchecked against the chart's
+	// values.schema.json. Through helmDefaults, so helm-diff skips the same
+	// check as the upgrade.
+	SkipSchemaValidation bool
+	// CreateNamespace has helm create the release's namespace, on top of a plan
+	// that still carries createNamespace.
+	CreateNamespace bool
 }
 
 // helmfile runs helm-diff and then helm upgrade inside one apply, so the flag
@@ -163,7 +186,7 @@ func (o ApplyOptions) args() []string {
 // audit entry say what changed, which is the only record of it once the
 // workspace is gone.
 func (r Runner) Apply(ctx context.Context, p *plan.Plan, opts ApplyOptions) (Result, error) {
-	ws, err := r.Materialize(p)
+	ws, err := r.Materialize(p, opts)
 	if err != nil {
 		return Result{}, err
 	}

@@ -1,17 +1,13 @@
 name: clamp-min
-description: a decision below minSlices clamps up
-config:
-  enabled: true
-  minSlices: 2
-  maxSlices: 5
+description: a decision below the safety floor clamps up
 live:
   backend: helm
   helmStatus: deployed
   pd: true
   dsGeneration: 1
   dsObservedGeneration: 1
-  dsSlices: 1
-  planReplicaCount: 1
+  dsSlices: 3
+  planReplicaCount: 3
   roles:
     - replicas: 1
       readyReplicas: 1
@@ -21,12 +17,19 @@ live:
       readyReplicas: 1
       generation: 1
       observedGeneration: 1
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
 decision:
   ok: true
   replicas: 0
 wantHold: ""
 wantScale: true
-wantCurrent: 1
-want: 2
-wantFailed: false
+wantCurrent: 3
+want: 1
 hasDecision: true

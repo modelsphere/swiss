@@ -35,9 +35,8 @@ type Input struct {
 	// as well, which put the answer in two places and let the site's half force
 	// it on with no way to say otherwise for one deploy.
 	//
-	// Composed into the plan rather than passed to the apply, so the helmfile
-	// the plan carries is the one that runs: helm does the creating, and the
-	// plan is where that is declared.
+	// Deprecated: an install's applyFlags.createNamespace does the same without
+	// composing it into the plan.
 	CreateNamespace bool
 	// ChartVersion is chart.version resolved by chart.Resolve. Empty works only
 	// for a pinned chart.version: Compose reads no registry.

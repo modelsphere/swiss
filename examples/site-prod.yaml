@@ -56,10 +56,22 @@ cache:
 scaler:
   serverAddress: http://decision-gen.llm-scaler.svc:80
   sloAddress: http://slo-api.llm-scaler.svc:80
-  # How often swissd asks decision-gen for a PD slice count. Empty is 30s.
-  # autoscalePeriod: 30s
-  # sloTokenSecret: llm-scaler/slo-api
-  # sloTokenKey: token
+  sloTokenSecret: llm-scaler/slo-api
+  sloTokenKey: token
+
+#######################################
+#  PD mode autoscale
+######################################
+# Field names follow the LLMScaler's.
+pdScale:
+  # How often swissd asks decision-gen for a PD slice count. Unset is 60.
+  syncPeriodSeconds: 60
+
+  # How long a hold may defer a scale before it is applied anyway: a
+  # DisaggregatedSet rollout that never lands, a failed release, pods that
+  # never get ready. Uninstalling, a missing DisaggregatedSet and an apply in
+  # flight still hold. Unset is 600; 0 defers indefinitely.
+  deferTimeoutSeconds: 1200
 
 route:
   # Where callers reach openresty from outside. Display only: swissd shows a

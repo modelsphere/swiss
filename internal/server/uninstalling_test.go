@@ -39,7 +39,6 @@ type uninstallCase struct {
 	PodListError         bool   `yaml:"podListError"`
 	DeleteConfigMapFails int    `yaml:"deleteConfigMapFails"`
 	SeedArchive          bool   `yaml:"seedArchive"`
-	SeedAutoscale        bool   `yaml:"seedAutoscale"`
 	// HelmBlocks makes helm uninstall wait for a releaseHelm step, so a case
 	// can act while an uninstall holds the release's lock.
 	HelmBlocks    bool   `yaml:"helmBlocks"`
@@ -75,23 +74,21 @@ type podSpec struct {
 }
 
 type unstep struct {
-	Do             string    `yaml:"do"`
-	Status         int       `yaml:"status"`
-	Present        *bool     `yaml:"present"`
-	Phase          string    `yaml:"phase"`
-	PlanPhase      string    `yaml:"planPhase"`
-	ServicePhase   string    `yaml:"servicePhase"`
-	ConfigMap      *bool     `yaml:"configMap"`
-	PlanError      *bool     `yaml:"planError"`
-	ErrorContains  string    `yaml:"errorContains"`
-	OutputContains string    `yaml:"outputContains"`
-	MinPods        *int      `yaml:"minPods"`
-	TotalPods      *int      `yaml:"totalPods"`
-	Backend        string    `yaml:"backend"`
-	Pods           []podSpec `yaml:"pods"`
-	Archives       *int      `yaml:"archives"`
-	// Autoscale is whether swiss-autoscale-<release> exists after the step.
-	Autoscale        *bool     `yaml:"autoscale"`
+	Do               string    `yaml:"do"`
+	Status           int       `yaml:"status"`
+	Present          *bool     `yaml:"present"`
+	Phase            string    `yaml:"phase"`
+	PlanPhase        string    `yaml:"planPhase"`
+	ServicePhase     string    `yaml:"servicePhase"`
+	ConfigMap        *bool     `yaml:"configMap"`
+	PlanError        *bool     `yaml:"planError"`
+	ErrorContains    string    `yaml:"errorContains"`
+	OutputContains   string    `yaml:"outputContains"`
+	MinPods          *int      `yaml:"minPods"`
+	TotalPods        *int      `yaml:"totalPods"`
+	Backend          string    `yaml:"backend"`
+	Pods             []podSpec `yaml:"pods"`
+	Archives         *int      `yaml:"archives"`
 	Now              time.Time `yaml:"now"`
 	HasRevision      *bool     `yaml:"hasRevision"`
 	OperatorPhase    string    `yaml:"operatorPhase"`
@@ -342,23 +339,18 @@ func runLLMUninstallCase(t *testing.T, cs *uninstallCase) {
 		cs.OperatorPhase = llmsvc.PhaseApplied
 	}
 	probe := llmProbe()
-	if probe.MapLabels == nil {
-		probe.MapLabels = map[string]map[string]string{}
-	}
+	labels := map[string]map[string]string{}
 	if cs.SeedPlanConfigMap {
-		seedLLMPlan(t, &probe, cs)
+		seedLLMPlan(t, &probe, labels, cs)
 	}
 	if cs.SeedArchive {
 		seedLLMArchive(&probe, cs)
 	}
-	if cs.SeedAutoscale {
-		seedLLMAutoscale(&probe, cs)
-	}
 	// The rig operator would rewrite status, including status.deletion.
 	rig := startRig(t, probe, true, false, "")
 	base := rig.s.probe.(*cluster.Fake)
-	rig.s.probe = llmPlanProbe{Fake: base}
-	rig.s.SetWriter(&llmMirrorWriter{fakeWriter: rig.w, probe: base})
+	rig.s.probe = llmPlanProbe{Fake: base, labels: labels}
+	rig.s.SetWriter(&llmMirrorWriter{fakeWriter: rig.w, probe: base, labels: labels})
 	h := &llmUninstallHarness{cs: cs, rig: rig, base: base, srv: rig.srv}
 	h.arm(t)
 	if !cs.Missing {
@@ -482,7 +474,7 @@ func assertUnstep(t *testing.T, cs *uninstallCase, p cluster.Probe, step unstep,
 			t.Fatalf("pods total %d, want %d (%v)", total, *step.TotalPods, body["pods"])
 		}
 	}
-	if step.ConfigMap != nil || step.Autoscale != nil || step.Archives != nil || step.StoredPhase != "" {
+	if step.ConfigMap != nil || step.Archives != nil || step.StoredPhase != "" {
 		if p == nil {
 			t.Fatal("resource assertions need a probe")
 		}
@@ -491,12 +483,6 @@ func assertUnstep(t *testing.T, cs *uninstallCase, p cluster.Probe, step unstep,
 		got := probeHasConfigMap(p, planRef(cs.Namespace, cs.Release))
 		if got != *step.ConfigMap {
 			t.Fatalf("configMap present=%v, want %v", got, *step.ConfigMap)
-		}
-	}
-	if step.Autoscale != nil {
-		got := probeHasConfigMap(p, autoscaleRef(cs.Namespace, cs.Release))
-		if got != *step.Autoscale {
-			t.Fatalf("autoscale configmap present=%v, want %v", got, *step.Autoscale)
 		}
 	}
 	if step.Archives != nil {
@@ -728,13 +714,6 @@ func newUninstallCluster(t *testing.T, cs *uninstallCase) *uninstallCluster {
 			t.Fatal(err)
 		}
 	}
-	if cs.SeedAutoscale {
-		ref := autoscaleRef(cs.Namespace, cs.Release)
-		data := map[string]string{autoscaleConfigKey: "enabled: true\nminSlices: 1\nmaxSlices: 4\n"}
-		if err := c.PutLabeledConfigMap(ctx, ref, data, autoscaleLabels(cs.Release)); err != nil {
-			t.Fatal(err)
-		}
-	}
 	return c
 }
 
@@ -850,24 +829,6 @@ func (c *uninstallCluster) PutConfigMap(_ context.Context, ref string, data, lab
 		c.cms = map[string]*cmRec{}
 	}
 	c.cms[ref] = &cmRec{data: maps.Clone(data), labels: labs}
-	return nil
-}
-
-func (c *uninstallCluster) PutLabeledConfigMap(ctx context.Context, ref string, data, labels map[string]string) error {
-	return c.PutConfigMap(ctx, ref, data, labels)
-}
-
-func (c *uninstallCluster) UpdateConfigMapKey(_ context.Context, ref, key, value, _ string) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	cm, ok := c.cms[ref]
-	if !ok {
-		return apierrors.NewNotFound(schema.GroupResource{Resource: "configmaps"}, ref)
-	}
-	if cm.data == nil {
-		cm.data = map[string]string{}
-	}
-	cm.data[key] = value
 	return nil
 }
 
@@ -1024,6 +985,7 @@ var (
 // managed set comes from helm releases, which an llmsvc test does not have.
 type llmPlanProbe struct {
 	*cluster.Fake
+	labels map[string]map[string]string
 }
 
 func (p llmPlanProbe) ManagedRefs(ctx context.Context) ([]cluster.ManagedRef, error) {
@@ -1035,7 +997,7 @@ func (p llmPlanProbe) ManagedRefs(ctx context.Context) ([]cluster.ManagedRef, er
 	for _, ref := range out {
 		seen[ref.Namespace+"/"+ref.Name] = true
 	}
-	for ref, labels := range p.MapLabels {
+	for ref, labels := range p.labels {
 		if labels[cluster.LabelPhase] != phaseUninstalling {
 			continue
 		}
@@ -1067,7 +1029,8 @@ func (p llmPlanProbe) ManagedRefs(ctx context.Context) ([]cluster.ManagedRef, er
 // fake writer only remembers them for the test.
 type llmMirrorWriter struct {
 	*fakeWriter
-	probe *cluster.Fake
+	probe  *cluster.Fake
+	labels map[string]map[string]string
 }
 
 func (m *llmMirrorWriter) PutConfigMap(ctx context.Context, ref string, data, labels map[string]string) error {
@@ -1078,16 +1041,13 @@ func (m *llmMirrorWriter) PutConfigMap(ctx context.Context, ref string, data, la
 		m.probe.Maps = map[string]map[string]string{}
 	}
 	m.probe.Maps[ref] = cloneData(data)
-	if m.probe.MapLabels == nil {
-		m.probe.MapLabels = map[string]map[string]string{}
-	}
 	labs := map[string]string{"app.kubernetes.io/managed-by": "swiss"}
 	for k, v := range labels {
 		if v != "" {
 			labs[k] = v
 		}
 	}
-	m.probe.MapLabels[ref] = labs
+	m.labels[ref] = labs
 	return nil
 }
 
@@ -1096,7 +1056,7 @@ func (m *llmMirrorWriter) DeleteConfigMap(ctx context.Context, ref string) error
 		return err
 	}
 	delete(m.probe.Maps, ref)
-	delete(m.probe.MapLabels, ref)
+	delete(m.labels, ref)
 	return nil
 }
 
@@ -1228,7 +1188,7 @@ func (h *llmUninstallHarness) restart(t *testing.T) {
 	t.Cleanup(h.srv.Close)
 }
 
-func seedLLMPlan(t *testing.T, probe *cluster.Fake, cs *uninstallCase) {
+func seedLLMPlan(t *testing.T, probe *cluster.Fake, labels map[string]map[string]string, cs *uninstallCase) {
 	t.Helper()
 	phase := cs.PlanPhase
 	if phase == "" {
@@ -1247,10 +1207,7 @@ func seedLLMPlan(t *testing.T, probe *cluster.Fake, cs *uninstallCase) {
 		statusFile:      string(raw),
 	}
 	if phase == phaseUninstalling {
-		if probe.MapLabels == nil {
-			probe.MapLabels = map[string]map[string]string{}
-		}
-		probe.MapLabels[ref] = map[string]string{
+		labels[ref] = map[string]string{
 			"app.kubernetes.io/managed-by": "swiss",
 			cluster.LabelPhase:             phaseUninstalling,
 		}
@@ -1267,12 +1224,4 @@ func seedLLMArchive(probe *cluster.Fake, cs *uninstallCase) {
 	}
 	probe.Secrets[ref] = map[string]string{"helmfile.yaml": "releases: []\n"}
 	probe.SecretLabels[ref] = archiveLabels(cs.Release, 1)
-}
-
-func seedLLMAutoscale(probe *cluster.Fake, cs *uninstallCase) {
-	ref := autoscaleRef(cs.Namespace, cs.Release)
-	if probe.Maps == nil {
-		probe.Maps = map[string]map[string]string{}
-	}
-	probe.Maps[ref] = map[string]string{autoscaleConfigKey: "enabled: true\nminSlices: 1\nmaxSlices: 4\n"}
 }

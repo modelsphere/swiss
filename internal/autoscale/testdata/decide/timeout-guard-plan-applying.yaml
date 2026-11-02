@@ -1,0 +1,17 @@
+name: timeout-guard-plan-applying
+description: a timeout does not skip a fixed hold; a plan ConfigMap still applying holds the tick
+live:
+  backend: helm
+  helmStatus: deployed
+  planPhase: applying
+  pd: true
+  planReplicaCount: 1
+timedOut: true
+decision:
+  ok: true
+  replicas: 2
+wantHold: plan applying
+wantScale: false
+wantCurrent: 1
+want: 0
+hasDecision: true

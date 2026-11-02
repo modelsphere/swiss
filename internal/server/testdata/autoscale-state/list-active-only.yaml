@@ -1,0 +1,15 @@
+name: list-active-only
+description: the list keeps the PD release and the other reads as off
+decision: 2
+slo: true
+pd: true
+extra:
+  release: plain
+  pd: false
+  slo: true
+wantOutcome: scaled-up
+wantWant: 2
+wantCurrent: 1
+wantEnabled: true
+wantList:
+  - pd

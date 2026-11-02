@@ -1,5 +1,5 @@
 name: upgrade-helm
-description: upgrading a release with no autoscale config keeps the release name as serviceId and drops the layer
+description: upgrading a non-PD release keeps the release name as serviceId and has no autoscale layer
 kind: upgrade
 backend: helm
 serviceId: plain

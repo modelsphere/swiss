@@ -70,3 +70,4 @@ form / flags  ─┘             (hash)     ↓
 | `GET /api/runs`, `GET /api/runs/{id}` | the operation log; output is per row, not in the list |
 | `GET /api/nodes` | the GPU inventory: type, allocatable, in use, and what holds it |
 | `GET /api/profile` | the site profile as parsed, after defaults |
+| `GET /api/autoscaling`, `GET /api/releases/{ns}/{release}/autoscaling` | the autoscale loop's last pass per PD release with the form SLO on; in memory only, lost on restart |

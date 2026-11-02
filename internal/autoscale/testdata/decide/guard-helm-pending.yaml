@@ -1,9 +1,5 @@
 name: guard-helm-pending
 description: a pending helm release holds the tick
-config:
-  enabled: true
-  minSlices: 1
-  maxSlices: 4
 live:
   backend: helm
   helmStatus: pending-upgrade
@@ -12,9 +8,8 @@ live:
 decision:
   ok: true
   replicas: 2
-wantHold: "helm pending"
+wantHold: helm pending
 wantScale: false
 wantCurrent: 1
 want: 0
-wantFailed: false
 hasDecision: true

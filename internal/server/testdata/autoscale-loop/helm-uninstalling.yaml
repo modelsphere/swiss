@@ -3,8 +3,6 @@ description: a helm release whose plan is marked uninstalling holds and is not a
 backend: helm
 decision: 3
 slices: 1
-min: 1
-max: 4
 revision: 2
 planPhase: uninstalling
 wantApplies: 0
