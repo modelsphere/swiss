@@ -50,13 +50,21 @@ Composition is a few inputs with key sets and strict precedence. Later layer ove
 
 ## GPU placement
 
-The variant's `requires` is the source of truth for target hardware: `vendor` (empty means nvidia), `gpuProduct`, and `gpus`. Cluster GPU inventory — swissd `server.gpuProductLabels` and the site profile's `nodes.gpuProductAliases` — maps a product to the extended resource its nodes report and the labels that identify it. Placement looks that product up, using the vendor's default resource when the cluster does not know the product. It writes `model.gpuResource` only when `gpus > 0` and the resolved resource is not `nvidia.com/gpu`, and skips the default required node affinity when the catalog or site profile already sets one. `gpuProducts` only narrows within `requires.gpuProduct`; another product takes `forceGpuProducts`, or `gpuProducts` on a variant that lists none, and must map to the same resource.
+Placement turns the variant's hardware contract into a GPU resource name and a node pin.
+
+### Concepts
+
+| Concept | Source | Role |
+| --- | --- | --- |
+| Hardware contract | variant `requires` (`vendor`, empty = nvidia; `gpuProduct`; `gpus`) | what the model needs; source of truth |
+| Cluster inventory | swissd `server.gpuProductLabels` + site `nodes.gpuProductAliases` | maps a product to the resource its nodes report and the labels that identify them |
+| Override | install request `gpuProducts` / `forceGpuProducts` | picks a different product, never a different resource |
 
 ```mermaid
 flowchart TD
-  hw["requires: target hardware"]
-  over["Override on the same resource"]
-  inv["Inventory: product, resource, labels"]
+  hw["Hardware contract: requires"]
+  over["Override: same resource only"]
+  inv["Cluster inventory"]
   look["Look up the product"]
   found["Reported resource or vendor default"]
   res["model.gpuResource"]
@@ -68,6 +76,15 @@ flowchart TD
   found --> res
   found --> pin
 ```
+
+### Rules
+
+1. Resolve: look the product up in the inventory; if the cluster does not know it, use the vendor's default resource.
+2. Resource: write `model.gpuResource` only when `gpus > 0` and the resource is not `nvidia.com/gpu`.
+3. Pin: add a required node affinity on the product's labels, unless the catalog or site profile already sets one.
+4. Override: `gpuProducts` narrows within `requires.gpuProduct`; `forceGpuProducts` (or `gpuProducts` on a variant that lists none) may pick another product only if it resolves to the same resource, otherwise the request is rejected.
+
+### Out of scope
 
 - Tolerations are not part of this; site configuration for them is future work.
 
