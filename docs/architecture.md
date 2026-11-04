@@ -57,7 +57,7 @@ Placement bridges the catalog's hardware intent (`vendor`, canonical `gpuProduct
 | Concept | Source | Role |
 | --- | --- | --- |
 | Hardware contract | catalog variant `requires` (`vendor`, empty = `nvidia`; `gpuProduct`; `gpus`) | canonical vendor and product names; never carries K8s resource or label names |
-| GPU spec table (`gpus`) | built-in `DefaultGPUs` + site profile `nodes.gpus` override | two-level array: Level 1 `(vendor, resource, labelKey)`, Level 2 optional `products` (`product` -> `values`) |
+| GPU spec table (`gpus`) | built-in `DefaultGPUs` + site profile `nodes.gpus` override | two-level array: Level 1 `(vendor, resource, labelKey)`, Level 2 optional `products` (`product` + extra label `values`) |
 | Dynamic cluster inventory | `/api/nodes` (`Kube.Nodes` + `gpus` table) | scans live nodes via `(vendor, resource, labelKey)` to build available canonical products on the cluster |
 | Deploy override | request `gpuProducts` / `forceGpuProducts` | narrows `requires.gpuProduct`, or forces another cluster product on the same resource |
 
@@ -68,7 +68,7 @@ Built-in `DefaultGPUs` defines Level 1 `(vendor, resource, labelKey)` defaults w
 ```yaml
 nodes:
   gpus:
-    # Level 1: per (vendor, resource) with a single node labelKey
+    # Level 1: per (vendor, resource); labelKey is the node label that tells SKUs apart under that resource
     - vendor: nvidia
       resource: nvidia.com/gpu
       labelKey: nvidia.com/gpu.product
@@ -76,10 +76,10 @@ nodes:
     - vendor: ascend
       resource: huawei.com/Ascend910
       labelKey: accelerator/huawei-ascend910
-      # Level 2 (addition only when node label values != canonical gpuProduct):
+      # Level 2 (only when nodes label a product by another name): extra values that also mean `product`
       products:
         - product: Ascend-910B3
-          values: [huawei-Ascend910, module-910b-8]
+          values: [module-910b-8]
 
     # Same vendor, different resource name on this cluster:
     - vendor: ascend
@@ -120,15 +120,15 @@ flowchart TD
 
 ### Rules
 
-1. **Dynamic product discovery**: For each node with `status.allocatable[resource] > 0`, swiss reads `raw := node.labels[labelKey]`. If `raw` matches a configured `products[].values` entry under that `(vendor, resource)`, `node.GPUProduct` is that canonical `product`; otherwise `node.GPUProduct` is `raw` itself.
+1. **Dynamic product discovery**: For each node with `status.allocatable[resource] > 0`, swiss reads `raw := node.labels[labelKey]`. If `raw` is a configured `product` or one of its `values` under that `(vendor, resource)`, `node.GPUProduct` is that canonical `product`; otherwise `node.GPUProduct` is `raw` itself.
 2. **Resource resolution**: Look up the target products in the dynamic cluster inventory:
    - Nodes carrying the products report 1 resource $\rightarrow$ use that resource.
    - Nodes carrying the products report $\ge 2$ resources $\rightarrow$ refuse (`400`); caller must pass `gpuProducts` under one resource.
    - No node carries the products (or `products` is empty, or nodes unreadable) $\rightarrow$ fall back to the vendor's default resource (first entry for `vendor` in `gpus`).
 3. **`model.gpuResource`**: Written to the `derived` layer only when `requires.gpus > 0` and the resolved resource is not `nvidia.com/gpu` (requires chart `vllm >= 0.9.1` or `sglang >= 0.9.29`); yields if catalog or site layer already set `model.gpuResource`.
-4. **Node affinity**: Using the resolved `(vendor, resource)` entry, expand each target `product` to its configured `values` (defaulting to `[product]`) and emit one `matchExpressions` rule: `labelKey In (values...)`. Request `gpuProducts` write to the `form` layer; catalog `requires.gpuProduct` writes to the `derived` layer unless catalog or site already set required `nodeSelectorTerms`.
+4. **Node affinity**: Using the resolved `(vendor, resource)` entry, expand each target `product` to `[product, values...]` (`values` only add to `product`, never replace it) and emit one `matchExpressions` rule: `labelKey In (values...)`. Request `gpuProducts` write to the `form` layer; catalog `requires.gpuProduct` writes to the `derived` layer unless catalog or site already set required `nodeSelectorTerms`.
 5. **Override guard**: `gpuProducts` narrows within `requires.gpuProduct`; `forceGpuProducts` (or `gpuProducts` when the variant lists none) must exist in the cluster inventory and resolve to the same resource as the variant's own hardware.
-6. **Out of scope**: Tolerations are not derived here.
+6. **Out of scope**: Tolerations are not derived here. Extra node affinity from the deploy request, beyond the product pin, is future work.
 
 ## Pipeline
 
