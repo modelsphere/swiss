@@ -460,7 +460,7 @@ func runNoAutoscaleLoopLLM(t *testing.T) {
 	probe := llmProbe()
 	rig := startRig(t, probe, true, false, "")
 	p, err := rig.s.compose(context.Background(), planRequest{
-		Model: "qwen3-8b", Variant: "vllm-tp1-910b", ChartVersion: "0.7.6",
+		Model: "qwen3-8b", Variant: "vllm-tp1-910b", ChartVersion: "0.9.1",
 		Release: llmRelease, Namespace: "models",
 	})
 	if err != nil {
@@ -535,7 +535,7 @@ func noAutoscaleRequest(t *testing.T, backend string) (cluster.Fake, planRequest
 		return fakeProbe(), planRequest{Model: "qwen3.6-35b-a3b", Release: "plain", Namespace: "models"}
 	case backendLLMSVC:
 		return llmProbe(), planRequest{
-			Model: "qwen3-8b", Variant: "vllm-tp1-910b", ChartVersion: "0.7.6",
+			Model: "qwen3-8b", Variant: "vllm-tp1-910b", ChartVersion: "0.9.1",
 			Release: "plain", Namespace: "models",
 		}
 	default:

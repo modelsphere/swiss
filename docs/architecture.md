@@ -44,9 +44,31 @@ Composition is a few inputs with key sets and strict precedence. Later layer ove
 | **site defaults** (`defaults`) | the site's preferences, config it in `defaults.features` in the profile, the `cart`, `serviceMonitor`, `sloRequirement` and `scaler` `enabled` flags, unset on |
 | **catalog variant** | model deployment recipes define in [model-catalog](https://github.com/modelsphere/model-catalog) and how it parallelizes: `model.*`, `extraArgs`, `lws.*`, `env`, `image.repository` |
 | **site profile** | what makes it work here: the registry mirror, cache paths, route ConfigMaps, namespace, the `model.localPath` template, the default scheduler and priority class |
-| **derived** | swiss's rules, above the variant: a section the form filled in is switched on, `cache.maxSlotsPerNode` |
+| **derived** | swiss's rules, above the variant: a section the form filled in is switched on, `cache.maxSlotsPerNode`, `model.gpuResource` and the `requires.gpuProduct` node affinity (see [GPU placement](#gpu-placement)) |
 | **user form** | how much, where, how routed: `serviceId`, `replicaCount`, `scaler.*`, `modelRoute.*`, scheduling |
 | **plan editor** | the escape hatch, applied last — any key, exempt from ownership, labelled `edit` |
+
+## GPU placement
+
+Everything starts from the variant's `requires`: the extended resource a pod requests and the nodes it may land on.
+
+```
+requires.gpuProduct ─(or the form's gpuProducts)─► products
+products × /api/nodes (aliases applied) ─► resource ─► model.gpuResource
+resource ─► server.gpuProductLabels keys + nodes.gpuProductAliases ─► required node affinity
+```
+
+| case | resource |
+| --- | --- |
+| nodes with the products report one resource | that resource |
+| they report two or more | refused: pass `gpuProducts` to narrow |
+| no node has them, none recorded a resource, no products, or nodes unreadable (warning) | the vendor's, from `catalog.accelerators` |
+| a node's resource is another vendor's well-known one | that node is ignored |
+
+- `model.gpuResource` is written only for `requires.gpus > 0` and a resource other than `nvidia.com/gpu`, so nvidia plans render as before and stay valid on older charts. It yields to a catalog or site value.
+- A chart older than `compose.GPUResourceSince` (vllm 0.9.1, sglang 0.9.29) rejects the key in its schema, so such a plan is refused at compose.
+- The form's `gpuProducts` affinity is the form's; the catalog's is derived and yields to required node affinity the catalog or site already set.
+- Tolerations are not derived here.
 
 ## Pipeline
 

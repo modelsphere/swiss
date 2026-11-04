@@ -417,7 +417,7 @@ func (r *llmRig) storePlan(t *testing.T, fields map[string]any) string {
 		fields["variant"] = "vllm-tp1-910b"
 	}
 	if fields["chartVersion"] == nil {
-		fields["chartVersion"] = "0.7.6"
+		fields["chartVersion"] = "0.9.1"
 	}
 	code, out := post(t, r.srv, "/api/plans", fields)
 	if code != 200 {
@@ -536,7 +536,7 @@ func TestLLMInstall(t *testing.T) {
 	if obj.Spec.Model == nil || obj.Spec.Model.Name != "qwen3-8b" || obj.Spec.Model.Variant != "vllm-tp1-910b" {
 		t.Fatalf("model %+v", obj.Spec.Model)
 	}
-	if obj.Spec.Chart.Repo != "oci://ghcr.io/modelsphere/charts" || obj.Spec.Chart.Version != "0.7.6" || obj.Spec.Chart.Name != "vllm" {
+	if obj.Spec.Chart.Repo != "oci://ghcr.io/modelsphere/charts" || obj.Spec.Chart.Version != "0.9.1" || obj.Spec.Chart.Name != "vllm" {
 		t.Fatalf("chart %+v", obj.Spec.Chart)
 	}
 	anns := u.GetAnnotations()
@@ -916,7 +916,7 @@ func TestLLMRevisions(t *testing.T) {
 		t.Fatalf("install %d %v", code, out)
 	}
 	legacy, err := rig.s.compose(t.Context(), planRequest{
-		Model: "qwen3-8b", Variant: "vllm-tp1-910b", ChartVersion: "0.7.6", Release: llmRelease,
+		Model: "qwen3-8b", Variant: "vllm-tp1-910b", ChartVersion: "0.9.1", Release: llmRelease,
 		Overrides: values.Tree{"replicaCount": 9},
 	})
 	if err != nil {
@@ -943,7 +943,7 @@ func TestLLMRevisions(t *testing.T) {
 	if asNum(cur["revision"]) != 1 || cur["current"] != true || cur["model"] != "qwen3-8b" || cur["planHash"] != hash {
 		t.Fatalf("history row %v", cur)
 	}
-	if cur["chart"] != "vllm-0.7.6" || cur["variant"] != "vllm-tp1-910b" || cur["version"] != "1.0.0" {
+	if cur["chart"] != "vllm-0.9.1" || cur["variant"] != "vllm-tp1-910b" || cur["version"] != "1.0.0" {
 		t.Fatalf("controllerrevision did not fill the row: %v", cur)
 	}
 	if asNum(old["revision"]) != 9 || old["current"] == true || old["planHash"] != legacy.Hash {
@@ -1442,7 +1442,7 @@ func TestExistingInstallKeepsItsBackend(t *testing.T) {
 	t.Run("helm", func(t *testing.T) {
 		probe := llmProbe()
 		probe.Rel = []cluster.Release{{
-			Name: llmRelease, Namespace: "models", Status: "deployed", Revision: 2, Chart: "vllm-0.7.6",
+			Name: llmRelease, Namespace: "models", Status: "deployed", Revision: 2, Chart: "vllm-0.9.1",
 		}}
 		probe.Maps[planRef("models", llmRelease)] = map[string]string{"plan.yaml": "release: {}\n"}
 		rig := startRig(t, probe, true, false, backendLLMSVC)

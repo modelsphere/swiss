@@ -231,19 +231,36 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 			return nil, err
 		}
 	}
+	// The products a deploy names narrow the variant's; either decides the
+	// resource requested and the nodes it may land on.
+	products, asked := req.GPUProducts, len(req.GPUProducts) > 0
+	if !asked {
+		products = v.Requires.GPUProduct
+	}
+	gpuRes, resWarnings, err := s.gpuResource(ctx, v.Requires, products)
+	if err != nil {
+		return nil, err
+	}
+	warnings = append(warnings, resWarnings...)
 	// Affinity rather than nodeSelector: nodeSelector ANDs its labels, so it
 	// cannot say "any of these products". Set at the nodeSelectorTerms path so a
 	// preferred rule sitting beside it survives.
-	if len(req.GPUProducts) > 0 {
-		res := v.Requires.ResourceName()
-		keys := cluster.ProductLabels(s.cfg.Server.GPUProductLabelsMap())[res]
-		terms := gpuProductTerms(keys, prof.Nodes.GPUProductAliasesMap(), req.GPUProducts)
-		if len(terms) == 0 {
-			return nil, fmt.Errorf("no node label to match GPU products on for %s -- set server.gpuProductLabels, or nodes.gpuProductAliases in the site profile", res)
-		}
-		const path = "affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms"
-		if err := values.Set(overrides, path, terms); err != nil {
-			return nil, err
+	var catalogTerms []any
+	if len(products) > 0 && (asked || v.Requires.GPUs > 0) {
+		keys := cluster.ProductLabels(s.cfg.Server.GPUProductLabelsMap())[gpuRes]
+		terms := gpuProductTerms(keys, prof.Nodes.GPUProductAliasesMap(), products)
+		switch {
+		case len(terms) == 0 && asked:
+			return nil, fmt.Errorf("no node label to match GPU products on for %s -- set server.gpuProductLabels, or nodes.gpuProductAliases in the site profile", gpuRes)
+		case len(terms) == 0:
+			warnings = append(warnings, fmt.Sprintf("no node label to match GPU products %s on for %s, so the deploy is not pinned to them -- set server.gpuProductLabels, or nodes.gpuProductAliases in the site profile", strings.Join(products, ", "), gpuRes))
+		case asked:
+			const path = "affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms"
+			if err := values.Set(overrides, path, terms); err != nil {
+				return nil, err
+			}
+		default:
+			catalogTerms = terms
 		}
 	}
 	// The scaler owns the replica count, so a fixed count cannot ride along
@@ -264,19 +281,21 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 	}
 
 	p, err := compose.Compose(compose.Input{
-		Catalog:         cat.Source(),
-		CatalogName:     repo.Name,
-		Ref:             cat.Ref(),
-		Schema:          cat.Schema(),
-		Resolved:        resolved,
-		ChartVersion:    chartVersion,
-		Profile:         *prof,
-		Release:         release,
-		Namespace:       req.Namespace,
-		Overrides:       overrides,
-		Edits:           edits,
-		CreateNamespace: req.CreateNamespace,
-		Autoscale:       req.autoscale,
+		Catalog:              cat.Source(),
+		CatalogName:          repo.Name,
+		Ref:                  cat.Ref(),
+		Schema:               cat.Schema(),
+		Resolved:             resolved,
+		ChartVersion:         chartVersion,
+		Profile:              *prof,
+		Release:              release,
+		Namespace:            req.Namespace,
+		Overrides:            overrides,
+		Edits:                edits,
+		CreateNamespace:      req.CreateNamespace,
+		Autoscale:            req.autoscale,
+		GPUResource:          gpuRes,
+		GPUNodeSelectorTerms: catalogTerms,
 	})
 	if err != nil {
 		return nil, err
@@ -425,17 +444,69 @@ func (e *gpuInventoryError) Error() string {
 func (e *gpuInventoryError) Unwrap() error { return e.err }
 
 // clusterProducts is every GPU product on the cluster under the variant's
-// extended resource. A node with no recorded resource counts: unknown is not a
-// mismatch.
+// vendor. A node with no recorded resource, or one no vendor claims, counts:
+// unknown is not a mismatch.
 func clusterProducts(nodes []cluster.Node, r catalog.Requires) map[string]bool {
-	res := r.ResourceName()
 	out := map[string]bool{}
 	for _, n := range nodes {
-		if n.GPUProduct != "" && (n.GPUResource == "" || n.GPUResource == res) {
+		if n.GPUProduct != "" && !r.ForeignResource(n.GPUResource) {
 			out[n.GPUProduct] = true
 		}
 	}
 	return out
+}
+
+// gpuResource is the extended resource a variant's pods request: the one
+// inventory reports for nodes carrying its products, else the vendor's.
+// Unreadable nodes fall back with a warning rather than fail the plan.
+func (s *Server) gpuResource(ctx context.Context, r catalog.Requires, products []string) (string, []string, error) {
+	def := r.ResourceName()
+	if r.GPUs == 0 || len(products) == 0 {
+		return def, nil, nil
+	}
+	nodes, err := s.nodes(ctx)
+	if err != nil {
+		return def, []string{fmt.Sprintf("cannot read this cluster's GPU inventory (%v); requesting %s, the %s default", err, def, r.VendorOrDefault())}, nil
+	}
+	res, found, err := inventoryResource(nodes, r, products)
+	if err != nil {
+		return "", nil, err
+	}
+	if !found || res == "" {
+		return def, nil, nil
+	}
+	return res, nil, nil
+}
+
+// inventoryResource is the one resource the nodes carrying products report.
+// found is whether any node carries one; res is empty when none of those
+// nodes recorded a resource. Two resources are refused: a pod requests one,
+// so which products it may land on would be decided by the scheduler.
+func inventoryResource(nodes []cluster.Node, r catalog.Requires, products []string) (res string, found bool, err error) {
+	by := map[string][]string{}
+	for _, n := range nodes {
+		if n.GPUProduct == "" || !slices.Contains(products, n.GPUProduct) || r.ForeignResource(n.GPUResource) {
+			continue
+		}
+		found = true
+		if n.GPUResource != "" && !slices.Contains(by[n.GPUResource], n.GPUProduct) {
+			by[n.GPUResource] = append(by[n.GPUResource], n.GPUProduct)
+		}
+	}
+	switch len(by) {
+	case 0:
+		return "", found, nil
+	case 1:
+		for res := range by {
+			return res, true, nil
+		}
+	}
+	var each []string
+	for _, res := range slices.Sorted(maps.Keys(by)) {
+		slices.Sort(by[res])
+		each = append(each, fmt.Sprintf("%s as %s", strings.Join(by[res], ", "), res))
+	}
+	return "", true, fmt.Errorf("GPU products %s are on this cluster under different resources (%s) -- pass gpuProducts naming only products under one of them", strings.Join(products, ", "), strings.Join(each, "; "))
 }
 
 // gpuProductTerms is one term per label key inventory reads a product from, and
@@ -506,8 +577,8 @@ func (s *Server) checkGPUProducts(ctx context.Context, v catalog.Variant, produc
 		if len(have) > 0 {
 			present = strings.Join(slices.Sorted(maps.Keys(have)), ", ")
 		}
-		return nil, fmt.Errorf("forceGpuProducts: %s not on this cluster as %s (have: %s)",
-			strings.Join(missing, ", "), v.Requires.ResourceName(), present)
+		return nil, fmt.Errorf("forceGpuProducts: %s not on this cluster under %s (have: %s)",
+			strings.Join(missing, ", "), v.Requires.VendorOrDefault(), present)
 	}
 	warnings := make([]string, 0, len(off))
 	for _, p := range off {

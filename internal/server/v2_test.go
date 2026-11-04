@@ -27,7 +27,7 @@ func v2Server(t *testing.T) *httptest.Server {
 func TestPlanFromAV2Catalog(t *testing.T) {
 	srv := v2Server(t)
 	code, p := post(t, srv, "/api/plans", map[string]any{
-		"model": "qwen3-8b", "variant": "vllm-tp2-910b", "serviceId": "q", "chartVersion": "0.7.6",
+		"model": "qwen3-8b", "variant": "vllm-tp2-910b", "serviceId": "q", "chartVersion": "0.9.1",
 	})
 	if code != http.StatusOK {
 		t.Fatalf("status %d: %v", code, p)
@@ -44,7 +44,7 @@ func TestPlanFromAV2Catalog(t *testing.T) {
 func TestPlanFromAV2CatalogRefusesAnotherVersion(t *testing.T) {
 	srv := v2Server(t)
 	code, out := post(t, srv, "/api/plans", map[string]any{
-		"model": "qwen3-8b", "variant": "vllm-tp2-910b", "version": "0.9.0", "serviceId": "q", "chartVersion": "0.7.6",
+		"model": "qwen3-8b", "variant": "vllm-tp2-910b", "version": "0.9.0", "serviceId": "q", "chartVersion": "0.9.1",
 	})
 	if code != http.StatusBadRequest || !strings.Contains(out["error"].(string), "has no version 0.9.0 (have: 1.0.0)") {
 		t.Errorf("status %d: %v", code, out)

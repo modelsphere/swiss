@@ -112,8 +112,20 @@ func (r Requires) VendorOrDefault() string {
 	return r.Vendor
 }
 
-// ResourceName is the extended resource this variant's pods request.
+// ResourceName is the vendor's well-known extended resource: what a variant's
+// pods request when inventory names no other for its products.
 func (r Requires) ResourceName() string { return accelerators[r.VendorOrDefault()] }
+
+// ForeignResource reports a resource another vendor's table entry names. A
+// resource the table does not list, such as a scheduler's own, is not foreign.
+func (r Requires) ForeignResource(res string) bool {
+	for vendor, name := range accelerators {
+		if name == res {
+			return vendor != r.VendorOrDefault()
+		}
+	}
+	return false
+}
 
 const (
 	TopologySingleNode = "single-node"
