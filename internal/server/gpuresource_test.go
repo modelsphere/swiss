@@ -193,3 +193,29 @@ func TestInventoryResource(t *testing.T) {
 		})
 	}
 }
+
+// A forced product only has to be on the cluster: another vendor's nodes count,
+// since the product, not the vendor, picks the nodes, and the pod requests the
+// resource those nodes report.
+func TestForcedGPUProductOnAnotherVendorsNodesIsAccepted(t *testing.T) {
+	const b300 = "NVIDIA-B300-SXM6-AC"
+	s := ascendServer(t, []cluster.Node{
+		{Name: "gpu-1", GPUResource: "nvidia.com/gpu", GPUProduct: b300, GPUs: 8, Schedulable: true},
+	}, nil, nil)
+	p, err := s.compose(context.Background(), planRequest{
+		Model: "qwen3-8b", Variant: "vllm-tp2-910b", ServiceID: "q", ChartVersion: "0.9.1",
+		GPUProducts: []string{b300}, ForceGPUProducts: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if terms := requiredTerms(t, p); !strings.Contains(terms, b300) {
+		t.Errorf("the forced product must be the affinity: %s", terms)
+	}
+	if got, set := values.Get(p.Values(), "model.gpuResource"); set {
+		t.Errorf("model.gpuResource = %v, want unset (the nodes' nvidia.com/gpu)", got)
+	}
+	if ws := p.Warnings; len(ws) != 1 || !strings.Contains(ws[0], b300) {
+		t.Errorf("want one warning naming the forced product, got %v", ws)
+	}
+}
