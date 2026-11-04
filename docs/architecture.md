@@ -50,7 +50,7 @@ Composition is a few inputs with key sets and strict precedence. Later layer ove
 
 ## GPU placement
 
-The variant's `requires` is the source of truth for target hardware: `vendor` (empty means nvidia), `gpuProduct`, and `gpus`. Cluster GPU inventory — swissd `server.gpuProductLabels` and the site profile's `nodes.gpuProductAliases` — maps a product to the extended resource its nodes report and the labels that identify it. Placement looks that product up and records `model.gpuResource` for the container limit and required node affinity onto those nodes, using the vendor's default resource when the cluster does not know the product. `gpuProducts` only narrows within `requires.gpuProduct`; another product takes `forceGpuProducts`, or `gpuProducts` on a variant that lists none, and must map to the same resource.
+The variant's `requires` is the source of truth for target hardware: `vendor` (empty means nvidia), `gpuProduct`, and `gpus`. Cluster GPU inventory — swissd `server.gpuProductLabels` and the site profile's `nodes.gpuProductAliases` — maps a product to the extended resource its nodes report and the labels that identify it. Placement looks that product up, using the vendor's default resource when the cluster does not know the product. It writes `model.gpuResource` only when `gpus > 0` and the resolved resource is not `nvidia.com/gpu`, and skips the default required node affinity when the catalog or site profile already sets one. `gpuProducts` only narrows within `requires.gpuProduct`; another product takes `forceGpuProducts`, or `gpuProducts` on a variant that lists none, and must map to the same resource.
 
 ```mermaid
 flowchart TD
