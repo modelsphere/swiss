@@ -544,3 +544,117 @@ func TestEditLayerWinsLast(t *testing.T) {
 		}
 	}
 }
+
+// model.gpuResource is written only when it is not the charts' default, so an
+// nvidia plan renders as it did before the key existed.
+func TestComposeGPUResource(t *testing.T) {
+	for name, tc := range map[string]struct {
+		edit func(*Input)
+		want any // nil: not written
+		err  string
+	}{
+		"nvidia default": {edit: func(*Input) {}},
+		"vendor default": {
+			edit: func(in *Input) {
+				in.Resolved.Variant.Requires.Vendor = "ascend"
+				in.Resolved.Variant.Chart.Version = "0.9.29"
+			},
+			want: "huawei.com/Ascend910",
+		},
+		"from inventory": {
+			edit: func(in *Input) {
+				in.GPUResource = "volcano.sh/Ascend910B4-1"
+				in.Resolved.Variant.Chart.Version = "0.9.29"
+			},
+			want: "volcano.sh/Ascend910B4-1",
+		},
+		"inventory nvidia": {edit: func(in *Input) { in.GPUResource = DefaultGPUResource }},
+		"cpu only": {
+			edit: func(in *Input) {
+				in.GPUResource = "volcano.sh/Ascend910B4-1"
+				in.Resolved.Variant.Requires.GPUs = 0
+			},
+		},
+		"site sets it": {
+			edit: func(in *Input) {
+				in.GPUResource = "volcano.sh/Ascend910B4-1"
+				in.Profile.Extra = values.Tree{"model": map[string]any{"gpuResource": "example.com/npu"}}
+			},
+			want: "example.com/npu",
+		},
+		"chart too old": {
+			edit: func(in *Input) { in.GPUResource = "volcano.sh/Ascend910B4-1" },
+			err:  "sglang 0.9.29 or newer",
+		},
+		"chart unknown": {
+			edit: func(in *Input) {
+				in.GPUResource = "volcano.sh/Ascend910B4-1"
+				in.Resolved.Variant.Chart.Name = "mock-llmd"
+			},
+			want: "volcano.sh/Ascend910B4-1",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			in := testInput()
+			tc.edit(&in)
+			p, err := Compose(in)
+			if tc.err != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.err) {
+					t.Fatalf("err = %v, want %q", err, tc.err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, _ := values.Get(p.Values(), "model.gpuResource")
+			if got != tc.want {
+				t.Fatalf("model.gpuResource = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// Product affinity is derived, so the catalog's or the site's own required
+// node affinity stands, and the form still overrides it.
+func TestComposeGPUNodeSelectorTerms(t *testing.T) {
+	const path = "affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms"
+	terms := []any{values.Tree{"matchExpressions": []any{values.Tree{"key": "k", "operator": "In", "values": []any{"p"}}}}}
+	theirs := []any{"theirs"}
+
+	in := testInput()
+	in.GPUNodeSelectorTerms = terms
+	p, err := Compose(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.LayerOf(path) != values.LayerDerived {
+		t.Fatalf("terms are %q's, want derived", p.LayerOf(path))
+	}
+
+	for _, layer := range []string{"catalog", "form"} {
+		in := testInput()
+		in.GPUNodeSelectorTerms = terms
+		tree := values.Tree{}
+		if err := values.Set(tree, path, theirs); err != nil {
+			t.Fatal(err)
+		}
+		if layer == "catalog" {
+			values.Merge(in.Resolved.Variant.Values, tree, values.LayerCatalog, nil)
+		} else {
+			in.Overrides = tree
+		}
+		p, err := Compose(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := p.LayerOf(path); got != layer {
+			t.Errorf("%s set terms, but they are %q's", layer, got)
+		}
+		if _, ok := p.Layers[values.LayerDerived]; ok && layer == "catalog" {
+			if _, set := values.Get(p.Layers[values.LayerDerived], path); set {
+				t.Error("derived must yield to the catalog's own terms")
+			}
+		}
+	}
+}

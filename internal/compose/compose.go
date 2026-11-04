@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Masterminds/semver/v3"
+
 	"github.com/modelsphere/swiss/internal/catalog"
 	"github.com/modelsphere/swiss/internal/chart"
 	"github.com/modelsphere/swiss/internal/plan"
@@ -47,7 +49,26 @@ type Input struct {
 	// Autoscale is the replicaCount layer carried while PD autoscaling is
 	// enabled. Empty is omitted, so a plan without it hashes as before.
 	Autoscale values.Tree
+	// GPUResource is the extended resource the variant's pods request on this
+	// cluster, resolved from inventory. Empty is the vendor's well-known one.
+	GPUResource string
+	// GPUNodeSelectorTerms place the variant on its requires.gpuProduct,
+	// derived unless the catalog or site already set required node affinity.
+	GPUNodeSelectorTerms []any
 }
+
+// DefaultGPUResource is what the charts render model.gpus under when
+// model.gpuResource is unset.
+const DefaultGPUResource = "nvidia.com/gpu"
+
+// GPUResourceSince is the first version of each chart that takes
+// model.gpuResource; older ones reject the key in their schema.
+var GPUResourceSince = map[string]string{
+	"vllm":   "0.9.1",
+	"sglang": "0.9.29",
+}
+
+const requiredNodeTerms = "affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms"
 
 // Compose resolves an entry, a variant, a profile and a set of overrides into a
 // plan. It does not touch a cluster and does not render a chart; preflight and
@@ -96,6 +117,11 @@ func Compose(in Input) (*plan.Plan, error) {
 	derivedVals := values.Tree{}
 	if err := applyDefaults(siteVals, derivedVals, base, in); err != nil {
 		return nil, err
+	}
+	if res, ok := values.Get(derivedVals, "model.gpuResource"); ok {
+		if err := checkGPUResourceChart(in.Resolved.Variant.Chart.Name, chartVersion, res.(string)); err != nil {
+			return nil, err
+		}
 	}
 	// The layers, each the document it actually is. Merging them in order is
 	// what produces the values, so the outcome is determined by the order and
@@ -321,6 +347,43 @@ func applyDefaults(site, derived, base values.Tree, in Input) error {
 				return err
 			}
 		}
+	}
+
+	// model.gpuResource only when it is not the charts' default: a plan that
+	// requests nvidia.com/gpu renders as it did before the key existed, and
+	// stays valid on a chart older than GPUResourceSince.
+	if r := in.Resolved.Variant.Requires; r.GPUs > 0 {
+		res := in.GPUResource
+		if res == "" {
+			res = r.ResourceName()
+		}
+		if _, set := values.Get(base, "model.gpuResource"); !set && res != "" && res != DefaultGPUResource {
+			if err := values.Set(derived, "model.gpuResource", res); err != nil {
+				return err
+			}
+		}
+	}
+	if len(in.GPUNodeSelectorTerms) > 0 {
+		if _, set := values.Get(base, requiredNodeTerms); !set {
+			if err := values.Set(derived, requiredNodeTerms, in.GPUNodeSelectorTerms); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func checkGPUResourceChart(name, version, res string) error {
+	since, ok := GPUResourceSince[name]
+	if !ok {
+		return nil
+	}
+	have, err := semver.NewVersion(version)
+	if err != nil {
+		return nil
+	}
+	if have.LessThan(semver.MustParse(since)) {
+		return fmt.Errorf("requesting %s needs chart %s %s or newer for model.gpuResource, not %s -- name a chart version of at least %s", res, name, since, version, since)
 	}
 	return nil
 }
