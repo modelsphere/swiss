@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,16 +14,20 @@ import (
 
 	"github.com/modelsphere/swiss/internal/catalog"
 	"github.com/modelsphere/swiss/internal/cluster"
-	"github.com/modelsphere/swiss/internal/config"
+	"github.com/modelsphere/swiss/internal/gpu"
 	"github.com/modelsphere/swiss/internal/plan"
 	"github.com/modelsphere/swiss/internal/values"
 )
 
 const volcano910B3 = "volcano.sh/Ascend910B3-1"
 
+// volcanoGPUs is a second ascend resource, read by its own label.
+const volcanoGPUs = testGPUs + "    - {vendor: ascend, resource: " + volcano910B3 + ", labelKey: npu.example.com/product}\n"
+
 // ascendServer composes from the v2 fixture, whose vllm-tp2-910b is vendor
-// ascend on Ascend-910B3, against nodes and product labels the test supplies.
-func ascendServer(t *testing.T, nodes []cluster.Node, nodErr error, labels map[string]config.StringList) *Server {
+// ascend on Ascend-910B3, against nodes and a nodes.gpus the test supplies;
+// empty is testGPUs.
+func ascendServer(t *testing.T, nodes []cluster.Node, nodErr error, gpus string) *Server {
 	t.Helper()
 	root, err := filepath.Abs(filepath.Join("..", "..", "testdata", "catalog-v2"))
 	if err != nil {
@@ -30,12 +35,10 @@ func ascendServer(t *testing.T, nodes []cluster.Node, nodErr error, labels map[s
 	}
 	probe := liveProbe()
 	probe.Maps["swiss/site-profile"] = map[string]string{
-		"profile.yaml": profileYAML + "catalogs:\n  - name: next\n    url: " + root + "\n    schemaVersion: v2\n",
+		"profile.yaml": profileHead + "nodes:\n  gpus:\n" + cmp.Or(gpus, testGPUs) + "catalogs:\n  - name: next\n    url: " + root + "\n    schemaVersion: v2\n",
 	}
 	probe.Nod, probe.NodErr = nodes, nodErr
-	cfg := testConfig("prod-b300")
-	cfg.Server.GPUProductLabels = labels
-	return New(cfg, probe, discardLogger(), "test")
+	return New(testConfig("prod-b300"), probe, discardLogger(), "test")
 }
 
 func ascendPlan(t *testing.T, s *Server, chartVersion string) (*plan.Plan, error) {
@@ -60,7 +63,7 @@ func requiredTerms(t *testing.T, p *plan.Plan) string {
 func TestGPUResourceIgnoresTheVendorTable(t *testing.T) {
 	s := ascendServer(t, []cluster.Node{
 		{Name: "npu-1", GPUResource: "nvidia.com/gpu", GPUProduct: "Ascend-910B3", GPUs: 8},
-	}, nil, nil)
+	}, nil, "")
 	p, err := ascendPlan(t, s, "0.9.1")
 	if err != nil {
 		t.Fatal(err)
@@ -82,7 +85,7 @@ func TestGPUResourceFollowsInventory(t *testing.T) {
 	s := ascendServer(t, []cluster.Node{
 		{Name: "npu-1", GPUResource: volcano910B3, GPUProduct: "Ascend-910B3", GPUs: 8},
 		{Name: "gpu-1", GPUResource: "nvidia.com/gpu", GPUProduct: "NVIDIA-H800", GPUs: 8},
-	}, nil, map[string]config.StringList{volcano910B3: {"npu.example.com/product"}})
+	}, nil, volcanoGPUs)
 	p, err := ascendPlan(t, s, "0.9.1")
 	if err != nil {
 		t.Fatal(err)
@@ -114,7 +117,7 @@ func TestGPUResourceFallsBackToTheVendor(t *testing.T) {
 		"unreadable":     {err: errors.New("nodes is forbidden"), warning: true},
 	} {
 		t.Run(name, func(t *testing.T) {
-			p, err := ascendPlan(t, ascendServer(t, tc.nodes, tc.err, nil), "0.9.1")
+			p, err := ascendPlan(t, ascendServer(t, tc.nodes, tc.err, ""), "0.9.1")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -124,12 +127,25 @@ func TestGPUResourceFallsBackToTheVendor(t *testing.T) {
 			if got := len(p.Warnings) > 0; got != tc.warning {
 				t.Errorf("warnings = %v", p.Warnings)
 			}
-			want := `[{"matchExpressions":[{"key":"accelerator/huawei-ascend910","operator":"In","values":["Ascend-910B3"]}]},` +
-				`{"matchExpressions":[{"key":"accelerator","operator":"In","values":["Ascend-910B3"]}]}]`
+			want := `[{"matchExpressions":[{"key":"accelerator/huawei-ascend910","operator":"In","values":["Ascend-910B3"]}]}]`
 			if got := requiredTerms(t, p); got != want {
 				t.Errorf("terms:\n got %s\nwant %s", got, want)
 			}
 		})
+	}
+}
+
+// A product's values join its name in the affinity, so the pod may land on a
+// node labelled either way -- the same nodes inventory reports it on.
+func TestGPUProductValuesJoinTheAffinity(t *testing.T) {
+	s := ascendServer(t, nil, nil, nvidiaGPU+"    - {vendor: ascend, resource: huawei.com/Ascend910, labelKey: accelerator/huawei-ascend910, products: [{product: Ascend-910B3, values: [module-910b-8]}]}\n")
+	p, err := ascendPlan(t, s, "0.9.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `[{"matchExpressions":[{"key":"accelerator/huawei-ascend910","operator":"In","values":["Ascend-910B3","module-910b-8"]}]}]`
+	if got := requiredTerms(t, p); got != want {
+		t.Errorf("terms:\n got %s\nwant %s", got, want)
 	}
 }
 
@@ -139,7 +155,7 @@ func TestGPUResourceRefusesTwoResourcesForTheProducts(t *testing.T) {
 	s := ascendServer(t, []cluster.Node{
 		{Name: "npu-1", GPUResource: volcano910B3, GPUProduct: "Ascend-910B3", GPUs: 8},
 		{Name: "npu-2", GPUResource: "huawei.com/Ascend910", GPUProduct: "Ascend-910B3", GPUs: 8},
-	}, nil, map[string]config.StringList{volcano910B3: {"accelerator"}})
+	}, nil, volcanoGPUs)
 	_, err := ascendPlan(t, s, "0.9.1")
 	if err == nil || !strings.Contains(err.Error(), volcano910B3) || !strings.Contains(err.Error(), "huawei.com/Ascend910") {
 		t.Fatalf("want a refusal naming both resources, got %v", err)
@@ -149,7 +165,7 @@ func TestGPUResourceRefusesTwoResourcesForTheProducts(t *testing.T) {
 // A chart from before model.gpuResource rejects the key in its schema; the
 // plan says which version is needed instead of failing at install.
 func TestGPUResourceRefusesAChartWithoutIt(t *testing.T) {
-	_, err := ascendPlan(t, ascendServer(t, nil, nil, nil), "0.7.6")
+	_, err := ascendPlan(t, ascendServer(t, nil, nil, ""), "0.7.6")
 	if err == nil || !strings.Contains(err.Error(), "0.9.1") {
 		t.Fatalf("want a refusal naming vllm 0.9.1, got %v", err)
 	}
@@ -213,7 +229,7 @@ func TestForcedGPUProductOnAnotherVendorsNodesIsRefused(t *testing.T) {
 	const h100 = "NVIDIA-H100-80GB-HBM3"
 	s := ascendServer(t, []cluster.Node{
 		{Name: "gpu-1", GPUResource: "nvidia.com/gpu", GPUProduct: h100, GPUs: 8, Schedulable: true},
-	}, nil, nil)
+	}, nil, "")
 	_, err := forcedPlan(t, s, h100)
 	if err == nil {
 		t.Fatal("forcing an Ascend variant onto nvidia nodes must be refused")
@@ -242,7 +258,7 @@ func TestForcedGPUProductUnderAnotherResourceIsRefused(t *testing.T) {
 	s := ascendServer(t, []cluster.Node{
 		{Name: "npu-1", GPUResource: volcano910B3, GPUProduct: "Ascend-910B3", GPUs: 8, Schedulable: true},
 		{Name: "npu-2", GPUResource: "huawei.com/Ascend910", GPUProduct: "Ascend-910B4", GPUs: 8, Schedulable: true},
-	}, nil, map[string]config.StringList{volcano910B3: {"npu.example.com/product"}})
+	}, nil, volcanoGPUs)
 	_, err := forcedPlan(t, s, "Ascend-910B4")
 	if err == nil || !strings.Contains(err.Error(), volcano910B3) || !strings.Contains(err.Error(), "huawei.com/Ascend910") {
 		t.Fatalf("want a refusal naming both resources, got %v", err)
@@ -256,7 +272,7 @@ func TestForcedGPUProductUnderTheVariantsResourceIsAccepted(t *testing.T) {
 	s := ascendServer(t, []cluster.Node{
 		{Name: "npu-1", GPUResource: volcano910B3, GPUProduct: "Ascend-910B3", GPUs: 8, Schedulable: true},
 		{Name: "npu-2", GPUResource: volcano910B3, GPUProduct: b4, GPUs: 8, Schedulable: true},
-	}, nil, map[string]config.StringList{volcano910B3: {"npu.example.com/product"}})
+	}, nil, volcanoGPUs)
 	p, err := forcedPlan(t, s, b4)
 	if err != nil {
 		t.Fatal(err)
@@ -273,22 +289,34 @@ func TestForcedGPUProductUnderTheVariantsResourceIsAccepted(t *testing.T) {
 }
 
 // With the catalog product on no node, or on nodes that recorded no resource,
-// or with no product listed, the variant targets its vendor's default.
+// or with no product listed, the variant targets its vendor's default: its
+// first resource in the site's table.
 func TestVariantResources(t *testing.T) {
 	ascend := catalog.Requires{GPUs: 1, Vendor: "ascend", GPUProduct: []string{"A"}}
+	table := gpu.Table{
+		{Vendor: "nvidia", Resource: "nvidia.com/gpu", LabelKey: "nvidia.com/gpu.product"},
+		{Vendor: "ascend", Resource: "huawei.com/Ascend910", LabelKey: "accelerator/huawei-ascend910"},
+	}
+	site := append(gpu.Table{{Vendor: "ascend", Resource: volcano910B3, LabelKey: "k"}}, table...)
 	for name, tc := range map[string]struct {
 		nodes []cluster.Node
+		gpus  gpu.Table
 		r     catalog.Requires
 		want  []string
 	}{
-		"inventory":   {nodes: []cluster.Node{{GPUResource: volcano910B3, GPUProduct: "A"}, {GPUResource: "nvidia.com/gpu", GPUProduct: "B"}}, r: ascend, want: []string{volcano910B3}},
-		"absent":      {nodes: []cluster.Node{{GPUResource: "nvidia.com/gpu", GPUProduct: "B"}}, r: ascend, want: []string{"huawei.com/Ascend910"}},
-		"unrecorded":  {nodes: []cluster.Node{{GPUProduct: "A"}}, r: ascend, want: []string{"huawei.com/Ascend910"}},
-		"none listed": {nodes: []cluster.Node{{GPUResource: volcano910B3, GPUProduct: "A"}}, r: catalog.Requires{GPUs: 1}, want: []string{"nvidia.com/gpu"}},
-		"two":         {nodes: []cluster.Node{{GPUResource: volcano910B3, GPUProduct: "A"}, {GPUResource: "huawei.com/Ascend910", GPUProduct: "A"}}, r: ascend, want: []string{"huawei.com/Ascend910", volcano910B3}},
+		"site default": {nodes: []cluster.Node{{GPUResource: "nvidia.com/gpu", GPUProduct: "B"}}, gpus: site, r: ascend, want: []string{volcano910B3}},
+		"inventory":    {nodes: []cluster.Node{{GPUResource: volcano910B3, GPUProduct: "A"}, {GPUResource: "nvidia.com/gpu", GPUProduct: "B"}}, r: ascend, want: []string{volcano910B3}},
+		"absent":       {nodes: []cluster.Node{{GPUResource: "nvidia.com/gpu", GPUProduct: "B"}}, r: ascend, want: []string{"huawei.com/Ascend910"}},
+		"unrecorded":   {nodes: []cluster.Node{{GPUProduct: "A"}}, r: ascend, want: []string{"huawei.com/Ascend910"}},
+		"none listed":  {nodes: []cluster.Node{{GPUResource: volcano910B3, GPUProduct: "A"}}, r: catalog.Requires{GPUs: 1}, want: []string{"nvidia.com/gpu"}},
+		"two":          {nodes: []cluster.Node{{GPUResource: volcano910B3, GPUProduct: "A"}, {GPUResource: "huawei.com/Ascend910", GPUProduct: "A"}}, r: ascend, want: []string{"huawei.com/Ascend910", volcano910B3}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if got := variantResources(tc.nodes, tc.r); !slices.Equal(got, tc.want) {
+			gpus := tc.gpus
+			if gpus == nil {
+				gpus = table
+			}
+			if got := variantResources(tc.nodes, gpus, tc.r); !slices.Equal(got, tc.want) {
 				t.Errorf("got %v, want %v", got, tc.want)
 			}
 		})

@@ -92,29 +92,12 @@ const VendorNvidia = "nvidia"
 // EngineMock is a stand-in server, such as mock-llmd, run on an engine's chart.
 const EngineMock = "mock"
 
-// accelerators maps a vendor to the extended resource a pod requests. A table
-// here rather than in the catalog keeps Kubernetes resource strings out of a
-// public repo, and out of every site profile that would otherwise have to
-// repeat the same well-known values. The node labels naming a product live
-// with inventory, keyed by this resource.
-var accelerators = map[string]string{
-	VendorNvidia: "nvidia.com/gpu",
-	"ascend":     "huawei.com/Ascend910",
-	"cambricon":  "cambricon.com/mlu",
-	"hygon":      "hygon.com/dcu",
-	"amd":        "amd.com/gpu",
-}
-
 func (r Requires) VendorOrDefault() string {
 	if r.Vendor == "" {
 		return VendorNvidia
 	}
 	return r.Vendor
 }
-
-// ResourceName is the vendor's well-known extended resource: what a variant's
-// pods request when inventory names no other for its products.
-func (r Requires) ResourceName() string { return accelerators[r.VendorOrDefault()] }
 
 const (
 	TopologySingleNode = "single-node"

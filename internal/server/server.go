@@ -72,6 +72,9 @@ type Server struct {
 	charts    map[string]chartListing
 	profile   *site.Profile
 	profileAt time.Time
+	// aliasesWarned keeps the ignored nodes.gpuProductAliases to one warning,
+	// not one per profile refresh.
+	aliasesWarned sync.Once
 
 	// secretsMu orders read-modify-writes of the unified Secret.
 	secretsMu sync.Mutex
@@ -111,8 +114,8 @@ type openCatalog struct {
 }
 
 func New(cfg *config.Config, probe cluster.Probe, log *slog.Logger, version string) *Server {
-	if k, ok := probe.(*cluster.Kube); ok && len(cfg.Server.GPUProductLabels) > 0 {
-		k.GPUProductLabels = cfg.Server.GPUProductLabelsMap()
+	if cfg.Server.GPUProductLabels != nil {
+		log.Warn("server.gpuProductLabels is ignored; set GPU resources and their labels in the site profile's nodes.gpus")
 	}
 	return &Server{
 		cfg: cfg, probe: probe, log: log, version: version,
@@ -350,10 +353,47 @@ func (s *Server) Profile(ctx context.Context) (*site.Profile, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(p.Nodes.GPUProductAliases) > 0 {
+		s.aliasesWarned.Do(func() {
+			s.log.WarnContext(ctx, "nodes.gpuProductAliases in the site profile is ignored; name GPU products in nodes.gpus", "profile", origin)
+		})
+	}
 	s.mu.Lock()
 	s.profile, s.profileAt = p, time.Now()
 	s.mu.Unlock()
 	return p, nil
+}
+
+// migrateProfile brings the stored profile up to date, once at start. A
+// profile swissd cannot write is left for the operator, who is shown the
+// migrated document to save in its place.
+func (s *Server) migrateProfile(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	raw, origin, err := s.readProfile(ctx)
+	if err != nil {
+		if !profileMissing(err) {
+			s.log.WarnContext(ctx, "site profile not read, so not migrated", "err", err)
+		}
+		return
+	}
+	out, changes, err := site.Migrate(raw)
+	if err != nil || len(changes) == 0 {
+		return
+	}
+	ref := s.cfg.Cluster.Profile.ConfigMap
+	if ref == "" || s.writer == nil {
+		s.log.ErrorContext(ctx, "site profile needs migrating and swissd cannot write it; save the migrated profile by hand", "profile", origin, "changes", changes, "migrated", string(out))
+		return
+	}
+	if err := s.writer.PutConfigMap(ctx, ref, map[string]string{s.cfg.Cluster.Profile.Key: string(out)}, nil); err != nil {
+		s.log.ErrorContext(ctx, "site profile needs migrating and writing it failed; save the migrated profile by hand", "configMap", ref, "err", err, "changes", changes, "migrated", string(out))
+		return
+	}
+	s.mu.Lock()
+	s.profile = nil
+	s.mu.Unlock()
+	s.log.InfoContext(ctx, "site profile migrated", "configMap", ref, "changes", changes)
 }
 
 // readProfile fetches the site profile from wherever the config says it lives.
@@ -477,6 +517,7 @@ func (s *Server) Handler() http.Handler {
 
 // Run serves until ctx is cancelled, then drains.
 func (s *Server) Run(ctx context.Context) error {
+	s.migrateProfile(ctx)
 	loopCtx, stopLoop := context.WithCancel(ctx)
 	defer stopLoop()
 	go s.runAutoscaler(loopCtx)

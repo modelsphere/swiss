@@ -7,13 +7,12 @@ package site
 
 import (
 	"fmt"
-	"maps"
 	"os"
-	"slices"
 	"strings"
 	"time"
 
 	"github.com/modelsphere/swiss/internal/catalog"
+	"github.com/modelsphere/swiss/internal/gpu"
 	"github.com/modelsphere/swiss/internal/values"
 	"gopkg.in/yaml.v3"
 )
@@ -330,97 +329,72 @@ type Nodes struct {
 	// GPUsPerNode is what a full GPU node has, used to derive
 	// cache.maxSlotsPerNode. 0 leaves that value to the chart's default.
 	GPUsPerNode int `yaml:"gpusPerNode,omitempty" json:"gpusPerNode,omitempty"`
-	// GPUProductAliases names GPU products by node labels, for a vendor install
-	// that does not label its nodes with the catalog's product name: product ->
-	// selectors, each "key=value[,key=value...]" with every pair required. A
-	// node matching aliases of two products takes the one with more pairs.
+	// GPUs is every GPU resource this cluster's nodes advertise, the label
+	// telling its products apart, and where products are named otherwise:
+	// the only GPU table there is. Required; empty is a site without GPUs.
+	// A pointer, so a missing or null value is told from [].
+	GPUs *gpu.Table `yaml:"gpus,omitempty" json:"gpus,omitempty"`
+	// GPUProductAliases is ignored for placement. It is still read, served and
+	// saved, so a site page from before gpus keeps working.
+	//
+	// Deprecated: name products in GPUs.
 	GPUProductAliases map[string][]string `yaml:"gpuProductAliases,omitempty" json:"gpuProductAliases,omitempty"`
 }
 
-// GPUProductAliasesMap is gpuProductAliases as label sets per product. Parse
-// has refused a malformed selector, so none is dropped here.
-func (n Nodes) GPUProductAliasesMap() map[string][]map[string]string {
-	if len(n.GPUProductAliases) == 0 {
+// GPUTable is the GPU table this site places deploys with.
+func (n Nodes) GPUTable() gpu.Table {
+	if n.GPUs == nil {
 		return nil
 	}
-	out := make(map[string][]map[string]string, len(n.GPUProductAliases))
-	for product, sels := range n.GPUProductAliases {
-		for _, sel := range sels {
-			if labels, err := parseLabelSelector(sel); err == nil {
-				out[product] = append(out[product], labels)
-			}
-		}
-	}
-	return out
+	return *n.GPUs
 }
 
-func parseLabelSelector(sel string) (map[string]string, error) {
-	labels := map[string]string{}
-	for _, pair := range strings.Split(sel, ",") {
-		k, v, ok := strings.Cut(pair, "=")
-		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
-		if !ok || k == "" || v == "" {
-			return nil, fmt.Errorf("%q is not key=value", strings.TrimSpace(pair))
-		}
-		if prev, dup := labels[k]; dup && prev != v {
-			return nil, fmt.Errorf("%q sets %s twice", sel, k)
-		}
-		labels[k] = v
+// Names are trimmed like catalog and site names, since the site page writes
+// this list. A resource is listed once, and a label value names one product
+// under it, or inventory could not say which a node carries.
+func (n *Nodes) checkGPUs() error {
+	if n.GPUs == nil {
+		return fmt.Errorf("nodes.gpus is required: the GPU resources this cluster's nodes advertise, or [] for none. swissd adds the well-known ones to a profile it can write when it starts; otherwise add\n%s", gpusBlock())
 	}
-	return labels, nil
-}
-
-// A node matching selectors of two products takes the one with more pairs, so
-// two of equal size that a single node could satisfy are refused. Product names
-// are trimmed like catalog and site names, since the site page writes this map.
-func (n *Nodes) checkGPUProductAliases() error {
-	if len(n.GPUProductAliases) == 0 {
-		return nil
-	}
-	type alias struct {
-		product, sel string
-		labels       map[string]string
-	}
-	var all []alias
-	trimmed := make(map[string][]string, len(n.GPUProductAliases))
-	for _, product := range slices.Sorted(maps.Keys(n.GPUProductAliases)) {
-		sels := n.GPUProductAliases[product]
-		name := strings.TrimSpace(product)
+	listed := map[string]bool{}
+	for i := range *n.GPUs {
+		g := &(*n.GPUs)[i]
+		where := fmt.Sprintf("nodes.gpus[%d]", i)
+		g.Vendor, g.Resource, g.LabelKey = strings.TrimSpace(g.Vendor), strings.TrimSpace(g.Resource), strings.TrimSpace(g.LabelKey)
 		switch {
-		case name == "":
-			return fmt.Errorf("nodes.gpuProductAliases: empty product name")
-		case trimmed[name] != nil:
-			return fmt.Errorf("nodes.gpuProductAliases: %s is listed twice", name)
-		case len(sels) == 0:
-			return fmt.Errorf("nodes.gpuProductAliases.%s: needs at least one key=value selector", name)
+		case g.Vendor == "" || g.Resource == "" || g.LabelKey == "":
+			return fmt.Errorf("%s needs vendor, resource and labelKey", where)
+		case listed[g.Resource]:
+			return fmt.Errorf("%s: %s is listed twice", where, g.Resource)
 		}
-		trimmed[name] = sels
-		for _, sel := range sels {
-			labels, err := parseLabelSelector(sel)
-			if err != nil {
-				return fmt.Errorf("nodes.gpuProductAliases.%s: %w", name, err)
+		listed[g.Resource] = true
+		names := map[string]string{}
+		products := map[string]bool{}
+		for j := range g.Products {
+			p := &g.Products[j]
+			p.Product = strings.TrimSpace(p.Product)
+			switch {
+			case p.Product == "":
+				return fmt.Errorf("%s.products[%d]: empty product name", where, j)
+			case products[p.Product]:
+				return fmt.Errorf("%s.products[%d]: %s is listed twice", where, j, p.Product)
 			}
-			all = append(all, alias{name, sel, labels})
+			products[p.Product] = true
+			for k, v := range p.Values {
+				p.Values[k] = strings.TrimSpace(v)
+			}
+			for _, v := range append([]string{p.Product}, p.Values...) {
+				if v == "" {
+					return fmt.Errorf("%s.products[%d]: %s has an empty value", where, j, p.Product)
+				}
+				if other, ok := names[v]; ok && other != p.Product {
+					return fmt.Errorf("%s: %q names both %s and %s", where, v, other, p.Product)
+				}
+				names[v] = p.Product
+			}
 		}
 	}
-	for i, a := range all {
-		for _, b := range all[i+1:] {
-			if a.product != b.product && len(a.labels) == len(b.labels) && compatible(a.labels, b.labels) {
-				return fmt.Errorf("nodes.gpuProductAliases: a node can match both %s (%q) and %s (%q) -- add a label to one", a.product, a.sel, b.product, b.sel)
-			}
-		}
-	}
-	n.GPUProductAliases = trimmed
 	return nil
-}
-
-func compatible(a, b map[string]string) bool {
-	for k, v := range a {
-		if w, ok := b[k]; ok && w != v {
-			return false
-		}
-	}
-	return true
 }
 
 // Load reads a profile file.
@@ -530,7 +504,7 @@ func Parse(raw []byte, origin string) (*Profile, error) {
 			return nil, fmt.Errorf("%s: sites[%d] url %q must start with http:// or https://", origin, i, s.URL)
 		}
 	}
-	if err := p.Nodes.checkGPUProductAliases(); err != nil {
+	if err := p.Nodes.checkGPUs(); err != nil {
 		return nil, fmt.Errorf("%s: %w", origin, err)
 	}
 	return &p, nil

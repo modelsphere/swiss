@@ -14,6 +14,9 @@ catalogs:
     default: true
 model:
   pathTemplate: /models/{{org}}/{{name}}
+# A kind cluster has no GPU resources.
+nodes:
+  gpus: []
 defaults:
   features:
     cart: false

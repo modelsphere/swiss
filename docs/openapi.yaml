@@ -1634,9 +1634,28 @@ components:
           type: object
           properties:
             gpusPerNode: { type: integer }
+            gpus:
+              type: array
+              description: "Required: the GPU resources this cluster's nodes advertise, `[]` for none. A vendor's first entry is its default resource."
+              items:
+                type: object
+                required: [vendor, resource, labelKey]
+                properties:
+                  vendor: { type: string, examples: [nvidia, ascend] }
+                  resource: { type: string, examples: [huawei.com/Ascend910] }
+                  labelKey: { type: string, description: "The node label telling products apart under the resource." }
+                  products:
+                    type: array
+                    items:
+                      type: object
+                      required: [product]
+                      properties:
+                        product: { type: string }
+                        values: { type: array, items: { type: string }, description: "Node label values that also name the product." }
             gpuProductAliases:
               type: object
-              description: "Product -> node selectors, each `key=value[,key=value...]`."
+              deprecated: true
+              description: "Ignored for placement; name products in `gpus`. Still read, served and saved, for site pages from before `gpus`. Product -> node selectors, each `key=value[,key=value...]`."
               additionalProperties: { type: array, items: { type: string } }
         sites:
           type: array
