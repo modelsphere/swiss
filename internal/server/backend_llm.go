@@ -184,7 +184,7 @@ func (b llmBackend) Apply(ctx context.Context, p *plan.Plan, mode exec.Mode, o a
 		if err != nil {
 			return applyResult{}, failErr(http.StatusBadGateway, err)
 		}
-		if err := refuseCanaryService(cur); err != nil {
+		if err := refuseCanaryPlan(cur, p, mode, o.Action); err != nil {
 			return applyResult{}, err
 		}
 		if llmsvc.IsExternal(cur) {

@@ -28,7 +28,8 @@ import (
 type planRequest struct {
 	// FromRelease recomposes a deployed release: its stored plan supplies the
 	// form layer, the model and the variant, and only the catalog layer moves.
-	FromRelease string `json:"fromRelease,omitempty"`
+	FromRelease  string `json:"fromRelease,omitempty"`
+	AdaptiveOnly bool   `json:"adaptiveOnly,omitempty"`
 	// Catalog names the configured catalog to compose from. Required when the
 	// site lists several. An upgrade naming none stays on the one its release
 	// came from; naming another moves the release there, same model id.
@@ -166,6 +167,9 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, error) {
+	if req.AdaptiveOnly {
+		return s.composeAssignedAdaptive(ctx, req)
+	}
 	if req.FromRelease != "" {
 		var err error
 		if req, err = s.carryForward(ctx, req); err != nil {
@@ -695,7 +699,7 @@ func (s *Server) apply(ctx context.Context, p *plan.Plan, mode exec.Mode, applyW
 // marker is written, so an apply cannot write its applying phase over the
 // marker and an uninstall cannot start in the middle of an apply.
 func (s *Server) applyLocked(ctx context.Context, p *plan.Plan, mode exec.Mode, applyWith string, o applyOpts) (applyResult, error) {
-	if err := s.refuseCanaryWrite(ctx, p.Release.Namespace, p.Release.Name); err != nil {
+	if err := s.refuseCanaryPlanWrite(ctx, p, mode, o.Action); err != nil {
 		return applyResult{}, err
 	}
 	if err := s.refuseUninstalling(ctx, p.Release.Namespace, p.Release.Name); err != nil {
