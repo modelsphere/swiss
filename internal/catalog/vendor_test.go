@@ -99,23 +99,3 @@ variants:
 		t.Fatal("source in a version file must be refused")
 	}
 }
-
-// Only another vendor's well-known resource is foreign; one the table does not
-// list, such as a scheduler's, may be any vendor's.
-func TestForeignResource(t *testing.T) {
-	ascend := Requires{GPUs: 1, Vendor: "ascend"}
-	for res, want := range map[string]bool{
-		"huawei.com/Ascend910":     false,
-		"volcano.sh/Ascend910B4-1": false,
-		"":                         false,
-		"nvidia.com/gpu":           true,
-		"amd.com/gpu":              true,
-	} {
-		if got := ascend.ForeignResource(res); got != want {
-			t.Errorf("ForeignResource(%q) = %v, want %v", res, got, want)
-		}
-	}
-	if (Requires{GPUs: 1}).ForeignResource("nvidia.com/gpu") {
-		t.Error("an unset vendor is nvidia")
-	}
-}

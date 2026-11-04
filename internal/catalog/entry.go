@@ -116,17 +116,6 @@ func (r Requires) VendorOrDefault() string {
 // pods request when inventory names no other for its products.
 func (r Requires) ResourceName() string { return accelerators[r.VendorOrDefault()] }
 
-// ForeignResource reports a resource another vendor's table entry names. A
-// resource the table does not list, such as a scheduler's own, is not foreign.
-func (r Requires) ForeignResource(res string) bool {
-	for vendor, name := range accelerators {
-		if name == res {
-			return vendor != r.VendorOrDefault()
-		}
-	}
-	return false
-}
-
 const (
 	TopologySingleNode = "single-node"
 	TopologyLWS        = "lws"

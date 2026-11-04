@@ -50,7 +50,7 @@ type planRequest struct {
 	// catalog's business and not the form's.
 	GPUProducts []string `json:"gpuProducts,omitempty"`
 	// ForceGPUProducts accepts gpuProducts the variant's catalog entry does not
-	// list, provided each one is on this cluster under the variant's vendor.
+	// list, provided each one is on this cluster.
 	// The variant's GPU count, image and values are used unchanged.
 	ForceGPUProducts bool        `json:"forceGpuProducts,omitempty"`
 	Overrides        values.Tree `json:"overrides,omitempty"`
@@ -443,13 +443,11 @@ func (e *gpuInventoryError) Error() string {
 
 func (e *gpuInventoryError) Unwrap() error { return e.err }
 
-// clusterProducts is every GPU product on the cluster under the variant's
-// vendor. A node with no recorded resource, or one no vendor claims, counts:
-// unknown is not a mismatch.
-func clusterProducts(nodes []cluster.Node, r catalog.Requires) map[string]bool {
+// clusterProducts is every GPU product on the cluster.
+func clusterProducts(nodes []cluster.Node) map[string]bool {
 	out := map[string]bool{}
 	for _, n := range nodes {
-		if n.GPUProduct != "" && !r.ForeignResource(n.GPUResource) {
+		if n.GPUProduct != "" {
 			out[n.GPUProduct] = true
 		}
 	}
@@ -470,7 +468,7 @@ func (s *Server) gpuResource(ctx context.Context, r catalog.Requires, products [
 	if err != nil {
 		return def, []string{fmt.Sprintf("cannot read this cluster's GPU inventory (%v); requesting %s, the %s default", err, def, r.VendorOrDefault())}, nil
 	}
-	res, found, err := inventoryResource(nodes, r, products)
+	res, found, err := inventoryResource(nodes, products)
 	if err != nil {
 		return "", nil, err
 	}
@@ -487,10 +485,10 @@ func (s *Server) gpuResource(ctx context.Context, r catalog.Requires, products [
 // found is whether any node carries one; res is empty when none of those
 // nodes recorded a resource. Two resources are refused: a pod requests one,
 // so which products it may land on would be decided by the scheduler.
-func inventoryResource(nodes []cluster.Node, r catalog.Requires, products []string) (res string, found bool, err error) {
+func inventoryResource(nodes []cluster.Node, products []string) (res string, found bool, err error) {
 	by := map[string][]string{}
 	for _, n := range nodes {
-		if n.GPUProduct == "" || !slices.Contains(products, n.GPUProduct) || r.ForeignResource(n.GPUResource) {
+		if n.GPUProduct == "" || !slices.Contains(products, n.GPUProduct) {
 			continue
 		}
 		found = true
@@ -570,7 +568,7 @@ func (s *Server) checkGPUProducts(ctx context.Context, v catalog.Variant, produc
 	if err != nil {
 		return nil, &gpuInventoryError{err}
 	}
-	have := clusterProducts(nodes, v.Requires)
+	have := clusterProducts(nodes)
 	var missing []string
 	for _, p := range off {
 		if !have[p] {
@@ -582,8 +580,8 @@ func (s *Server) checkGPUProducts(ctx context.Context, v catalog.Variant, produc
 		if len(have) > 0 {
 			present = strings.Join(slices.Sorted(maps.Keys(have)), ", ")
 		}
-		return nil, fmt.Errorf("forceGpuProducts: %s not on this cluster under %s (have: %s)",
-			strings.Join(missing, ", "), v.Requires.VendorOrDefault(), present)
+		return nil, fmt.Errorf("forceGpuProducts: %s not on this cluster (have: %s)",
+			strings.Join(missing, ", "), present)
 	}
 	warnings := make([]string, 0, len(off))
 	for _, p := range off {

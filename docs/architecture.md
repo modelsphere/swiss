@@ -62,8 +62,7 @@ resource ─► server.gpuProductLabels keys + nodes.gpuProductAliases ─► re
 | --- | --- |
 | nodes with the products report one resource | that resource |
 | they report two or more | refused: pass `gpuProducts` to narrow |
-| no node has them, none recorded a resource, no products, or nodes unreadable (warning) | the vendor's, from `catalog.accelerators` |
-| a node's resource is another vendor's well-known one | that node is ignored |
+| no node has them or none recorded a resource (warning outside nvidia), no products, or nodes unreadable (warning) | the vendor's, from `catalog.accelerators` |
 
 - `model.gpuResource` is written only for `requires.gpus > 0` and a resource other than `nvidia.com/gpu`, so nvidia plans render as before and stay valid on older charts. It yields to a catalog or site value.
 - A chart older than `compose.GPUResourceSince` (vllm 0.9.1, sglang 0.9.29) rejects the key in its schema, so such a plan is refused at compose.

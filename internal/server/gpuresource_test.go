@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/modelsphere/swiss/internal/catalog"
 	"github.com/modelsphere/swiss/internal/cluster"
 	"github.com/modelsphere/swiss/internal/config"
 	"github.com/modelsphere/swiss/internal/plan"
@@ -50,6 +49,26 @@ func requiredTerms(t *testing.T, p *plan.Plan) string {
 	}
 	b, _ := json.Marshal(terms)
 	return string(b)
+}
+
+// The product, not the vendor, picks the nodes: a matching node is used with
+// whatever resource it reports, even one the vendor table gives another vendor.
+func TestGPUResourceIgnoresTheVendorTable(t *testing.T) {
+	s := ascendServer(t, []cluster.Node{
+		{Name: "npu-1", GPUResource: "nvidia.com/gpu", GPUProduct: "Ascend-910B3", GPUs: 8},
+	}, nil, nil)
+	p, err := ascendPlan(t, s, "0.9.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// nvidia.com/gpu is the charts' default, so it is left unset, not the
+	// vendor's huawei.com/Ascend910.
+	if got, set := values.Get(p.Values(), "model.gpuResource"); set {
+		t.Fatalf("model.gpuResource = %v, want unset (the node's nvidia.com/gpu)", got)
+	}
+	if ws := p.Warnings; len(ws) != 0 {
+		t.Errorf("a matching node needs no warning: %v", ws)
+	}
 }
 
 // Inventory, not the vendor table, names the resource: a scheduler's own
@@ -157,19 +176,17 @@ func TestCatalogGPUProductBecomesDerivedAffinity(t *testing.T) {
 }
 
 func TestInventoryResource(t *testing.T) {
-	ascend := catalog.Requires{GPUs: 1, Vendor: "ascend"}
 	for name, tc := range map[string]struct {
 		nodes []cluster.Node
 		res   string
 		found bool
 	}{
-		"site resource":    {nodes: []cluster.Node{{GPUResource: volcano910B3, GPUProduct: "A"}}, res: volcano910B3, found: true},
-		"another vendor's": {nodes: []cluster.Node{{GPUResource: "nvidia.com/gpu", GPUProduct: "A"}}},
-		"unrecorded":       {nodes: []cluster.Node{{GPUProduct: "A"}}, found: true},
-		"other product":    {nodes: []cluster.Node{{GPUResource: volcano910B3, GPUProduct: "B"}}},
+		"site resource": {nodes: []cluster.Node{{GPUResource: volcano910B3, GPUProduct: "A"}}, res: volcano910B3, found: true},
+		"unrecorded":    {nodes: []cluster.Node{{GPUProduct: "A"}}, found: true},
+		"other product": {nodes: []cluster.Node{{GPUResource: volcano910B3, GPUProduct: "B"}}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			res, found, err := inventoryResource(tc.nodes, ascend, []string{"A"})
+			res, found, err := inventoryResource(tc.nodes, []string{"A"})
 			if err != nil || res != tc.res || found != tc.found {
 				t.Fatalf("got %q %v %v, want %q %v", res, found, err, tc.res, tc.found)
 			}
