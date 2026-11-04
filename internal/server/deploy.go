@@ -50,7 +50,8 @@ type planRequest struct {
 	// catalog's business and not the form's.
 	GPUProducts []string `json:"gpuProducts,omitempty"`
 	// ForceGPUProducts accepts gpuProducts the variant's catalog entry does not
-	// list, provided each one is on this cluster.
+	// list, provided each one is on this cluster under the resource the variant's
+	// own products resolve to.
 	// The variant's GPU count, image and values are used unchanged.
 	ForceGPUProducts bool        `json:"forceGpuProducts,omitempty"`
 	Overrides        values.Tree `json:"overrides,omitempty"`
@@ -240,6 +241,11 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 	gpuRes, resWarnings, err := s.gpuResource(ctx, v.Requires, products)
 	if err != nil {
 		return nil, err
+	}
+	if asked {
+		if err := s.checkVariantResource(ctx, v, products, req.ForceGPUProducts, gpuRes); err != nil {
+			return nil, err
+		}
 	}
 	warnings = append(warnings, resWarnings...)
 	// Affinity rather than nodeSelector: nodeSelector ANDs its labels, so it
@@ -479,6 +485,67 @@ func (s *Server) gpuResource(ctx context.Context, r catalog.Requires, products [
 		return def, []string{fmt.Sprintf("no node in this cluster's GPU inventory reports a resource for %s; requesting %s, the %s default (nodes advertising only another resource need it listed in server.gpuProductLabels)", strings.Join(products, ", "), def, r.VendorOrDefault())}, nil
 	}
 	return res, nil, nil
+}
+
+// checkVariantResource refuses requested products whose resource is not the
+// one the variant targets: requires is the hardware its image and args are
+// built for, so a deploy may swap products only within that resource. Products
+// the catalog lists only narrow the variant and are not checked; the guard
+// covers forced products and products named for a variant that lists none.
+func (s *Server) checkVariantResource(ctx context.Context, v catalog.Variant, products []string, force bool, res string) error {
+	r := v.Requires
+	if r.GPUs == 0 {
+		return nil
+	}
+	listed := len(r.GPUProduct) > 0
+	widens := !listed
+	for _, p := range products {
+		if !slices.Contains(r.GPUProduct, p) {
+			widens = true
+		}
+	}
+	if !widens {
+		return nil
+	}
+	var nodes []cluster.Node
+	if listed {
+		var err error
+		if nodes, err = s.nodes(ctx); err != nil {
+			// The requested resource fell back to the vendor's as well, and
+			// forced products already needed the inventory to get here.
+			nodes = nil
+		}
+	}
+	want := variantResources(nodes, r)
+	if slices.Contains(want, res) {
+		return nil
+	}
+	field, from := "gpuProducts", "the "+r.VendorOrDefault()+" default"
+	if force {
+		field = "forceGpuProducts"
+	}
+	if listed {
+		from = "requires.gpuProduct " + strings.Join(r.GPUProduct, ", ")
+	}
+	return fmt.Errorf("%s: GPU products %s request %s, but variant %s targets %s (from %s) -- its image and args are built for that hardware",
+		field, strings.Join(products, ", "), res, v.ID, strings.Join(want, " or "), from)
+}
+
+// variantResources is the resource the variant's own products resolve to on
+// this cluster: what nodes carrying requires.gpuProduct report, else, when none
+// carries one or records a resource (or it lists none), the vendor's default.
+func variantResources(nodes []cluster.Node, r catalog.Requires) []string {
+	var out []string
+	for _, n := range nodes {
+		if n.GPUProduct != "" && n.GPUResource != "" && slices.Contains(r.GPUProduct, n.GPUProduct) && !slices.Contains(out, n.GPUResource) {
+			out = append(out, n.GPUResource)
+		}
+	}
+	if len(out) == 0 {
+		return []string{r.ResourceName()}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // inventoryResource is the one resource the nodes carrying products report.

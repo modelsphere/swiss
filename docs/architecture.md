@@ -66,6 +66,7 @@ resource ─► server.gpuProductLabels keys + nodes.gpuProductAliases ─► re
 
 - `model.gpuResource` is written only for `requires.gpus > 0` and a resource other than `nvidia.com/gpu`, so nvidia plans render as before and stay valid on older charts. It yields to a catalog or site value.
 - A chart older than `compose.GPUResourceSince` (vllm 0.9.1, sglang 0.9.29) rejects the key in its schema, so such a plan is refused at compose.
+- `forceGpuProducts` swaps products only within the variant's hardware: `requires` is what its image and args target. The forced products' resource must be the one `requires.gpuProduct` resolves to on this cluster (the vendor's default when no node carries it or records a resource, or the variant lists none); otherwise the plan is refused (400) naming both. Request `gpuProducts` for a variant that lists no products are held to the same rule; products the catalog lists only narrow and are not checked.
 - The form's `gpuProducts` affinity is the form's; the catalog's is derived and yields to required node affinity the catalog or site already set.
 - Tolerations are not derived here.
 

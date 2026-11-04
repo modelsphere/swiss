@@ -4,10 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/modelsphere/swiss/internal/catalog"
 	"github.com/modelsphere/swiss/internal/cluster"
 	"github.com/modelsphere/swiss/internal/config"
 	"github.com/modelsphere/swiss/internal/plan"
@@ -194,28 +198,99 @@ func TestInventoryResource(t *testing.T) {
 	}
 }
 
-// A forced product only has to be on the cluster: another vendor's nodes count,
-// since the product, not the vendor, picks the nodes, and the pod requests the
-// resource those nodes report.
-func TestForcedGPUProductOnAnotherVendorsNodesIsAccepted(t *testing.T) {
-	const b300 = "NVIDIA-B300-SXM6-AC"
-	s := ascendServer(t, []cluster.Node{
-		{Name: "gpu-1", GPUResource: "nvidia.com/gpu", GPUProduct: b300, GPUs: 8, Schedulable: true},
-	}, nil, nil)
-	p, err := s.compose(context.Background(), planRequest{
+func forcedPlan(t *testing.T, s *Server, products ...string) (*plan.Plan, error) {
+	t.Helper()
+	return s.compose(context.Background(), planRequest{
 		Model: "qwen3-8b", Variant: "vllm-tp2-910b", ServiceID: "q", ChartVersion: "0.9.1",
-		GPUProducts: []string{b300}, ForceGPUProducts: true,
+		GPUProducts: products, ForceGPUProducts: true,
 	})
+}
+
+// requires is the hardware the variant's image and args target, so forcing
+// cannot move it to another vendor's nodes: with the catalog product absent,
+// the Ascend variant targets the ascend default, not the nodes' nvidia.com/gpu.
+func TestForcedGPUProductOnAnotherVendorsNodesIsRefused(t *testing.T) {
+	const h100 = "NVIDIA-H100-80GB-HBM3"
+	s := ascendServer(t, []cluster.Node{
+		{Name: "gpu-1", GPUResource: "nvidia.com/gpu", GPUProduct: h100, GPUs: 8, Schedulable: true},
+	}, nil, nil)
+	_, err := forcedPlan(t, s, h100)
+	if err == nil {
+		t.Fatal("forcing an Ascend variant onto nvidia nodes must be refused")
+	}
+	for _, want := range []string{"nvidia.com/gpu", "huawei.com/Ascend910", "forceGpuProducts"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal must name %s: %v", want, err)
+		}
+	}
+	s.cfg.Server.AllowDeploy = true
+	srv := httptest.NewServer(s.Handler())
+	t.Cleanup(srv.Close)
+	code, body := post(t, srv, "/api/plans", map[string]any{
+		"model": "qwen3-8b", "variant": "vllm-tp2-910b", "serviceId": "q", "chartVersion": "0.9.1",
+		"gpuProducts": []string{h100}, "forceGpuProducts": true,
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400: %v", code, body)
+	}
+}
+
+// The expected resource is what the catalog product's nodes report, not the
+// vendor default: a forced product under a different resource is refused even
+// within the same vendor.
+func TestForcedGPUProductUnderAnotherResourceIsRefused(t *testing.T) {
+	s := ascendServer(t, []cluster.Node{
+		{Name: "npu-1", GPUResource: volcano910B3, GPUProduct: "Ascend-910B3", GPUs: 8, Schedulable: true},
+		{Name: "npu-2", GPUResource: "huawei.com/Ascend910", GPUProduct: "Ascend-910B4", GPUs: 8, Schedulable: true},
+	}, nil, map[string]config.StringList{volcano910B3: {"npu.example.com/product"}})
+	_, err := forcedPlan(t, s, "Ascend-910B4")
+	if err == nil || !strings.Contains(err.Error(), volcano910B3) || !strings.Contains(err.Error(), "huawei.com/Ascend910") {
+		t.Fatalf("want a refusal naming both resources, got %v", err)
+	}
+}
+
+// A forced product on nodes reporting the catalog product's resource is a swap
+// within the same hardware class: accepted, with the usual warning.
+func TestForcedGPUProductUnderTheVariantsResourceIsAccepted(t *testing.T) {
+	const b4 = "Ascend-910B4"
+	s := ascendServer(t, []cluster.Node{
+		{Name: "npu-1", GPUResource: volcano910B3, GPUProduct: "Ascend-910B3", GPUs: 8, Schedulable: true},
+		{Name: "npu-2", GPUResource: volcano910B3, GPUProduct: b4, GPUs: 8, Schedulable: true},
+	}, nil, map[string]config.StringList{volcano910B3: {"npu.example.com/product"}})
+	p, err := forcedPlan(t, s, b4)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if terms := requiredTerms(t, p); !strings.Contains(terms, b300) {
+	if got, _ := values.Get(p.Values(), "model.gpuResource"); got != volcano910B3 {
+		t.Errorf("model.gpuResource = %v, want %s", got, volcano910B3)
+	}
+	if terms := requiredTerms(t, p); !strings.Contains(terms, b4) {
 		t.Errorf("the forced product must be the affinity: %s", terms)
 	}
-	if got, set := values.Get(p.Values(), "model.gpuResource"); set {
-		t.Errorf("model.gpuResource = %v, want unset (the nodes' nvidia.com/gpu)", got)
-	}
-	if ws := p.Warnings; len(ws) != 1 || !strings.Contains(ws[0], b300) {
+	if ws := p.Warnings; len(ws) != 1 || !strings.Contains(ws[0], b4) {
 		t.Errorf("want one warning naming the forced product, got %v", ws)
+	}
+}
+
+// With the catalog product on no node, or on nodes that recorded no resource,
+// or with no product listed, the variant targets its vendor's default.
+func TestVariantResources(t *testing.T) {
+	ascend := catalog.Requires{GPUs: 1, Vendor: "ascend", GPUProduct: []string{"A"}}
+	for name, tc := range map[string]struct {
+		nodes []cluster.Node
+		r     catalog.Requires
+		want  []string
+	}{
+		"inventory":   {nodes: []cluster.Node{{GPUResource: volcano910B3, GPUProduct: "A"}, {GPUResource: "nvidia.com/gpu", GPUProduct: "B"}}, r: ascend, want: []string{volcano910B3}},
+		"absent":      {nodes: []cluster.Node{{GPUResource: "nvidia.com/gpu", GPUProduct: "B"}}, r: ascend, want: []string{"huawei.com/Ascend910"}},
+		"unrecorded":  {nodes: []cluster.Node{{GPUProduct: "A"}}, r: ascend, want: []string{"huawei.com/Ascend910"}},
+		"none listed": {nodes: []cluster.Node{{GPUResource: volcano910B3, GPUProduct: "A"}}, r: catalog.Requires{GPUs: 1}, want: []string{"nvidia.com/gpu"}},
+		"two":         {nodes: []cluster.Node{{GPUResource: volcano910B3, GPUProduct: "A"}, {GPUResource: "huawei.com/Ascend910", GPUProduct: "A"}}, r: ascend, want: []string{"huawei.com/Ascend910", volcano910B3}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := variantResources(tc.nodes, tc.r); !slices.Equal(got, tc.want) {
+				t.Errorf("got %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
