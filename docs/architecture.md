@@ -50,54 +50,26 @@ Composition is a few inputs with key sets and strict precedence. Later layer ove
 
 ## GPU placement
 
-swissd resolves placement in `compose` before `compose.Compose` writes the chart values. Inputs are the variant's `requires` (`gpus`, `vendor` — empty means nvidia — and `gpuProduct`), the request's `gpuProducts` and `forceGpuProducts`, and node inventory: `server.gpuProductLabels` over `DefaultGPUProductLabels`, then `nodes.gpuProductAliases`. The vendor default resource is `Requires.ResourceName()` from the `accelerators` table.
+The variant's `requires` is the source of truth for target hardware: `vendor` (empty means nvidia), `gpuProduct`, and `gpus`. Cluster GPU inventory — swissd `server.gpuProductLabels` and the site profile's `nodes.gpuProductAliases` — maps a product to the extended resource its nodes report and the labels that identify it. Placement looks that product up and records `model.gpuResource` for the container limit and required node affinity onto those nodes, using the vendor's default resource when the cluster does not know the product. `gpuProducts` only narrows within `requires.gpuProduct`; another product takes `forceGpuProducts`, or `gpuProducts` on a variant that lists none, and must map to the same resource.
 
 ```mermaid
 flowchart TD
-  inputs["Inputs: requires, gpuProducts, forceGpuProducts, inventory"]
-  chk{"Outside requires.gpuProduct, and the variant lists some?"}
-  rej["400, or 502 when force cannot read nodes"]
-  pick["Products: request gpuProducts, else requires.gpuProduct"]
-  route{"Which resource lookup?"}
-  cpu["Vendor default. No model.gpuResource"]
-  look["Resolve one resource from inventory"]
-  many["400: narrow to one resource"]
-  vend["Vendor default"]
-  wide{"Widened request on a different resource?"}
-  bad["400: not the variant resource"]
-  aff["Affinity: label keys of the resource, plus alias terms"]
-  wr["model.gpus. model.gpuResource when gpus > 0 and not nvidia.com/gpu"]
-  gate{"Derived model.gpuResource, and the chart is below the minimum?"}
-  old["Refused: vllm >= 0.9.1, sglang >= 0.9.29"]
-  plan["Plan"]
-  inputs --> chk
-  chk -->|no| pick
-  chk -->|"yes, forced and on the cluster"| pick
-  chk -->|"yes, otherwise"| rej
-  pick --> route
-  route -->|"gpus == 0, request products"| cpu
-  route -->|"gpus == 0, no gpuProducts: vendor default"| wr
-  route -->|"gpus > 0, no products: vendor default"| wr
-  route -->|"gpus > 0, with products"| look
-  look -->|one| wide
-  look -->|several| many
-  look -->|"none or unreadable"| vend
-  cpu --> aff
-  vend --> wide
-  wide -->|yes| bad
-  wide -->|no| aff
-  aff --> wr
-  wr --> gate
-  gate -->|yes| old
-  gate -->|no| plan
+  hw["requires: target hardware"]
+  over["Override on the same resource"]
+  inv["Inventory: product, resource, labels"]
+  look["Look up the product"]
+  found["Reported resource or vendor default"]
+  res["model.gpuResource"]
+  pin["Required node affinity"]
+  hw --> look
+  over --> look
+  inv --> look
+  look --> found
+  found --> res
+  found --> pin
 ```
 
-- Request `gpuProducts` when `gpus == 0` still get form-layer affinity on the vendor default's label keys. Request affinity is the form layer; catalog affinity is derived only while required `nodeSelectorTerms` is unset on the catalog and site layers.
-- A node's resource is the first sorted label-map name with a positive allocatable, and its product is the first non-empty value of that resource's keys. An alias overrides that product when the node has a GPU resource; the selector with the most labels wins.
-- Fallback warns when nodes are unreadable, or when a non-nvidia vendor has no recorded resource for the products. Nvidia with nothing recorded, and a deploy with no products, stay quiet.
-- A forced product that is absent is 400, and unreadable nodes on that force check are 502. A widened request must match the resource nodes with `requires.gpuProduct` report, or the vendor default when none do; narrowing is unchecked.
-- Terms are ORed, and labels inside an alias are ANDed. No terms is a 400 for request products and a warning that leaves catalog products unpinned.
-- The chart gate reads only the derived `model.gpuResource`; an unknown chart name or an unparsable version skips it. The CLI has no inventory, so only emit-and-gate runs against the vendor default, and tolerations are not derived.
+- Tolerations are not part of this; site configuration for them is future work.
 
 ## Pipeline
 
