@@ -458,7 +458,9 @@ func clusterProducts(nodes []cluster.Node, r catalog.Requires) map[string]bool {
 
 // gpuResource is the extended resource a variant's pods request: the one
 // inventory reports for nodes carrying its products, else the vendor's.
-// Unreadable nodes fall back with a warning rather than fail the plan.
+// Unreadable nodes, or (outside nvidia, whose resource is universal) none
+// reporting a resource for the products, fall back with a warning rather
+// than fail the plan.
 func (s *Server) gpuResource(ctx context.Context, r catalog.Requires, products []string) (string, []string, error) {
 	def := r.ResourceName()
 	if r.GPUs == 0 || len(products) == 0 {
@@ -473,7 +475,10 @@ func (s *Server) gpuResource(ctx context.Context, r catalog.Requires, products [
 		return "", nil, err
 	}
 	if !found || res == "" {
-		return def, nil, nil
+		if r.VendorOrDefault() == "nvidia" {
+			return def, nil, nil
+		}
+		return def, []string{fmt.Sprintf("no node in this cluster's GPU inventory reports a resource for %s; requesting %s, the %s default (nodes advertising only another resource need it listed in server.gpuProductLabels)", strings.Join(products, ", "), def, r.VendorOrDefault())}, nil
 	}
 	return res, nil, nil
 }

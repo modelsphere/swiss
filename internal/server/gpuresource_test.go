@@ -80,14 +80,14 @@ func TestGPUResourceFollowsInventory(t *testing.T) {
 }
 
 // No node carries the product, or the nodes are unreadable: the vendor's own
-// resource, with a warning only when inventory could not be asked.
+// resource, with a warning either way since the pods may not schedule.
 func TestGPUResourceFallsBackToTheVendor(t *testing.T) {
 	for name, tc := range map[string]struct {
 		nodes   []cluster.Node
 		err     error
 		warning bool
 	}{
-		"no node has it": {nodes: []cluster.Node{{Name: "npu-1", GPUResource: volcano910B3, GPUProduct: "Ascend-910B4", GPUs: 8}}},
+		"no node has it": {nodes: []cluster.Node{{Name: "npu-1", GPUResource: volcano910B3, GPUProduct: "Ascend-910B4", GPUs: 8}}, warning: true},
 		"unreadable":     {err: errors.New("nodes is forbidden"), warning: true},
 	} {
 		t.Run(name, func(t *testing.T) {
