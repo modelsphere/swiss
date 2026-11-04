@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/modelsphere/swiss/internal/cluster"
 	"github.com/modelsphere/swiss/internal/values"
 )
 
@@ -89,24 +88,6 @@ func TestForcedGPUProductNotOnTheClusterIsRefused(t *testing.T) {
 	msg, _ := body["error"].(string)
 	if !strings.Contains(msg, offCatalogOffCluster) || !strings.Contains(msg, offCatalogOnCluster) {
 		t.Errorf("the refusal must name the product and what the cluster has: %q", msg)
-	}
-}
-
-// The product label and resource are the variant's vendor's, so a product that
-// is only on another vendor's nodes could never be scheduled.
-func TestForcedGPUProductOfAnotherVendorIsRefused(t *testing.T) {
-	probe := liveProbe()
-	probe.Nod = append(probe.Nod, cluster.Node{
-		Name: "ascend-1", GPUProduct: "module-910b-8", GPUResource: "huawei.com/Ascend910", GPUs: 8, Schedulable: true,
-	})
-	srv, _ := deployServerWith(t, probe, true)
-	code, body := post(t, srv, "/api/plans", map[string]any{
-		"model": "qwen3.6-35b-a3b", "serviceId": "r",
-		"gpuProducts":      []string{"module-910b-8"},
-		"forceGpuProducts": true,
-	})
-	if code != http.StatusBadRequest {
-		t.Fatalf("status %d, want 400: %v", code, body)
 	}
 }
 

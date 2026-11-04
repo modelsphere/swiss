@@ -44,9 +44,49 @@ Composition is a few inputs with key sets and strict precedence. Later layer ove
 | **site defaults** (`defaults`) | the site's preferences, config it in `defaults.features` in the profile, the `cart`, `serviceMonitor`, `sloRequirement` and `scaler` `enabled` flags, unset on |
 | **catalog variant** | model deployment recipes define in [model-catalog](https://github.com/modelsphere/model-catalog) and how it parallelizes: `model.*`, `extraArgs`, `lws.*`, `env`, `image.repository` |
 | **site profile** | what makes it work here: the registry mirror, cache paths, route ConfigMaps, namespace, the `model.localPath` template, the default scheduler and priority class |
-| **derived** | swiss's rules, above the variant: a section the form filled in is switched on, `cache.maxSlotsPerNode` |
+| **derived** | swiss's rules, above the variant: a section the form filled in is switched on, `cache.maxSlotsPerNode`, `model.gpuResource` and the `requires.gpuProduct` node affinity (see [GPU placement](#gpu-placement)) |
 | **user form** | how much, where, how routed: `serviceId`, `replicaCount`, `scaler.*`, `modelRoute.*`, scheduling |
 | **plan editor** | the escape hatch, applied last — any key, exempt from ownership, labelled `edit` |
+
+## GPU placement
+
+Placement turns the variant's hardware contract into a GPU resource name and a node pin.
+
+### Concepts
+
+| Concept | Source | Role |
+| --- | --- | --- |
+| Hardware contract | variant `requires` (`vendor`, empty = nvidia; `gpuProduct`; `gpus`) | what the model needs; source of truth |
+| Cluster inventory | swissd `server.gpuProductLabels` + site `nodes.gpuProductAliases` | maps a product to the resource its nodes report and the labels that identify them |
+| Override | install request `gpuProducts` / `forceGpuProducts` | picks a different product, never a different resource |
+
+```mermaid
+flowchart TD
+  hw["Hardware contract: requires"]
+  over["Override: same resource only"]
+  inv["Cluster inventory"]
+  look["Look up the product"]
+  found["Reported resource or vendor default"]
+  res["model.gpuResource"]
+  pin["Required node affinity"]
+  hw --> look
+  over --> look
+  inv --> look
+  look --> found
+  found --> res
+  found --> pin
+```
+
+### Rules
+
+1. Resolve: look the product up in the inventory; if the cluster does not know it, use the vendor's default resource.
+2. Resource: write `model.gpuResource` only when `gpus > 0` and the resource is not `nvidia.com/gpu`.
+3. Pin: add a required node affinity on the product's labels, unless the catalog or site profile already sets one.
+4. Override: `gpuProducts` narrows within `requires.gpuProduct`; `forceGpuProducts` (or `gpuProducts` on a variant that lists none) may pick another product only if it resolves to the same resource, otherwise the request is rejected.
+
+### Out of scope
+
+- Tolerations are not part of this; site configuration for them is future work.
 
 ## Pipeline
 

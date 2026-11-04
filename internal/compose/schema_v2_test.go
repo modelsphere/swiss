@@ -28,7 +28,7 @@ func TestComposeV2PlanUsesVariantPin(t *testing.T) {
 	}
 	p, err := Compose(Input{
 		Catalog: c.Source(), Ref: c.Ref(), Schema: c.Schema(), Resolved: r,
-		Profile: testProfile, Release: "qwen", ChartVersion: "0.7.6",
+		Profile: testProfile, Release: "qwen", ChartVersion: "0.9.1",
 	})
 	if err != nil {
 		t.Fatal(err)

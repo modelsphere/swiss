@@ -1795,7 +1795,7 @@ components:
         namespace: { type: string, description: "Defaults to the site profile's namespace." }
         serviceId: { type: string, description: "The route, scaler and SLO identity. Cannot change on an upgrade." }
         localPath: { type: string, description: "Overrides the profile's path template." }
-        gpuProducts: { type: array, items: { type: string }, description: "Any one of these products." }
+        gpuProducts: { type: array, items: { type: string }, description: "Any one of these products. Empty uses the variant's requires.gpuProduct." }
         forceGpuProducts: { type: boolean, default: false, description: "Accept products the variant does not list, if this cluster has them." }
         overrides: { type: object, description: "Form-layer values. On an upgrade, merged over the release's form layer." }
         overridesYAML: { type: string, description: "Form-layer values as YAML text." }
