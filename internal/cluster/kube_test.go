@@ -15,6 +15,8 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
+
+	"github.com/modelsphere/swiss/internal/gpu"
 )
 
 // helmSecret builds a release Secret the way helm's storage driver does:
@@ -192,6 +194,12 @@ func TestPodsCarryDeletion(t *testing.T) {
 	}
 }
 
+// testGPUs is a site profile's nodes.gpus for the two vendors these tests use.
+var testGPUs = gpu.Table{
+	{Vendor: "nvidia", Resource: "nvidia.com/gpu", LabelKey: "nvidia.com/gpu.product"},
+	{Vendor: "ascend", Resource: "huawei.com/Ascend910", LabelKey: "accelerator/huawei-ascend910"},
+}
+
 func TestNodesReadGPUFacts(t *testing.T) {
 	cs := fake.NewSimpleClientset(&corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{
@@ -214,7 +222,7 @@ func TestNodesReadGPUFacts(t *testing.T) {
 			},
 		},
 	})
-	got, err := NewKubeWithClient(cs).Nodes(context.Background())
+	got, err := NewKubeWithClient(cs).Nodes(context.Background(), testGPUs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,9 +280,8 @@ func TestNodesReadAscendAndOtherAccelerators(t *testing.T) {
 			},
 		},
 	)
-	k := NewKubeWithClient(cs)
-	k.GPUProductLabels = map[string][]string{"custom.com/npu": {"custom.com/npu.sku"}}
-	got, err := k.Nodes(context.Background())
+	gpus := append(gpu.Table{{Vendor: "cambricon", Resource: "custom.com/npu", LabelKey: "custom.com/npu.sku"}}, testGPUs...)
+	got, err := NewKubeWithClient(cs).Nodes(context.Background(), gpus)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,8 +293,9 @@ func TestNodesReadAscendAndOtherAccelerators(t *testing.T) {
 	if ascend.GPUs != 8 || ascend.GPUProduct != "module-910b-8" || ascend.GPUResource != "huawei.com/Ascend910" {
 		t.Fatalf("unexpected ascend node: %+v", ascend)
 	}
+	// One labelKey per resource: a label beside it names nothing.
 	ascendAccel := byName["ascend-accelerator-label"]
-	if ascendAccel.GPUs != 8 || ascendAccel.GPUProduct != "huawei-Ascend910" || ascendAccel.GPUResource != "huawei.com/Ascend910" {
+	if ascendAccel.GPUs != 8 || ascendAccel.GPUProduct != "" || ascendAccel.GPUResource != "huawei.com/Ascend910" {
 		t.Fatalf("unexpected ascend accelerator-label node: %+v", ascendAccel)
 	}
 	ascendUnlabelled := byName["ascend-unlabelled"]
@@ -353,9 +361,9 @@ func TestScopedProbeListsPerNamespace(t *testing.T) {
 	}
 }
 
-// An install that does not publish the catalog's product name still reports
-// it, so the node matches a variant listing that name.
-func TestAliasesRenameGPUNodes(t *testing.T) {
+// An install that does not label nodes with the catalog's product name still
+// reports it, through values under the resource's labelKey.
+func TestValuesNameGPUProducts(t *testing.T) {
 	ascend := func(name string, labels map[string]string) *corev1.Node {
 		return &corev1.Node{
 			ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels},
@@ -365,23 +373,69 @@ func TestAliasesRenameGPUNodes(t *testing.T) {
 		}
 	}
 	cs := fake.NewSimpleClientset(
-		ascend("broad", map[string]string{"accelerator": "huawei-Ascend910"}),
-		ascend("specific", map[string]string{"accelerator": "huawei-Ascend910", "accelerator-type": "module-910b4-8"}),
-		ascend("other-install", map[string]string{"accelerator/huawei-ascend910": "module-910b-8"}),
+		ascend("b4", map[string]string{"accelerator": "huawei-Ascend910", "accelerator-type": "module-910b4-8"}),
+		ascend("canonical", map[string]string{"accelerator-type": "Ascend-910B4"}),
+		ascend("other", map[string]string{"accelerator-type": "module-910b-8"}),
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "cpu", Labels: map[string]string{"accelerator-type": "module-910b4-8"}}},
 	)
-	got, err := NewKubeWithClient(cs).Nodes(context.Background())
+	gpus := gpu.Table{{
+		Vendor: "ascend", Resource: "huawei.com/Ascend910", LabelKey: "accelerator-type",
+		Products: []gpu.Product{{Product: "Ascend-910B4", Values: []string{"module-910b4-8"}}},
+	}}
+	got, err := NewKubeWithClient(cs).Nodes(context.Background(), gpus)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got = append(got, Node{Name: "cpu", Labels: map[string]string{"accelerator": "huawei-Ascend910"}})
-	ApplyGPUProductAliases(got, map[string][]map[string]string{
-		"Ascend-910B3": {{"accelerator": "huawei-Ascend910"}},
-		"Ascend-910B4": {{"accelerator": "huawei-Ascend910", "accelerator-type": "module-910b4-8"}},
-	})
-	want := map[string]string{"broad": "Ascend-910B3", "specific": "Ascend-910B4", "other-install": "module-910b-8", "cpu": ""}
+	want := map[string]string{"b4": "Ascend-910B4", "canonical": "Ascend-910B4", "other": "module-910b-8", "cpu": ""}
 	for _, n := range got {
 		if n.GPUProduct != want[n.Name] {
 			t.Errorf("%s: product %q, want %q", n.Name, n.GPUProduct, want[n.Name])
 		}
+	}
+}
+
+// A node advertising two of the table's resources is one GPU kind, read under
+// the first, so its devices are not counted twice.
+func TestNodeWithTwoResourcesIsReadUnderTheFirst(t *testing.T) {
+	cs := fake.NewSimpleClientset(&corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "npu-1", Labels: map[string]string{
+			"volcano.sh/npu-name": "Ascend910B3", "accelerator/huawei-ascend910": "module-910b-8",
+		}},
+		Status: corev1.NodeStatus{Allocatable: corev1.ResourceList{
+			"huawei.com/Ascend910":   resource.MustParse("8"),
+			"volcano.sh/Ascend910B3": resource.MustParse("8"),
+		}},
+	})
+	gpus := append(gpu.Table{{
+		Vendor: "ascend", Resource: "volcano.sh/Ascend910B3", LabelKey: "volcano.sh/npu-name",
+		Products: []gpu.Product{{Product: "Ascend-910B3", Values: []string{"Ascend910B3"}}},
+	}}, testGPUs...)
+	got, err := NewKubeWithClient(cs).Nodes(context.Background(), gpus)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := got[0]; n.GPUs != 8 || n.GPUResource != "volcano.sh/Ascend910B3" || n.GPUProduct != "Ascend-910B3" {
+		t.Fatalf("unexpected node: %+v", n)
+	}
+}
+
+// Usage counts every resource the table lists, a site's own included.
+func TestGPUAllocationsCountTheTablesResources(t *testing.T) {
+	pod := func(name string, res corev1.ResourceName) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "models", Name: name},
+			Spec: corev1.PodSpec{NodeName: "npu-1", Containers: []corev1.Container{{
+				Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{res: resource.MustParse("2")}},
+			}}},
+		}
+	}
+	cs := fake.NewSimpleClientset(pod("site", "volcano.sh/Ascend910B3"), pod("builtin", "huawei.com/Ascend910"), pod("cpu", "cpu"))
+	gpus := append(gpu.Table{{Vendor: "ascend", Resource: "volcano.sh/Ascend910B3", LabelKey: "volcano.sh/npu-name"}}, testGPUs...)
+	got, err := NewKubeWithClient(cs).GPUAllocations(context.Background(), gpus)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pods := got["npu-1"]; len(pods) != 2 {
+		t.Fatalf("want the two GPU pods, got %+v", pods)
 	}
 }

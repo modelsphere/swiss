@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/modelsphere/swiss/internal/cluster"
+	"github.com/modelsphere/swiss/internal/gpu"
 )
 
 func gpuProbe() cluster.Fake {
@@ -109,7 +110,7 @@ func TestNodesEndpointFailsLoudlyWhenNodesCannotBeListed(t *testing.T) {
 
 type failingNodes struct{ cluster.Fake }
 
-func (failingNodes) Nodes(context.Context) ([]cluster.Node, error) {
+func (failingNodes) Nodes(context.Context, gpu.Table) ([]cluster.Node, error) {
 	return nil, errors.New("nodes is forbidden")
 }
 

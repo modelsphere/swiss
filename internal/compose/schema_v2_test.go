@@ -6,13 +6,21 @@ import (
 	"testing"
 
 	"github.com/modelsphere/swiss/internal/catalog"
+	"github.com/modelsphere/swiss/internal/gpu"
 	"github.com/modelsphere/swiss/internal/site"
 )
+
+// testGPUs is a site's nodes.gpus for the vendors the fixtures use.
+var testGPUs = gpu.Table{
+	{Vendor: "nvidia", Resource: "nvidia.com/gpu", LabelKey: "nvidia.com/gpu.product"},
+	{Vendor: "ascend", Resource: "huawei.com/Ascend910", LabelKey: "accelerator/huawei-ascend910"},
+}
 
 var testProfile = site.Profile{
 	Name: "test", Namespace: "models",
 	Model:     site.ModelPaths{PathTemplate: "/models/{{name}}"},
 	ChartPath: "/charts",
+	Nodes:     site.Nodes{GPUs: &testGPUs},
 }
 
 // A v2 plan pins the variant file it was composed from, and says it is v2.

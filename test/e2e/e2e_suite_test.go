@@ -39,7 +39,6 @@ const (
 	llmOperatorURL      = "https://raw.githubusercontent.com/modelsphere/llm-operator/%s/dist/install.yaml"
 	defaultReadySeconds = 300
 	defaultLocalPort    = 18080
-	defaultCatalog      = "/etc/swiss-e2e-catalog"
 )
 
 type suiteConfig struct {
@@ -139,7 +138,7 @@ func loadConfig() suiteConfig {
 		kubectlBin:   envOr("KUBECTL", "kubectl"),
 		helmBin:      envOr("HELM", "helm"),
 		cluster:      envOr("KIND_CLUSTER", "swiss-test-e2e"),
-		catalog:      envOr("CATALOG", defaultCatalog),
+		catalog:      envOr("CATALOG", "https://modelsphere.github.io/mock-llmd/"),
 		chartRepo:    envOr("CHART_REPO", "https://modelsphere.github.io/helm-charts"),
 		llmOperator:  envOr("LLM_OPERATOR_VERSION", "v0.5.0"),
 		autoconfig:   envOr("AUTOCONFIG_CHART_VERSION", "0.4.1"),
@@ -235,27 +234,6 @@ func installSwiss(image string) {
 		"--wait", "--timeout", "180s",
 	)
 	Expect(err).NotTo(HaveOccurred(), out)
-
-	if cfg.catalog == defaultCatalog {
-		By("mounting the pinned CPU-only e2e catalog")
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		files, err := os.ReadDir(filepath.Join(root, "test/e2e/testdata/catalog"))
-		Expect(err).NotTo(HaveOccurred())
-		data := map[string]string{}
-		for _, file := range files {
-			raw, err := os.ReadFile(filepath.Join(root, "test/e2e/testdata/catalog", file.Name()))
-			Expect(err).NotTo(HaveOccurred())
-			data[file.Name()] = string(raw)
-		}
-		cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "swiss-e2e-catalog", Namespace: cfg.swissNS}, Data: data}
-		if _, err = kube.CoreV1().ConfigMaps(cfg.swissNS).Create(ctx, cm, metav1.CreateOptions{}); apierrors.IsAlreadyExists(err) {
-			_, err = kube.CoreV1().ConfigMaps(cfg.swissNS).Update(ctx, cm, metav1.UpdateOptions{})
-		}
-		Expect(err).NotTo(HaveOccurred())
-		patch := `{"spec":{"template":{"spec":{"containers":[{"name":"swissd","volumeMounts":[{"name":"e2e-catalog","mountPath":"` + defaultCatalog + `","readOnly":true}]}],"volumes":[{"name":"e2e-catalog","configMap":{"name":"swiss-e2e-catalog"}}]}}}}`
-		mustKubectl("-n", cfg.swissNS, "patch", "deployment/"+swissRelease, "--type=strategic", "-p", patch)
-	}
 
 	// A reused cluster keeps the old pod when only the image content changed.
 	By("restarting swiss")

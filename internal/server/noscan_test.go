@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/modelsphere/swiss/internal/cluster"
+	"github.com/modelsphere/swiss/internal/gpu"
 )
 
 // noScan fails the cluster-wide reads.
@@ -21,13 +22,13 @@ type noScan struct {
 	t *testing.T
 }
 
-func (p noScan) Nodes(context.Context) ([]cluster.Node, error) {
+func (p noScan) Nodes(context.Context, gpu.Table) ([]cluster.Node, error) {
 	p.t.Helper()
 	p.t.Error("a release path must not list every node in the cluster")
 	return nil, fmt.Errorf("cluster-wide node list")
 }
 
-func (p noScan) GPUAllocations(context.Context) (map[string][]cluster.GPUPod, error) {
+func (p noScan) GPUAllocations(context.Context, gpu.Table) (map[string][]cluster.GPUPod, error) {
 	p.t.Helper()
 	p.t.Error("a release path must not list every pod in the cluster")
 	return nil, fmt.Errorf("cluster-wide pod list")

@@ -16,6 +16,8 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/modelsphere/swiss/internal/gpu"
 )
 
 // Release is a live helm release, enough to answer "would this collide" and
@@ -54,8 +56,8 @@ type ManagedRef struct {
 // Node is what a fit check needs, plus what a node view shows.
 type Node struct {
 	Name        string
-	GPUProduct  string // node label for GPU SKU (e.g. nvidia.com/gpu.product, accelerator/huawei-ascend910)
-	GPUResource string // the matching extended resource (e.g. nvidia.com/gpu, huawei.com/Ascend910)
+	GPUProduct  string // the product its resource's labelKey names (gpu.GPU.Product)
+	GPUResource string // the GPU table's extended resource it advertises (e.g. nvidia.com/gpu, huawei.com/Ascend910)
 	// GPUs is allocatable, which is what a fit check must compare against --
 	// capacity counts GPUs the kubelet has reserved away.
 	GPUs        int
@@ -134,7 +136,9 @@ type Probe interface {
 	// decoding every release in scope. helm labels its storage with the release
 	// name, so this asks for the one.
 	Release(ctx context.Context, namespace, name string) (*Release, error)
-	Nodes(ctx context.Context) ([]Node, error)
+
+	// Nodes reads GPUs by the table: which resources count, and the label naming each product.
+	Nodes(ctx context.Context, gpus gpu.Table) ([]Node, error)
 	// ConfigMap reads a ConfigMap given as "ns/name". Route collisions are
 	// detected from its key set before a write, rather than after two models are
 	// fighting over one openresty key; site profiles are read from one whole.
@@ -152,7 +156,7 @@ type Probe interface {
 	// Separate from Nodes because it needs a cluster-wide pod list, a grant a
 	// cluster may withhold: a node view without it shows capacity and says the
 	// usage is unknown, rather than showing an undercount as if it were true.
-	GPUAllocations(ctx context.Context) (map[string][]GPUPod, error)
+	GPUAllocations(ctx context.Context, gpus gpu.Table) (map[string][]GPUPod, error)
 	// Object reads one custom resource a release rendered. Nil when it is gone.
 	Object(ctx context.Context, ref ObjectRef) (*Object, error)
 	// Deployment reads one Deployment. Nil, nil when it is gone.
@@ -262,7 +266,7 @@ func (f Fake) Release(_ context.Context, namespace, name string) (*Release, erro
 	}
 	return nil, nil
 }
-func (f Fake) Nodes(context.Context) ([]Node, error) {
+func (f Fake) Nodes(context.Context, gpu.Table) ([]Node, error) {
 	if f.NodErr != nil {
 		return nil, f.NodErr
 	}
@@ -321,7 +325,7 @@ func matchSelector(labels map[string]string, selector string) bool {
 	return true
 }
 
-func (f Fake) GPUAllocations(context.Context) (map[string][]GPUPod, error) {
+func (f Fake) GPUAllocations(context.Context, gpu.Table) (map[string][]GPUPod, error) {
 	if f.AllocErr != nil {
 		return nil, f.AllocErr
 	}

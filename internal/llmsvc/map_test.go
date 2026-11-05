@@ -10,6 +10,7 @@ import (
 
 	"github.com/modelsphere/swiss/internal/catalog"
 	"github.com/modelsphere/swiss/internal/compose"
+	"github.com/modelsphere/swiss/internal/gpu"
 	"github.com/modelsphere/swiss/internal/plan"
 	"github.com/modelsphere/swiss/internal/site"
 	"github.com/modelsphere/swiss/internal/values"
@@ -479,7 +480,7 @@ func realistic(t *testing.T) *plan.Plan {
 			Model:     site.ModelPaths{PathTemplate: "/mnt/disk0/models/{{name}}"},
 			Registry:  site.Registry{Mirror: "ghcr.io/modelsphere"},
 			Cache:     site.Cache{Enabled: true, HostPath: "/mnt/disk0/sglang-cache"},
-			Nodes:     site.Nodes{GPUsPerNode: 8},
+			Nodes:     site.Nodes{GPUsPerNode: 8, GPUs: &gpu.Table{{Vendor: "nvidia", Resource: "nvidia.com/gpu", LabelKey: "nvidia.com/gpu.product"}}},
 		},
 		Release:   "qwen",
 		Namespace: "models",

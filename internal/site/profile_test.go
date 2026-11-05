@@ -1,7 +1,9 @@
 package site
 
 import (
+	"encoding/json"
 	"maps"
+	"strings"
 	"testing"
 	"time"
 )
@@ -75,7 +77,7 @@ func TestModelURLJoinsTheGatewayAndRoute(t *testing.T) {
 // The catalog set here wins over swissd's config file, so what it may say is
 // checked when the profile is parsed rather than when a fetch fails.
 func TestCatalogValidation(t *testing.T) {
-	const head = "name: prod\nmodel:\n  pathTemplate: /models/{{name}}\n"
+	const head = "name: prod\nmodel:\n  pathTemplate: /models/{{name}}\nnodes:\n  gpus: []\n"
 
 	for name, want := range map[string]string{
 		"https://models.example.com/swiss-catalog/": "https://models.example.com/swiss-catalog/",
@@ -107,7 +109,7 @@ func TestCatalogValidation(t *testing.T) {
 // A catalog list is what a page selects from, so each entry needs a usable,
 // unique name and a location the single-catalog field would also accept.
 func TestCatalogsValidation(t *testing.T) {
-	const head = "name: prod\nmodel:\n  pathTemplate: /models/{{name}}\n"
+	const head = "name: prod\nmodel:\n  pathTemplate: /models/{{name}}\nnodes:\n  gpus: []\n"
 
 	p, err := Parse([]byte(head+`catalogs:
   - name: " public "
@@ -141,7 +143,7 @@ func TestCatalogsValidation(t *testing.T) {
 // Only a catalog catalog-server can serve may be marked writable, and the
 // profile holds no token for it.
 func TestWritableCatalog(t *testing.T) {
-	const head = "name: prod\nmodel:\n  pathTemplate: /models/{{name}}\ncatalogs:\n  - name: internal\n"
+	const head = "name: prod\nmodel:\n  pathTemplate: /models/{{name}}\nnodes:\n  gpus: []\ncatalogs:\n  - name: internal\n"
 
 	p, err := Parse([]byte(head+"    url: https://catalog.example.com/\n    schemaVersion: v2\n    writable: true\n"), "test")
 	if err != nil {
@@ -166,7 +168,7 @@ func TestWritableCatalog(t *testing.T) {
 
 // One catalog may be marked default; it is the one a page opens in.
 func TestCatalogDefault(t *testing.T) {
-	p, err := Parse([]byte("name: prod\nmodel:\n  pathTemplate: /models/{{name}}\n"+
+	p, err := Parse([]byte("name: prod\nmodel:\n  pathTemplate: /models/{{name}}\nnodes:\n  gpus: []\n"+
 		"catalogs:\n  - name: a\n    url: /mnt/a\n  - name: b\n    url: /mnt/b\n    default: true\n"), "test")
 	if err != nil {
 		t.Fatal(err)
@@ -179,14 +181,14 @@ func TestCatalogDefault(t *testing.T) {
 // A profile from before the list reads as one catalog named "default", so an
 // existing site keeps working without editing its profile.
 func TestLoneCatalogIsTheDefault(t *testing.T) {
-	p, err := Parse([]byte("name: prod\nmodel:\n  pathTemplate: /models/{{name}}\ncatalog: /mnt/c\n"), "test")
+	p, err := Parse([]byte("name: prod\nmodel:\n  pathTemplate: /models/{{name}}\nnodes:\n  gpus: []\ncatalog: /mnt/c\n"), "test")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := p.CatalogRepos(); len(got) != 1 || got[0] != (CatalogRepo{Name: DefaultCatalogName, URL: "/mnt/c"}) {
 		t.Errorf("got %+v, want one catalog named default", got)
 	}
-	none, _ := Parse([]byte("name: prod\nmodel:\n  pathTemplate: /models/{{name}}\n"), "test")
+	none, _ := Parse([]byte("name: prod\nmodel:\n  pathTemplate: /models/{{name}}\nnodes:\n  gpus: []\n"), "test")
 	if got := none.CatalogRepos(); len(got) != 0 {
 		t.Errorf("a profile naming no catalog lists none, got %+v", got)
 	}
@@ -197,6 +199,8 @@ func TestSitesValidation(t *testing.T) {
 name: prod
 model:
   pathTemplate: /models/{{name}}
+nodes:
+  gpus: []
 sites:
   - name: " dev "
     url: " https://swiss.dev.internal "
@@ -214,6 +218,8 @@ sites:
 name: prod
 model:
   pathTemplate: /models/{{name}}
+nodes:
+  gpus: []
 sites:
   - url: https://swiss.dev.internal
 `,
@@ -221,6 +227,8 @@ sites:
 name: prod
 model:
   pathTemplate: /models/{{name}}
+nodes:
+  gpus: []
 sites:
   - name: dev
 `,
@@ -228,6 +236,8 @@ sites:
 name: prod
 model:
   pathTemplate: /models/{{name}}
+nodes:
+  gpus: []
 sites:
   - name: dev
     url: swiss.dev.internal
@@ -239,44 +249,99 @@ sites:
 	}
 }
 
-func TestGPUProductAliases(t *testing.T) {
+func TestGPUs(t *testing.T) {
 	const head = "name: prod\nmodel:\n  pathTemplate: /models/{{name}}\n"
 	p, err := Parse([]byte(head+`nodes:
+  gpus:
+    - vendor: " ascend "
+      resource: volcano.sh/Ascend910B3
+      labelKey: volcano.sh/npu-name
+    - vendor: ascend
+      resource: huawei.com/Ascend910
+      labelKey: accelerator/huawei-ascend910
+      products:
+        - product: " Ascend-910B3 "
+          values: [" module-910b-8 ", Ascend-910B3]
+`), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gpus := p.Nodes.GPUTable()
+	if len(gpus) != 2 || gpus.Default("ascend") != "volcano.sh/Ascend910B3" {
+		t.Errorf("the table is the profile's, in its order: %+v", gpus)
+	}
+	if hw, _ := gpus.Lookup("huawei.com/Ascend910"); hw.Vendor != "ascend" || hw.Product("module-910b-8") != "Ascend-910B3" {
+		t.Errorf("names and values must be trimmed: %+v", hw)
+	}
+
+	for name, gpus := range map[string]string{
+		"no vendor":         "    - {resource: x.com/npu, labelKey: k}\n",
+		"no resource":       "    - {vendor: ascend, labelKey: k}\n",
+		"no labelKey":       "    - {vendor: nvidia, resource: nvidia.com/gpu}\n",
+		"twice":             "    - {vendor: ascend, resource: x.com/npu, labelKey: k}\n    - {vendor: hygon, resource: x.com/npu, labelKey: j}\n",
+		"empty product":     "    - {vendor: ascend, resource: r, labelKey: k, products: [{product: \" \"}]}\n",
+		"product twice":     "    - {vendor: ascend, resource: r, labelKey: k, products: [{product: A}, {product: A}]}\n",
+		"empty value":       "    - {vendor: ascend, resource: r, labelKey: k, products: [{product: A, values: [\"\"]}]}\n",
+		"value of two":      "    - {vendor: ascend, resource: r, labelKey: k, products: [{product: A, values: [v]}, {product: B, values: [v]}]}\n",
+		"another's product": "    - {vendor: ascend, resource: r, labelKey: k, products: [{product: A}, {product: B, values: [A]}]}\n",
+	} {
+		if _, err := Parse([]byte(head+"nodes:\n  gpus:\n"+gpus), "test"); err == nil {
+			t.Errorf("%s: must be refused", name)
+		}
+	}
+}
+
+// The profile is the only GPU table, so it has to say: missing or null is
+// refused (swissd migrates those once, at start), [] is a site without GPUs,
+// and anything else is the operator's to fix.
+func TestGPUsAreRequired(t *testing.T) {
+	const head = "name: prod\nmodel:\n  pathTemplate: /models/{{name}}\n"
+	for name, tc := range map[string]struct {
+		nodes string
+		ok    bool
+	}{
+		"no nodes":     {nodes: ""},
+		"missing":      {nodes: "nodes:\n  gpusPerNode: 8\n"},
+		"null":         {nodes: "nodes:\n  gpus:\n"},
+		"empty map":    {nodes: "nodes:\n  gpus: {}\n"},
+		"wrong type":   {nodes: "nodes:\n  gpus: nvidia\n"},
+		"empty list":   {nodes: "nodes:\n  gpus: []\n", ok: true},
+		"one resource": {nodes: "nodes:\n  gpus: [{vendor: nvidia, resource: nvidia.com/gpu, labelKey: nvidia.com/gpu.product}]\n", ok: true},
+	} {
+		_, err := Parse([]byte(head+tc.nodes), "test")
+		if (err == nil) != tc.ok {
+			t.Errorf("%s: err = %v, want ok = %v", name, err, tc.ok)
+		}
+	}
+	_, err := Parse([]byte(head), "test")
+	if err == nil || !strings.Contains(err.Error(), "nodes.gpus is required") || !strings.Contains(err.Error(), "nvidia.com/gpu.product") {
+		t.Errorf("the refusal must say what to add: %v", err)
+	}
+}
+
+// nodes.gpuProductAliases is deprecated: ignored for placement, but read and
+// served as written, so a site page from before nodes.gpus keeps working.
+func TestOldGPUProductAliasesAreIgnored(t *testing.T) {
+	p, err := Parse([]byte(`name: prod
+model:
+  pathTemplate: /models/{{name}}
+nodes:
+  gpus: []
   gpuProductAliases:
     Ascend-910B3:
       - accelerator=huawei-Ascend910
-    " Ascend-910B4 ":
-      - accelerator=huawei-Ascend910, accelerator-type=module-910b4-8
 `), "test")
 	if err != nil {
-		t.Fatalf("a more specific alias may overlap a broader one: %v", err)
+		t.Fatal(err)
 	}
-	if _, ok := p.Nodes.GPUProductAliases["Ascend-910B4"]; !ok {
-		t.Errorf("product names must be trimmed: %v", p.Nodes.GPUProductAliases)
+	if sels := p.Nodes.GPUProductAliases["Ascend-910B3"]; len(sels) != 1 || sels[0] != "accelerator=huawei-Ascend910" {
+		t.Errorf("the old key must be read as written: %v", p.Nodes.GPUProductAliases)
 	}
-	m := p.Nodes.GPUProductAliasesMap()
-	if len(m["Ascend-910B3"]) != 1 || m["Ascend-910B3"][0]["accelerator"] != "huawei-Ascend910" {
-		t.Errorf("unexpected Ascend-910B3: %v", m["Ascend-910B3"])
+	if len(p.Nodes.GPUTable()) != 0 {
+		t.Errorf("aliases must not reach the GPU table: %+v", p.Nodes.GPUTable())
 	}
-	b4 := m["Ascend-910B4"]
-	if len(b4) != 1 || len(b4[0]) != 2 || b4[0]["accelerator-type"] != "module-910b4-8" {
-		t.Errorf("both pairs of a selector must be kept: %v", b4)
-	}
-
-	for name, aliases := range map[string]string{
-		"not key=value":      "    Ascend-910B3: [accelerator]\n",
-		"empty value":        "    Ascend-910B3: [accelerator=]\n",
-		"key set twice":      "    Ascend-910B3: [\"a=1,a=2\"]\n",
-		"same selector":      "    Ascend-910B3: [accelerator=huawei-Ascend910]\n    Ascend-910B4: [accelerator=huawei-Ascend910]\n",
-		"equal and disjoint": "    Ascend-910B3: [a=1]\n    Ascend-910B4: [b=1]\n",
-		"no selector":        "    Ascend-910B3: []\n",
-		"null selectors":     "    Ascend-910B3:\n",
-		"empty product":      "    \" \": [a=1]\n",
-		"twice once trimmed": "    Ascend-910B3: [a=1]\n    \"Ascend-910B3 \": [a=2,b=1]\n",
-	} {
-		if _, err := Parse([]byte(head+"nodes:\n  gpuProductAliases:\n"+aliases), "test"); err == nil {
-			t.Errorf("%s: must be refused", name)
-		}
+	if b, _ := json.Marshal(p.Nodes); !strings.Contains(string(b), `"gpuProductAliases":{"Ascend-910B3":["accelerator=huawei-Ascend910"]}`) {
+		t.Errorf("aliases must still be served: %s", b)
 	}
 }
 
@@ -284,7 +349,7 @@ func TestGPUProductAliases(t *testing.T) {
 // is a typo in the document an operator edits from the web, so it is refused
 // when the profile is parsed.
 func TestApplyWithValidation(t *testing.T) {
-	const head = "name: prod\nmodel:\n  pathTemplate: /models/{{name}}\n"
+	const head = "name: prod\nmodel:\n  pathTemplate: /models/{{name}}\nnodes:\n  gpus: []\n"
 
 	p, err := Parse([]byte(head), "test")
 	if err != nil {
@@ -333,7 +398,7 @@ func TestFeatureDefaultsUnsetIsOn(t *testing.T) {
 }
 
 func TestPDScale(t *testing.T) {
-	const head = "name: prod\nmodel:\n  pathTemplate: /models/{{name}}\n"
+	const head = "name: prod\nmodel:\n  pathTemplate: /models/{{name}}\nnodes:\n  gpus: []\n"
 
 	p, err := Parse([]byte(head), "test")
 	if err != nil {

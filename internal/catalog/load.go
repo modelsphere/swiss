@@ -340,12 +340,6 @@ func (v Variant) validate() error {
 	if r := v.Requires; r.GPUs == 0 && (r.Vendor != "" || len(r.GPUProduct) > 0 || r.MinGPUMemoryGiB > 0 || r.RDMA) {
 		return fmt.Errorf("%s: requires.gpus 0 is CPU only, which leaves no accelerator for vendor, gpuProduct, minGpuMemoryGiB or rdma to describe", where)
 	}
-	// An unknown vendor would render a pod requesting an empty resource
-	// name, which schedules and then runs on no accelerator at all.
-	if _, ok := accelerators[v.Requires.VendorOrDefault()]; !ok {
-		return fmt.Errorf("%s: requires.vendor %q is not a known accelerator", where, v.Requires.Vendor)
-	}
-
 	// lws.size and requires.nodes describe one group. A disagreement does
 	// not fail -- the group hangs at rendezvous waiting for a peer that was
 	// never scheduled -- so it has to be caught before it is rendered.

@@ -16,7 +16,7 @@ A failing `go test` stops the Make recipe before cleanup, so the cluster stays u
 
 ## Run
 
-Prerequisites: Go, docker, kind, kubectl, helm, and outbound HTTPS (the catalog, the chart repo, ghcr.io, Docker Hub and raw.githubusercontent.com are fetched at run time). No GPU. The default catalog is a checked-in fixture, so changes to the public catalog cannot remove the test model. Set `CATALOG` and `MODEL` together to exercise an external catalog. The image build needs the `web/console` submodule.
+Prerequisites: Go, docker, kind, kubectl, helm, and outbound HTTPS (the catalog, the chart repo, ghcr.io, Docker Hub and raw.githubusercontent.com are fetched at run time). No GPU. The image build needs the `web/console` submodule.
 
 ```sh
 git submodule update --init
@@ -40,7 +40,7 @@ The node image and kube-proxy mode live in `test/e2e/kind-config.yaml`. `make se
 | --- | --- |
 | swissd | real: built from the checkout, loaded with `kind load`, installed from `helm/swiss` with `test/e2e/testdata/values.yaml` (SQLite on a local-path PVC, fixed login). Image and `rbac.namespaces` are set from `IMG` and `MODEL_NS` |
 | site profile | real: `test/e2e/testdata/profile.yaml`, with catalog URL, chart repo and namespace filled from the same env as the helm install, saved through `PUT /api/profile` |
-| model catalog | real: the pinned schema-v2 CPU mock fixture mounted from a ConfigMap; `$CATALOG` overrides it |
+| model catalog | real: the public v2 index, `$CATALOG` |
 | engine charts | real: `vllm` from the helm repo, fetched by swissd's helmfile |
 | model server | mocked: the catalog's `mock-llm` entry, [mock-llmd](https://github.com/modelsphere/mock-llmd) on the vllm chart, CPU only |
 | llm-operator | real: `dist/install.yaml` at `$LLM_OPERATOR_VERSION`. Serves LLMService and runs the LLMScaler controller |
@@ -83,7 +83,7 @@ The autoscale spec applies the DisaggregatedSet CRD, runs an nginx stub for deci
 | `SKIP_BUILD` | unset. `true` or `1` skips the image build and still `kind load`s it |
 | `IMG` | `swissd:e2e` |
 | `IMAGE_REPO`, `IMAGE_TAG` | unset. When `IMAGE_REPO` is set it wins over `IMG`; `IMAGE_TAG` defaults to `e2e` |
-| `CATALOG` | `/etc/swiss-e2e-catalog`: the versioned mock fixture in `test/e2e/testdata/catalog`, mounted in swissd |
+| `CATALOG` | `https://modelsphere.github.io/mock-llmd/` |
 | `CHART_REPO` | `https://modelsphere.github.io/helm-charts`, for the engine chart and the CRD charts |
 | `LLM_OPERATOR_VERSION` | `v0.5.0` |
 | `AUTOCONFIG_CHART_VERSION` | `0.4.1` |

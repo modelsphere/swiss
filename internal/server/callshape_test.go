@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/modelsphere/swiss/internal/cluster"
+	"github.com/modelsphere/swiss/internal/gpu"
 )
 
 // counting records which cluster reads a request actually makes, and with what
@@ -46,14 +47,14 @@ func (c *counting) ManagedRefs(ctx context.Context) ([]cluster.ManagedRef, error
 	return c.Probe.ManagedRefs(ctx)
 }
 
-func (c *counting) Nodes(ctx context.Context) ([]cluster.Node, error) {
+func (c *counting) Nodes(ctx context.Context, gpus gpu.Table) ([]cluster.Node, error) {
 	c.note("Nodes", "cluster-wide")
-	return c.Probe.Nodes(ctx)
+	return c.Probe.Nodes(ctx, gpus)
 }
 
-func (c *counting) GPUAllocations(ctx context.Context) (map[string][]cluster.GPUPod, error) {
+func (c *counting) GPUAllocations(ctx context.Context, gpus gpu.Table) (map[string][]cluster.GPUPod, error) {
 	c.note("GPUAllocations", "cluster-wide")
-	return c.Probe.GPUAllocations(ctx)
+	return c.Probe.GPUAllocations(ctx, gpus)
 }
 
 // Every cluster read the detail page makes must name the one release it is

@@ -618,7 +618,7 @@ func (s *Server) clock() time.Time {
 // nodeReady is nil when the node list cannot be read. Callers then apply only
 // the time rule, which keeps a terminating pod that is still inside its window.
 func (s *Server) nodeReady(ctx context.Context, ns, release string) func(string) (ready, found bool) {
-	nodes, err := s.probe.Nodes(ctx)
+	nodes, err := s.probe.Nodes(ctx, nil)
 	if err != nil {
 		s.log.WarnContext(ctx, "nodes not listed, only the grace rule can ignore a terminating pod",
 			"namespace", ns, "release", release, "err", err)

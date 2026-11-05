@@ -182,7 +182,9 @@ func TestServerApplyWithIsNotConfig(t *testing.T) {
 	}
 }
 
-func TestGPUProductLabelsConfig(t *testing.T) {
+// The GPU labels are the site profile's nodes.gpus now; a config from before
+// still loads, the key ignored.
+func TestOldGPUProductLabelsStillLoad(t *testing.T) {
 	dir := t.TempDir()
 	c, err := Load(write(t, dir, "swiss.yaml", `
 catalog: ./c
@@ -199,11 +201,7 @@ server:
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := c.Server.GPUProductLabelsMap()
-	if len(m["custom.com/npu"]) != 1 || m["custom.com/npu"][0] != "custom.com/npu.sku" {
-		t.Errorf("unexpected custom.com/npu: %v", m["custom.com/npu"])
-	}
-	if len(m["huawei.com/Ascend910"]) != 2 || m["huawei.com/Ascend910"][0] != "accelerator/huawei-ascend910" {
-		t.Errorf("unexpected huawei.com/Ascend910: %v", m["huawei.com/Ascend910"])
+	if c.Server.GPUProductLabels == nil {
+		t.Error("the old key must be read, so swissd can warn that it is ignored")
 	}
 }

@@ -7,21 +7,11 @@ func TestVendorDefaultsToNvidia(t *testing.T) {
 	if r.VendorOrDefault() != VendorNvidia {
 		t.Fatalf("vendor = %q", r.VendorOrDefault())
 	}
-	if r.ResourceName() != "nvidia.com/gpu" {
-		t.Fatalf("nvidia mapping wrong: %s", r.ResourceName())
-	}
 }
 
-func TestVendorSelectsTheResource(t *testing.T) {
-	r := Requires{GPUs: 8, Vendor: "ascend"}
-	if r.ResourceName() != "huawei.com/Ascend910" {
-		t.Fatalf("ascend must not request nvidia.com/gpu, got %q", r.ResourceName())
-	}
-}
-
-// An unknown vendor renders a pod requesting an empty resource name, which
-// schedules and then runs on no accelerator at all.
-func TestUnknownVendorIsRefused(t *testing.T) {
+// Which vendors exist is the site profile's to say: a catalog naming one this
+// swiss has never heard of still loads.
+func TestAnyVendorLoads(t *testing.T) {
 	e := Entry{
 		APIVersion: APIVersion, Name: "m", Version: "1.0.0",
 		Source: Source{HF: "org/m"},
@@ -30,12 +20,8 @@ func TestUnknownVendorIsRefused(t *testing.T) {
 			Requires: Requires{GPUs: 1, Vendor: "moore-threads"},
 		}},
 	}
-	if err := e.Validate(); err == nil {
-		t.Fatal("an unknown vendor must be refused")
-	}
-	e.Variants[0].Requires.Vendor = "ascend"
 	if err := e.Validate(); err != nil {
-		t.Fatalf("a known vendor must pass: %v", err)
+		t.Fatalf("a vendor the catalog loader does not know must pass: %v", err)
 	}
 }
 

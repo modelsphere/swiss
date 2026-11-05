@@ -10,7 +10,6 @@ import (
 	"io"
 	"maps"
 	"os"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,6 +24,8 @@ import (
 	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+
+	"github.com/modelsphere/swiss/internal/gpu"
 )
 
 // Kube reads a live cluster. One implementation for both frontends: the CLI
@@ -54,9 +55,6 @@ type Kube struct {
 	// namespace-scoped Roles can actually authorise. Getting this wrong is not a
 	// degraded view -- a cluster-wide list is simply forbidden.
 	Namespaces []string
-	// GPUProductLabels maps extended resource names (the keys, which count as GPUs)
-	// to candidate node label keys (the values) used to categorize each GPU SKU per vendor.
-	GPUProductLabels map[string][]string
 }
 
 // PlanConfigMapPrefix names the ConfigMap holding a release's live plan.
@@ -365,106 +363,9 @@ func (k *Kube) Ping(ctx context.Context) error {
 	return err
 }
 
-// DefaultGPUProductLabels maps extended resource names (GPU count keys) to the
-// node label that names each SKU under that vendor. Order matters: first
-// matching non-empty label wins. Deploy affinity matches on the same keys;
-// site-specific alternates belong in server.gpuProductLabels, not here.
-var DefaultGPUProductLabels = map[string][]string{
-	"nvidia.com/gpu":       {"nvidia.com/gpu.product"},
-	"huawei.com/Ascend910": {"accelerator/huawei-ascend910", "accelerator"},
-	"cambricon.com/mlu":    {"cambricon.com/mlu.product"},
-	"hygon.com/dcu":        {"hygon.com/dcu.product"},
-	"amd.com/gpu":          {"amd.com/gpu.device-id"},
-}
-
-// ProductLabels is DefaultGPUProductLabels with site's entries replacing
-// theirs, per resource.
-func ProductLabels(site map[string][]string) map[string][]string {
-	if len(site) == 0 {
-		return DefaultGPUProductLabels
-	}
-	merged := make(map[string][]string, len(DefaultGPUProductLabels)+len(site))
-	for r, l := range DefaultGPUProductLabels {
-		merged[r] = l
-	}
-	for r, l := range site {
-		r = strings.TrimSpace(r)
-		if r != "" {
-			merged[r] = l
-		}
-	}
-	return merged
-}
-
-func (k *Kube) productLabels() map[string][]string { return ProductLabels(k.GPUProductLabels) }
-
-func (k *Kube) gpuProduct(labels map[string]string, res string) string {
-	if res == "" || len(labels) == 0 {
-		return ""
-	}
-	pl := k.productLabels()
-	for _, key := range pl[res] {
-		key = strings.TrimSpace(key)
-		if key != "" {
-			if val := labels[key]; val != "" {
-				return val
-			}
-		}
-	}
-	return ""
-}
-
-// ApplyGPUProductAliases renames each GPU node an alias matches (the site
-// profile's nodes.gpuProductAliases); an alias wins over the product label.
-func ApplyGPUProductAliases(nodes []Node, aliases map[string][]map[string]string) {
-	if len(aliases) == 0 {
-		return
-	}
-	for i := range nodes {
-		if nodes[i].GPUResource == "" {
-			continue
-		}
-		if p := aliasedProduct(aliases, nodes[i].Labels); p != "" {
-			nodes[i].GPUProduct = p
-		}
-	}
-}
-
-// aliasedProduct is the product whose selector matches with the most pairs;
-// profile validation rules out a tie.
-func aliasedProduct(aliases map[string][]map[string]string, labels map[string]string) string {
-	best, most := "", 0
-	for _, product := range slices.Sorted(maps.Keys(aliases)) {
-		for _, sel := range aliases[product] {
-			if len(sel) > most && hasLabels(labels, sel) {
-				best, most = product, len(sel)
-			}
-		}
-	}
-	return best
-}
-
-func hasLabels(labels, want map[string]string) bool {
-	for k, v := range want {
-		if labels[k] != v {
-			return false
-		}
-	}
-	return true
-}
-
-func (k *Kube) gpuResources() []string {
-	pl := k.productLabels()
-	out := make([]string, 0, len(pl))
-	for r := range pl {
-		out = append(out, r)
-	}
-	sort.Strings(out)
-	return out
-}
-
-// Nodes lists nodes with the GPU facts a fit check needs.
-func (k *Kube) Nodes(ctx context.Context) ([]Node, error) {
+// Nodes lists nodes with the GPU facts a fit check needs. A node advertising
+// two of the table's resources is read under the first: one product per node.
+func (k *Kube) Nodes(ctx context.Context, gpus gpu.Table) ([]Node, error) {
 	list, err := k.client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("list nodes: %w", err)
@@ -477,17 +378,13 @@ func (k *Kube) Nodes(ctx context.Context) ([]Node, error) {
 			Labels:      n.Labels,
 			Schedulable: !n.Spec.Unschedulable,
 		}
-		var matchedRes string
-		for _, res := range k.gpuResources() {
-			if q, ok := n.Status.Allocatable[corev1.ResourceName(res)]; ok && q.Value() > 0 {
-				node.GPUs += int(q.Value())
-				if matchedRes == "" {
-					matchedRes = res
-				}
+		for _, g := range gpus {
+			if q, ok := n.Status.Allocatable[corev1.ResourceName(g.Resource)]; ok && q.Value() > 0 {
+				node.GPUs, node.GPUResource = int(q.Value()), g.Resource
+				node.GPUProduct = g.Product(n.Labels[g.LabelKey])
+				break
 			}
 		}
-		node.GPUResource = matchedRes
-		node.GPUProduct = k.gpuProduct(n.Labels, matchedRes)
 		node.Kubelet = n.Status.NodeInfo.KubeletVersion
 		for _, a := range n.Status.Addresses {
 			switch a.Type {
@@ -528,14 +425,14 @@ func (k *Kube) Nodes(ctx context.Context) ([]Node, error) {
 // counting one is how a node reads as full when it is empty. Limits are
 // preferred over requests only in that extended resources require them to be
 // equal, so either is the same number.
-func (k *Kube) GPUAllocations(ctx context.Context) (map[string][]GPUPod, error) {
+func (k *Kube) GPUAllocations(ctx context.Context, gpus gpu.Table) (map[string][]GPUPod, error) {
 	pods, err := k.client.CoreV1().Pods(metav1.NamespaceAll).List(ctx, metav1.ListOptions{
 		FieldSelector: "status.phase!=Succeeded,status.phase!=Failed",
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list pods for GPU allocation: %w", err)
 	}
-	resources := k.gpuResources()
+	resources := gpus.Resources()
 	out := map[string][]GPUPod{}
 	for i := range pods.Items {
 		p := &pods.Items[i]
