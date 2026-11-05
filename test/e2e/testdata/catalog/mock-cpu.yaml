@@ -1,0 +1,76 @@
+apiVersion: catalog.swiss/v2
+kind: Variant
+model: mock-llm
+id: mock-cpu
+version: 1.0.0
+servedName: mock-llm
+description: "mock-llmd on CPU: no GPU, no weights. For tests only -- the responses are synthetic."
+link: https://github.com/modelsphere/mock-llmd
+engine: mock
+# mock-llmd has no chart of its own: it runs on the vllm chart, in place of
+# vLLM, through commandOverride below.
+chart:
+  name: vllm
+  version: ">=0.7.6"
+image:
+  repository: ghcr.io/modelsphere/mock-llmd
+  tag: 0.1.0
+requires:
+  # CPU only: the chart leaves nvidia.com/gpu off the pod.
+  gpus: 0
+  topology: single-node
+values:
+  # The image's own ENTRYPOINT instead of `vllm serve`.
+  commandOverride: []
+  model:
+    # No weights, so no model volume: the model has no source.hf to derive a path from.
+    localPath: ""
+  # The checks below assume a vLLM image -- a shell for modelCheck, python3 for
+  # the preStop drain, vLLM's /metrics for hangWatcher. The mock image is
+  # distroless and has none of them.
+  modelCheck:
+    enabled: false
+  hangWatcher:
+    enabled: false
+  lifecycle:
+    preStop:
+      enabled: false
+  shm:
+    enabled: false
+  # mock-llmd's default port, so it needs no PORT in env.
+  service:
+    port: 8081
+  env:
+    # What /v1/models advertises; requests for any model name are answered.
+    - name: MOCK_MODEL_IDS
+      value: mock-llm
+  # mock-llmd has no /health; /v1/models answers as soon as it listens.
+  startupProbe:
+    httpGet:
+      path: /v1/models
+      port: http
+    periodSeconds: 2
+    timeoutSeconds: 2
+    failureThreshold: 30
+  readinessProbe:
+    httpGet:
+      path: /v1/models
+      port: http
+    periodSeconds: 5
+    timeoutSeconds: 2
+    failureThreshold: 3
+  livenessProbe:
+    httpGet:
+      path: /v1/models
+      port: http
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 3
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+  # Nothing to drain: the mock exits on SIGTERM.
+  terminationGracePeriodSeconds: 30
