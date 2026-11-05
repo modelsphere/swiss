@@ -29,8 +29,8 @@ func TestStartMigratesAProfileWithoutGPUs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gpus := p.Nodes.GPUTable(); len(gpus) != 5 || gpus.Default("nvidia") != "nvidia.com/gpu" {
-		t.Errorf("want the five well-known resources, got %+v", gpus)
+	if gpus := p.Nodes.GPUTable(); len(gpus) != 6 || gpus.Default("nvidia") != "nvidia.com/gpu" {
+		t.Errorf("want the six well-known resources, got %+v", gpus)
 	}
 }
 

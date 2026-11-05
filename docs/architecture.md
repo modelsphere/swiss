@@ -82,6 +82,12 @@ nodes:
     - vendor: ascend
       resource: huawei.com/Ascend910
       labelKey: accelerator/huawei-ascend910
+    - vendor: ascend
+      resource: volcano.sh/Ascend910B4-1
+      labelKey: volcano.sh/npu-name
+      products:
+        - product: Ascend-910B4
+          values: [Ascend910B4-1]
     - vendor: cambricon
       resource: cambricon.com/mlu
       labelKey: cambricon.com/mlu.product

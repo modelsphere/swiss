@@ -33,8 +33,8 @@ func TestMigrateFillsAMissingGPUTable(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%v\n%s", err, out)
 			}
-			if gpus := p.Nodes.GPUTable(); len(gpus) != 5 || gpus.Default("ascend") != "huawei.com/Ascend910" {
-				t.Errorf("want the five well-known resources, got %+v", gpus)
+			if gpus := p.Nodes.GPUTable(); len(gpus) != 6 || gpus.Default("ascend") != "huawei.com/Ascend910" {
+				t.Errorf("want the six well-known resources, got %+v", gpus)
 			}
 		})
 	}
@@ -62,8 +62,8 @@ func TestTemplateCarriesTheWellKnownGPUs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gpus := p.Nodes.GPUTable(); len(gpus) != 5 || gpus.Default("nvidia") != "nvidia.com/gpu" {
-		t.Errorf("want the five well-known resources, got %+v", gpus)
+	if gpus := p.Nodes.GPUTable(); len(gpus) != 6 || gpus.Default("nvidia") != "nvidia.com/gpu" {
+		t.Errorf("want the six well-known resources, got %+v", gpus)
 	}
 	if _, changes, _ := Migrate([]byte(DefaultYAML(""))); len(changes) != 0 {
 		t.Errorf("a new profile has nothing to migrate: %v", changes)
