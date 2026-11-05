@@ -20,7 +20,15 @@ import (
 
 func discardLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
 
-const profileYAML = `
+// nvidiaGPU and ascendGPU are nodes.gpus entries; testGPUs is the table a test
+// profile has unless it names its own.
+const (
+	nvidiaGPU = "    - {vendor: nvidia, resource: nvidia.com/gpu, labelKey: nvidia.com/gpu.product}\n"
+	ascendGPU = "    - {vendor: ascend, resource: huawei.com/Ascend910, labelKey: accelerator/huawei-ascend910}\n"
+	testGPUs  = nvidiaGPU + ascendGPU
+)
+
+const profileHead = `
 name: prod
 namespace: models
 model:
@@ -29,6 +37,8 @@ sites:
   - name: dev
     url: https://swiss.dev.internal
 `
+
+const profileYAML = profileHead + "nodes:\n  gpus:\n" + testGPUs
 
 func testServer(t *testing.T, probe cluster.Probe) *httptest.Server {
 	t.Helper()

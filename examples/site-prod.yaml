@@ -82,6 +82,12 @@ route:
 
 nodes:
   gpusPerNode: 8
+  # The GPU resources this cluster's nodes advertise; swissd knows no others.
+  # labelKey is the node label telling products apart under the resource.
+  gpus:
+    - vendor: nvidia
+      resource: nvidia.com/gpu
+      labelKey: nvidia.com/gpu.product
 
 # The other clusters' swissd instances, for the nav switcher. Config, not
 # discovery: a list you keep, and every instance serves the same switcher, so

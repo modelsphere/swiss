@@ -1,10 +1,13 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"reflect"
 	"testing"
 
 	"github.com/modelsphere/swiss/internal/cluster"
+	"github.com/modelsphere/swiss/internal/gpu"
 )
 
 // nodeSelector ANDs its labels, so it cannot express "any of these products".
@@ -147,36 +150,30 @@ func TestTolerationsFromTheFormLandInThePlan(t *testing.T) {
 	}
 }
 
-// A deploy lands wherever inventory reports the product: one term per label
-// key inventory reads, one per alias. Terms are ORed, an alias's labels ANDed.
-func TestGPUProductTermsCoverInventoryKeysAndAliases(t *testing.T) {
-	keys := cluster.ProductLabels(nil)["huawei.com/Ascend910"]
-	aliases := map[string][]map[string]string{
-		"Ascend-910B3": {{"accelerator": "huawei-Ascend910"}},
-		"Ascend-910B4": {{"accelerator-type": "module-910b4-8", "accelerator": "huawei-Ascend910"}},
-		"unrequested":  {{"x": "y"}},
-	}
-	got, _ := json.Marshal(gpuProductTerms(keys, aliases, []string{"Ascend-910B3", "Ascend-910B4"}))
-	want := `[` +
-		`{"matchExpressions":[{"key":"accelerator/huawei-ascend910","operator":"In","values":["Ascend-910B3","Ascend-910B4"]}]},` +
-		`{"matchExpressions":[{"key":"accelerator","operator":"In","values":["Ascend-910B3","Ascend-910B4"]}]},` +
-		`{"matchExpressions":[{"key":"accelerator","operator":"In","values":["huawei-Ascend910"]}]},` +
-		`{"matchExpressions":[{"key":"accelerator","operator":"In","values":["huawei-Ascend910"]},{"key":"accelerator-type","operator":"In","values":["module-910b4-8"]}]}` +
-		`]`
+// One term: the resource's labelKey in each requested product and its values.
+func TestGPUProductTermsAddValuesToTheProduct(t *testing.T) {
+	gpus := gpu.Table{{Vendor: "ascend", Resource: "huawei.com/Ascend910", LabelKey: "accelerator/huawei-ascend910", Products: []gpu.Product{
+		{Product: "Ascend-910B3", Values: []string{"module-910b-8"}},
+		{Product: "Ascend-910B4", Values: []string{"module-910b4-8"}},
+		{Product: "unrequested", Values: []string{"x"}},
+	}}}
+	got, _ := json.Marshal(gpuProductTerms(gpus, "huawei.com/Ascend910", []string{"Ascend-910B3", "Ascend-910B4", "Ascend-910B3"}))
+	want := `[{"matchExpressions":[{"key":"accelerator/huawei-ascend910","operator":"In","values":["Ascend-910B3","module-910b-8","Ascend-910B4","module-910b4-8"]}]}]`
 	if string(got) != want {
 		t.Fatalf("terms:\n got %s\nwant %s", got, want)
 	}
+	if terms := gpuProductTerms(gpus, "unknown.com/npu", []string{"A"}); terms != nil {
+		t.Errorf("a resource the table does not list has no label to pin on: %v", terms)
+	}
 }
 
-const aliasProfile = profileYAML + `nodes:
-  gpuProductAliases:
-    NVIDIA-H800:
-      - gpu.example.com/model=h800
-`
+const gpusProfile = profileHead + "nodes:\n  gpus:\n" +
+	"    - {vendor: nvidia, resource: nvidia.com/gpu, labelKey: nvidia.com/gpu.product, products: [{product: NVIDIA-H800, values: [h800]}]}\n" +
+	ascendGPU
 
-func TestProfileGPUProductAliasesReachThePlan(t *testing.T) {
+func TestProfileGPUValuesReachThePlan(t *testing.T) {
 	probe := liveProbe()
-	probe.Maps["swiss/site-profile"] = map[string]string{"profile.yaml": aliasProfile}
+	probe.Maps["swiss/site-profile"] = map[string]string{"profile.yaml": gpusProfile}
 	srv, _ := deployServerWith(t, probe, true)
 	code, p := post(t, srv, "/api/plans", map[string]any{
 		"model": "qwen3.6-35b-a3b", "serviceId": "r",
@@ -185,29 +182,55 @@ func TestProfileGPUProductAliasesReachThePlan(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, p)
 	}
-	na := planValues(p)["affinity"].(map[string]any)["nodeAffinity"].(map[string]any)
-	terms := na["requiredDuringSchedulingIgnoredDuringExecution"].(map[string]any)["nodeSelectorTerms"].([]any)
-	if len(terms) != 2 {
-		t.Fatalf("want the product label term and the alias term, got %v", terms)
-	}
-	alias := terms[1].(map[string]any)["matchExpressions"].([]any)[0].(map[string]any)
-	if alias["key"] != "gpu.example.com/model" || alias["values"].([]any)[0] != "h800" {
-		t.Fatalf("unexpected alias term: %v", alias)
+	expr := matchExpr(t, p)
+	got := expr["values"].([]any)
+	if expr["key"] != "nvidia.com/gpu.product" || len(got) != 2 || got[0] != "NVIDIA-H800" || got[1] != "h800" {
+		t.Fatalf("want the product and its value under one key: %v", expr)
 	}
 }
 
-func TestNodeViewReportsProfileAliases(t *testing.T) {
-	probe := gpuProbe()
-	probe.Maps["swiss/site-profile"] = map[string]string{"profile.yaml": aliasProfile}
-	probe.Nod = []cluster.Node{{
-		Name: "gpu-1", GPUResource: "nvidia.com/gpu", GPUProduct: "NVIDIA-Graphics-Device", GPUs: 8,
-		Labels: map[string]string{"gpu.example.com/model": "h800"}, Schedulable: true, Ready: true,
-	}}
-	code, body := get(t, testServer(t, probe), "/api/nodes")
-	if code != 200 {
-		t.Fatalf("status %d: %v", code, body)
-	}
-	if got := body["nodes"].([]any)[0].(map[string]any)["GPUProduct"]; got != "NVIDIA-H800" {
-		t.Fatalf("product %v, want the profile's alias", got)
+// tableProbe records the GPU table each cluster-wide read is given.
+type tableProbe struct {
+	cluster.Fake
+	got *[]gpu.Table
+}
+
+func (p tableProbe) Nodes(ctx context.Context, gpus gpu.Table) ([]cluster.Node, error) {
+	*p.got = append(*p.got, gpus)
+	return p.Fake.Nodes(ctx, gpus)
+}
+
+func (p tableProbe) GPUAllocations(ctx context.Context, gpus gpu.Table) (map[string][]cluster.GPUPod, error) {
+	*p.got = append(*p.got, gpus)
+	return p.Fake.GPUAllocations(ctx, gpus)
+}
+
+// The node view reads GPUs by the profile's table, and by none before there is
+// a profile to read: nodes are listed, without GPUs.
+func TestNodeViewReadsByTheProfilesGPUTable(t *testing.T) {
+	for name, tc := range map[string]struct {
+		profile string
+		want    gpu.Table
+	}{
+		"profile": {profile: gpusProfile, want: gpu.Table{
+			{Vendor: "nvidia", Resource: "nvidia.com/gpu", LabelKey: "nvidia.com/gpu.product", Products: []gpu.Product{{Product: "NVIDIA-H800", Values: []string{"h800"}}}},
+			{Vendor: "ascend", Resource: "huawei.com/Ascend910", LabelKey: "accelerator/huawei-ascend910"},
+		}},
+		"no profile": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			probe := gpuProbe()
+			delete(probe.Maps, "swiss/site-profile")
+			if tc.profile != "" {
+				probe.Maps["swiss/site-profile"] = map[string]string{"profile.yaml": tc.profile}
+			}
+			var got []gpu.Table
+			if code, body := get(t, testServer(t, tableProbe{Fake: probe, got: &got}), "/api/nodes"); code != 200 {
+				t.Fatalf("status %d: %v", code, body)
+			}
+			if len(got) != 2 || !reflect.DeepEqual(got[0], tc.want) || !reflect.DeepEqual(got[1], tc.want) {
+				t.Fatalf("nodes and usage must both read by\n%+v\ngot %+v", tc.want, got)
+			}
+		})
 	}
 }

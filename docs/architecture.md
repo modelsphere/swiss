@@ -48,45 +48,123 @@ Composition is a few inputs with key sets and strict precedence. Later layer ove
 | **user form** | how much, where, how routed: `serviceId`, `replicaCount`, `scaler.*`, `modelRoute.*`, scheduling |
 | **plan editor** | the escape hatch, applied last — any key, exempt from ownership, labelled `edit` |
 
+## Site profile
+
+The site profile layer above, as one YAML document swissd owns.
+
+- Stored in a ConfigMap (`cluster.profile.configMap`, the in-cluster case) or a file (`cluster.profile.file`); swissd writes the ConfigMap, never the file.
+- Saved through `PUT /api/profile` and parsed strictly: a profile that does not parse is refused, not stored.
+
+### Migration
+
+swissd migrates the stored profile once, when it starts: each step fills in a field a profile from before it lacks. Today there is one step.
+
+- A changed profile is written back, comments kept.
+- A profile from a file, or one swissd cannot write, is not migrated: swissd logs the migrated profile to save by hand.
+
+#### `nodes.gpus`
+
+A profile from before `nodes.gpus` gets it once, when swissd starts. New profiles start from the same entries.
+
+| `nodes.gpus` at start | swissd |
+| --- | --- |
+| missing or `null` | adds the entries below |
+| anything else (`[]`, `{}`, wrong type, bad entry) | leaves it; an invalid value is an error until fixed by hand |
+
+
+Default values supplied:
+```yaml
+nodes:
+  gpus:
+    - vendor: nvidia
+      resource: nvidia.com/gpu
+      labelKey: nvidia.com/gpu.product
+    - vendor: ascend
+      resource: huawei.com/Ascend910
+      labelKey: accelerator/huawei-ascend910
+    - vendor: cambricon
+      resource: cambricon.com/mlu
+      labelKey: cambricon.com/mlu.product
+    - vendor: hygon
+      resource: hygon.com/dcu
+      labelKey: hygon.com/dcu.product
+    - vendor: amd
+      resource: amd.com/gpu
+      labelKey: amd.com/gpu.device-id
+```
+
 ## GPU placement
 
-Placement turns the variant's hardware contract into a GPU resource name and a node pin.
+Placement bridges the catalog's hardware intent (`vendor`, canonical `gpuProduct`, `gpus`) to the cluster's Kubernetes extended resource (`model.gpuResource`) and node label affinity.
 
 ### Concepts
 
 | Concept | Source | Role |
 | --- | --- | --- |
-| Hardware contract | variant `requires` (`vendor`, empty = nvidia; `gpuProduct`; `gpus`) | what the model needs; source of truth |
-| Cluster inventory | swissd `server.gpuProductLabels` + site `nodes.gpuProductAliases` | maps a product to the resource its nodes report and the labels that identify them |
-| Override | install request `gpuProducts` / `forceGpuProducts` | picks a different product, never a different resource |
+| Hardware contract | catalog variant `requires` (`vendor`, empty = `nvidia`; `gpuProduct`; `gpus`) | canonical vendor and product names; never carries K8s resource or label names |
+| GPU spec table (`gpus`) | site profile `nodes.gpus`, required | two-level array: Level 1 `(vendor, resource, labelKey)`, Level 2 optional `products` (`product` + extra label `values`) |
+| Dynamic cluster inventory | `/api/nodes` (`Kube.Nodes` + `gpus` table) | scans live nodes via `(vendor, resource, labelKey)` to build available canonical products on the cluster |
+| Deploy override | request `gpuProducts` / `forceGpuProducts` | narrows `requires.gpuProduct`, or forces another cluster product on the same resource |
+
+### Two-level `gpus` table
+
+The site profile's `nodes.gpus` is the only GPU table; swiss has no defaults of its own.
+
+- A vendor's first entry is its default resource.
+- `vendor`, `resource` and `labelKey` are required; a resource is listed once, and a label value names one product under it.
+- `[]` is a site without GPU resources. A catalog vendor the table does not list is refused at plan time.
+- The old `server.gpuProductLabels` and `nodes.gpuProductAliases` are read and ignored, with a warning.
+- A profile from before `nodes.gpus` gets it by [migration](#migration).
+
+```yaml
+nodes:
+  gpus:
+    # Level 1: per (vendor, resource); labelKey is the node label that tells SKUs apart under that resource
+    - vendor: nvidia
+      resource: nvidia.com/gpu
+      labelKey: nvidia.com/gpu.product
+
+    - vendor: ascend
+      resource: huawei.com/Ascend910
+      labelKey: accelerator/huawei-ascend910
+      # Level 2 (only when nodes label a product by another name): extra values that also mean `product`
+      products:
+        - product: Ascend-910B3
+          values: [module-910b-8]
+
+    # Same vendor, different resource name on this cluster:
+    - vendor: ascend
+      resource: volcano.sh/Ascend910B3
+      labelKey: volcano.sh/npu-name
+      products:
+        - product: Ascend-910B3
+          values: [Ascend910B3]
+```
+
+### Workflow
 
 ```mermaid
 flowchart TD
-  hw["Hardware contract: requires"]
-  over["Override: same resource only"]
-  inv["Cluster inventory"]
-  look["Look up the product"]
-  found["Reported resource or vendor default"]
-  res["model.gpuResource"]
-  pin["Required node affinity"]
-  hw --> look
-  over --> look
-  inv --> look
-  look --> found
-  found --> res
-  found --> pin
+  def["profile nodes.gpus"]
+  k8s["Live K8s Nodes (allocatable + labels)"]
+  inv["Dynamic Cluster Inventory: node GPUResource + canonical GPUProduct"]
+  req["Variant requires + request gpuProducts / forceGpuProducts"]
+  res["Resolve single GPUResource (inventory match or vendor default)"]
+  gpuRes["model.gpuResource (when gpus > 0 and != nvidia.com/gpu)"]
+  aff["Required nodeAffinity: labelKey In (values)"]
+
+  def --> inv
+  k8s --> inv
+  inv --> res
+  req --> res
+  res --> gpuRes
+  res --> aff
 ```
-
-### Rules
-
-1. Resolve: look the product up in the inventory; if the cluster does not know it, use the vendor's default resource.
-2. Resource: write `model.gpuResource` only when `gpus > 0` and the resource is not `nvidia.com/gpu`.
-3. Pin: add a required node affinity on the product's labels, unless the catalog or site profile already sets one.
-4. Override: `gpuProducts` narrows within `requires.gpuProduct`; `forceGpuProducts` (or `gpuProducts` on a variant that lists none) may pick another product only if it resolves to the same resource, otherwise the request is rejected.
 
 ### Out of scope
 
-- Tolerations are not part of this; site configuration for them is future work.
+- Tolerations are not derived here.
+- Extra node affinity from the deploy request, beyond the product pin, is future work.
 
 ## Pipeline
 

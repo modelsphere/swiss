@@ -16,7 +16,35 @@ func DefaultYAML(cluster string) string {
 	if cluster == "" {
 		cluster = "this-cluster"
 	}
-	return strings.ReplaceAll(defaultTemplate, "{{cluster}}", cluster)
+	return strings.NewReplacer("{{cluster}}", cluster, "{{gpus}}", indent(defaultGPUs, "    ")).Replace(defaultTemplate)
+}
+
+// defaultGPUs is the nodes.gpus a new profile starts with, and what swissd adds
+// once to a stored profile from before nodes.gpus. Nothing reads it otherwise:
+// the profile is the only GPU table.
+const defaultGPUs = `- vendor: nvidia
+  resource: nvidia.com/gpu
+  labelKey: nvidia.com/gpu.product
+- vendor: ascend
+  resource: huawei.com/Ascend910
+  labelKey: accelerator/huawei-ascend910
+- vendor: cambricon
+  resource: cambricon.com/mlu
+  labelKey: cambricon.com/mlu.product
+- vendor: hygon
+  resource: hygon.com/dcu
+  labelKey: hygon.com/dcu.product
+- vendor: amd
+  resource: amd.com/gpu
+  labelKey: amd.com/gpu.device-id
+`
+
+// gpusBlock is defaultGPUs as it sits in a profile, for an operator adding it
+// by hand.
+func gpusBlock() string { return "nodes:\n  gpus:\n" + indent(defaultGPUs, "    ") }
+
+func indent(s, by string) string {
+	return by + strings.ReplaceAll(strings.TrimSuffix(s, "\n"), "\n", "\n"+by) + "\n"
 }
 
 const defaultTemplate = `# The site profile: what makes a model work in THIS cluster. It describes this
@@ -124,15 +152,16 @@ route:
 nodes:
   # A full GPU node, used to derive cache.maxSlotsPerNode.
   gpusPerNode: 8
-  # Names the catalog's GPU products by node labels, for a vendor install that
-  # does not label its nodes with the catalog's name. Every key=value in a
-  # selector must match; a node matching two products takes the one with more
-  # pairs. The GPU view then reports the catalog's name, and a deploy
-  # restricted to that product may land on the node.
-  # gpuProductAliases:
-  #   Ascend-910B3:
-  #     - accelerator=huawei-Ascend910
-
+  # GPU resources this cluster's nodes advertise; swissd knows no others. A
+  # vendor's first entry is what its pods request when no node names one.
+  # labelKey is the node label telling products apart under the resource, and
+  # products name the catalog's product where a label value differs from it
+  # (the product name itself always matches too):
+  #     products:
+  #       - product: Ascend-910B3
+  #         values: [module-910b-8]
+  gpus:
+{{gpus}}
 # The other clusters' swissd instances, for the nav switcher.
 # sites:
 #   - name: prod-h100

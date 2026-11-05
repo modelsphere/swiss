@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/modelsphere/swiss/internal/catalog"
+	"github.com/modelsphere/swiss/internal/gpu"
 	"github.com/modelsphere/swiss/internal/site"
 	"github.com/modelsphere/swiss/internal/values"
 )
@@ -35,9 +36,28 @@ func testInput() Input {
 			Model:     site.ModelPaths{PathTemplate: "/mnt/disk0/models/{{name}}"},
 			Registry:  site.Registry{Mirror: "ghcr.io/modelsphere"},
 			Cache:     site.Cache{Enabled: true, HostPath: "/mnt/disk0/sglang-cache"},
-			Nodes:     site.Nodes{GPUsPerNode: 8},
+			Nodes:     site.Nodes{GPUsPerNode: 8, GPUs: &testGPUs},
 		},
 		Release: "glm-53",
+	}
+}
+
+// The site's table is the only place a vendor's resource comes from: a vendor
+// it does not list is refused, not left to the charts' nvidia default.
+func TestVendorTheSiteDoesNotListIsRefused(t *testing.T) {
+	in := testInput()
+	in.Resolved.Variant.Requires.Vendor = "metax"
+	if _, err := Compose(in); err == nil || !strings.Contains(err.Error(), "metax") {
+		t.Fatalf("want a refusal naming the vendor, got %v", err)
+	}
+	in.Profile.Nodes.GPUs = &gpu.Table{{Vendor: "metax", Resource: "metax-tech.com/gpu", LabelKey: "metax-tech.com/gpu.product"}}
+	in.ChartVersion = "0.9.29"
+	p, err := Compose(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := values.Get(p.Values(), "model.gpuResource"); got != "metax-tech.com/gpu" {
+		t.Errorf("model.gpuResource = %v, want the site's resource for metax", got)
 	}
 }
 

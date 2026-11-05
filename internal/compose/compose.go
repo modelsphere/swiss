@@ -50,7 +50,8 @@ type Input struct {
 	// enabled. Empty is omitted, so a plan without it hashes as before.
 	Autoscale values.Tree
 	// GPUResource is the extended resource the variant's pods request on this
-	// cluster, resolved from inventory. Empty is the vendor's well-known one.
+	// cluster, resolved from inventory. Empty is the vendor's default in the
+	// profile's GPU table.
 	GPUResource string
 	// GPUNodeSelectorTerms place the variant on its requires.gpuProduct,
 	// derived unless the catalog or site already set required node affinity.
@@ -355,9 +356,14 @@ func applyDefaults(site, derived, base values.Tree, in Input) error {
 	if r := in.Resolved.Variant.Requires; r.GPUs > 0 {
 		res := in.GPUResource
 		if res == "" {
-			res = r.ResourceName()
+			res = in.Profile.Nodes.GPUTable().Default(r.VendorOrDefault())
 		}
-		if _, set := values.Get(base, "model.gpuResource"); !set && res != "" && res != DefaultGPUResource {
+		_, set := values.Get(base, "model.gpuResource")
+		switch {
+		case set:
+		case res == "":
+			return fmt.Errorf("the site profile's nodes.gpus lists no resource for vendor %s", r.VendorOrDefault())
+		case res != DefaultGPUResource:
 			if err := values.Set(derived, "model.gpuResource", res); err != nil {
 				return err
 			}

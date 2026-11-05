@@ -14,6 +14,7 @@ import (
 
 	"github.com/modelsphere/swiss/internal/catalog"
 	"github.com/modelsphere/swiss/internal/cluster"
+	"github.com/modelsphere/swiss/internal/gpu"
 	"github.com/modelsphere/swiss/internal/llmsvc"
 	"github.com/modelsphere/swiss/internal/plan"
 	"github.com/modelsphere/swiss/internal/site"
@@ -488,18 +489,18 @@ func (r saveProfileRequest) document() (string, error) {
 	return "", fmt.Errorf("the profile is empty")
 }
 
-// nodes is the inventory with the site profile's GPU product aliases applied.
-// Without a readable profile the labels' names stand: the node view works
-// before setup.
-func (s *Server) nodes(ctx context.Context) ([]cluster.Node, error) {
-	nodes, err := s.probe.Nodes(ctx)
-	if err != nil {
-		return nil, err
-	}
+// gpus is the site profile's GPU table. Without a readable profile there is
+// none: the node view still lists nodes before setup, without GPUs.
+func (s *Server) gpus(ctx context.Context) gpu.Table {
 	if p, err := s.Profile(ctx); err == nil {
-		cluster.ApplyGPUProductAliases(nodes, p.Nodes.GPUProductAliasesMap())
+		return p.Nodes.GPUTable()
 	}
-	return nodes, nil
+	return nil
+}
+
+// nodes is the inventory read by the site's GPU table.
+func (s *Server) nodes(ctx context.Context) ([]cluster.Node, error) {
+	return s.probe.Nodes(ctx, s.gpus(ctx))
 }
 
 type nodeView struct {
@@ -522,13 +523,14 @@ type nodeView struct {
 func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := contextWithTimeout(r, 30*time.Second)
 	defer cancel()
-	nodes, err := s.nodes(ctx)
+	gpus := s.gpus(ctx)
+	nodes, err := s.probe.Nodes(ctx, gpus)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 
-	alloc, allocErr := s.probe.GPUAllocations(ctx)
+	alloc, allocErr := s.probe.GPUAllocations(ctx, gpus)
 	if allocErr != nil {
 		s.log.WarnContext(ctx, "GPU usage unavailable", "err", allocErr)
 	}

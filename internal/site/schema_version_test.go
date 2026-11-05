@@ -3,7 +3,7 @@ package site
 import "testing"
 
 func TestSchemaVersionValidation(t *testing.T) {
-	const head = "name: prod\nmodel:\n  pathTemplate: /models/{{name}}\n"
+	const head = "name: prod\nmodel:\n  pathTemplate: /models/{{name}}\nnodes:\n  gpus: []\n"
 	ok, err := Parse([]byte(head+`catalogs:
   - name: public
     url: /mnt/a
@@ -33,7 +33,7 @@ func TestSchemaVersionValidation(t *testing.T) {
 // One base url serves index.json and index-v2.json side by side, v1 models
 // staying in the first: the mixed profile examples/site-prod.yaml documents.
 func TestOneURLOncePerSchema(t *testing.T) {
-	const head = "name: prod\nmodel:\n  pathTemplate: /models/{{name}}\n"
+	const head = "name: prod\nmodel:\n  pathTemplate: /models/{{name}}\nnodes:\n  gpus: []\n"
 	p, err := Parse([]byte(head+`catalogs:
   - name: public
     url: https://modelsphere.github.io/model-catalog/

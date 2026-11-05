@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/modelsphere/swiss/internal/cluster"
+	"github.com/modelsphere/swiss/internal/gpu"
 	"github.com/modelsphere/swiss/internal/site"
 )
 
@@ -64,7 +65,7 @@ func TestSavingTheProfileWritesItAndComposesAgainstIt(t *testing.T) {
 	delete(bare.Maps, "swiss/site-profile")
 	srv, s, w := profileServer(t, bare)
 
-	body := "name: prod-b300\nnamespace: elsewhere\nmodel:\n  pathTemplate: /weights/{{name}}\n"
+	body := "name: prod-b300\nnamespace: elsewhere\nmodel:\n  pathTemplate: /weights/{{name}}\nnodes:\n  gpus:\n" + testGPUs
 	code, out := put(t, srv, "/api/profile", map[string]string{"yaml": body})
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, out)
@@ -101,11 +102,12 @@ func TestAnUnparseableProfileIsRefusedAndNotStored(t *testing.T) {
 		"not yaml":           "name: [unclosed\n",
 		"no name":            "model:\n  pathTemplate: /weights/{{name}}\n",
 		"no path template":   "name: prod-b300\n",
-		"unknown key":        "name: prod-b300\nmodel:\n  pathTemplate: /w\nnemspace: typo\n",
+		"unknown key":        "name: prod-b300\nmodel:\n  pathTemplate: /w\nnodes: {gpus: []}\nnemspace: typo\n",
 		"empty":              "   \n",
-		"sites without url":  "name: prod-b300\nmodel:\n  pathTemplate: /w\nsites:\n  - name: dev\n",
-		"sites without name": "name: prod-b300\nmodel:\n  pathTemplate: /w\nsites:\n  - url: https://swiss.dev.internal\n",
-		"sites bad url":      "name: prod-b300\nmodel:\n  pathTemplate: /w\nsites:\n  - name: dev\n    url: swiss.dev.internal\n",
+		"no gpus":            "name: prod-b300\nmodel:\n  pathTemplate: /w\n",
+		"sites without url":  "name: prod-b300\nmodel:\n  pathTemplate: /w\nnodes: {gpus: []}\nsites:\n  - name: dev\n",
+		"sites without name": "name: prod-b300\nmodel:\n  pathTemplate: /w\nnodes: {gpus: []}\nsites:\n  - url: https://swiss.dev.internal\n",
+		"sites bad url":      "name: prod-b300\nmodel:\n  pathTemplate: /w\nnodes: {gpus: []}\nsites:\n  - name: dev\n    url: swiss.dev.internal\n",
 	} {
 		code, out := put(t, srv, "/api/profile", map[string]string{"yaml": body})
 		if code != http.StatusBadRequest {
@@ -161,6 +163,7 @@ func TestSavingTheProfileAsAnObjectRendersIt(t *testing.T) {
 			"namespace": "models",
 			"model":     map[string]any{"pathTemplate": "/weights/{{name}}"},
 			"route":     map[string]any{"nginxConfigMap": "llm-route/openresty-conf"},
+			"nodes":     map[string]any{"gpus": []any{}},
 			"sites": []map[string]string{
 				{"name": "dev", "url": "https://swiss.dev.internal"},
 			},
@@ -222,70 +225,113 @@ func TestSendingBothYAMLAndAnObjectIsRefused(t *testing.T) {
 	}
 }
 
-// GPU product aliases are set from the site page only: saved as part of the
-// profile object, served back, and in force for the node view at once.
-func TestSavingGPUProductAliasesFromTheSitePage(t *testing.T) {
+// nodes.gpus is set from the site page: saved as part of the profile object,
+// served back trimmed, and in force for the node view at once.
+func TestSavingGPUsFromTheSitePage(t *testing.T) {
 	probe := liveProbe()
 	delete(probe.Maps, "swiss/site-profile")
-	probe.Nod = []cluster.Node{{
-		Name: "npu-1", GPUResource: "huawei.com/Ascend910", GPUProduct: "huawei-Ascend910", GPUs: 8,
-		Labels: map[string]string{"accelerator": "huawei-Ascend910"}, Schedulable: true, Ready: true,
-	}}
-	srv, _, w := profileServer(t, probe)
-	product := func() any {
-		t.Helper()
-		_, body := get(t, srv, "/api/nodes")
-		return body["nodes"].([]any)[0].(map[string]any)["GPUProduct"]
-	}
-	if got := product(); got != "huawei-Ascend910" {
-		t.Fatalf("before any alias the label names the product, got %v", got)
-	}
+	var tables []gpu.Table
+	srv, _, w := profileServer(t, tableProbe{Fake: probe, got: &tables})
 
 	code, out := put(t, srv, "/api/profile", map[string]any{
 		"profile": map[string]any{
 			"name":  "prod-b300",
 			"model": map[string]any{"pathTemplate": "/weights/{{name}}"},
 			"nodes": map[string]any{
-				"gpusPerNode":       8,
-				"gpuProductAliases": map[string][]string{" Ascend-910B3 ": {"accelerator=huawei-Ascend910"}},
+				"gpusPerNode": 8,
+				"gpus": []any{map[string]any{
+					"vendor": "ascend", "resource": "huawei.com/Ascend910", "labelKey": "accelerator/huawei-ascend910",
+					"products": []any{map[string]any{"product": " Ascend-910B3 ", "values": []string{"module-910b-8"}}},
+				}},
 			},
 		},
 	})
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, out)
 	}
-	if stored := w.written["swiss/site-profile"]["profile.yaml"]; !strings.Contains(stored, "gpuProductAliases:") {
-		t.Errorf("aliases were not written:\n%s", stored)
+	if stored := w.written["swiss/site-profile"]["profile.yaml"]; !strings.Contains(stored, "gpus:") {
+		t.Errorf("gpus were not written:\n%s", stored)
 	}
 
 	// The save answers with the parsed profile, which is what the page shows
 	// next; the fake writer does not feed the probe, so GET cannot see it here.
-	nodes := out["profile"].(map[string]any)["nodes"].(map[string]any)
-	aliases, _ := nodes["gpuProductAliases"].(map[string]any)
-	if sels, _ := aliases["Ascend-910B3"].([]any); len(sels) != 1 || sels[0] != "accelerator=huawei-Ascend910" {
-		t.Errorf("the page reads back what it saved, trimmed: %v", nodes)
+	gpus := out["profile"].(map[string]any)["nodes"].(map[string]any)["gpus"].([]any)
+	product := gpus[0].(map[string]any)["products"].([]any)[0].(map[string]any)["product"]
+	if product != "Ascend-910B3" {
+		t.Errorf("the page reads back what it saved, trimmed: %v", gpus)
 	}
-	if got := product(); got != "Ascend-910B3" {
-		t.Errorf("the node view must use the saved alias, got %v", got)
+	if code, body := get(t, srv, "/api/nodes"); code != 200 {
+		t.Fatalf("status %d: %v", code, body)
+	}
+	if len(tables) == 0 {
+		t.Fatal("the node view read no nodes")
+	}
+	if hw, _ := tables[0].Lookup("huawei.com/Ascend910"); hw.Product("module-910b-8") != "Ascend-910B3" {
+		t.Errorf("the node view must read by the saved table, got %+v", tables)
 	}
 }
 
-// A bad selector is refused on save, naming the field, so the page can say
-// which row is wrong.
-func TestABadGPUProductAliasIsRefused(t *testing.T) {
+// A bad entry is refused on save, naming it, so the page can say which row is
+// wrong.
+func TestABadGPUEntryIsRefused(t *testing.T) {
 	srv, _, w := profileServer(t, liveProbe())
 	code, out := put(t, srv, "/api/profile", map[string]any{
 		"profile": map[string]any{
 			"name":  "prod-b300",
 			"model": map[string]any{"pathTemplate": "/weights/{{name}}"},
-			"nodes": map[string]any{"gpuProductAliases": map[string][]string{"Ascend-910B3": {"accelerator"}}},
+			"nodes": map[string]any{"gpus": []any{map[string]any{"vendor": "ascend", "resource": "volcano.sh/Ascend910B3"}}},
 		},
 	})
 	if code != http.StatusBadRequest {
 		t.Fatalf("status %d, want 400: %v", code, out)
 	}
-	if msg, _ := out["error"].(string); !strings.Contains(msg, "nodes.gpuProductAliases.Ascend-910B3") {
-		t.Errorf("the refusal should name the product: %q", msg)
+	if msg, _ := out["error"].(string); !strings.Contains(msg, "nodes.gpus[0]") || !strings.Contains(msg, "labelKey") {
+		t.Errorf("the refusal should name the entry and what it lacks: %q", msg)
+	}
+	if len(w.written) != 0 {
+		t.Errorf("a refused profile must not be stored: %v", keys(w.written))
+	}
+}
+
+// A site page from before nodes.gpus still sends gpuProductAliases: the save
+// keeps them and serves them back, though placement ignores them.
+func TestSavingOldGPUProductAliasesIsAccepted(t *testing.T) {
+	srv, _, w := profileServer(t, liveProbe())
+	code, out := put(t, srv, "/api/profile", map[string]any{
+		"profile": map[string]any{
+			"name":  "prod-b300",
+			"model": map[string]any{"pathTemplate": "/weights/{{name}}"},
+			"nodes": map[string]any{"gpus": []any{}, "gpuProductAliases": map[string][]string{"Ascend-910B3": {"accelerator=huawei-Ascend910"}}},
+		},
+	})
+	if code != 200 {
+		t.Fatalf("status %d: %v", code, out)
+	}
+	if stored := w.written["swiss/site-profile"]["profile.yaml"]; !strings.Contains(stored, "gpuProductAliases:") {
+		t.Errorf("aliases must be kept:\n%s", stored)
+	}
+	nodes := out["profile"].(map[string]any)["nodes"].(map[string]any)
+	if aliases, _ := nodes["gpuProductAliases"].(map[string]any); len(aliases) != 1 {
+		t.Errorf("aliases must be served back: %v", nodes)
+	}
+}
+
+// The site page sends the profile it read, nodes.gpus included; one without it
+// would leave the cluster with no GPU table, so it is refused, not filled in.
+func TestSavingAProfileWithoutGPUsIsRefused(t *testing.T) {
+	srv, _, w := profileServer(t, liveProbe())
+	code, out := put(t, srv, "/api/profile", map[string]any{
+		"profile": map[string]any{
+			"name":  "prod-b300",
+			"model": map[string]any{"pathTemplate": "/weights/{{name}}"},
+			"nodes": map[string]any{"gpusPerNode": 8},
+		},
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400: %v", code, out)
+	}
+	if msg, _ := out["error"].(string); !strings.Contains(msg, "nodes.gpus is required") {
+		t.Errorf("the refusal should say what is missing: %q", msg)
 	}
 	if len(w.written) != 0 {
 		t.Errorf("a refused profile must not be stored: %v", keys(w.written))
