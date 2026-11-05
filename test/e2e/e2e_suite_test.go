@@ -138,7 +138,7 @@ func loadConfig() suiteConfig {
 		kubectlBin:   envOr("KUBECTL", "kubectl"),
 		helmBin:      envOr("HELM", "helm"),
 		cluster:      envOr("KIND_CLUSTER", "swiss-test-e2e"),
-		catalog:      envOr("CATALOG", "https://modelsphere.github.io/model-catalog/"),
+		catalog:      envOr("CATALOG", "https://modelsphere.github.io/mock-llmd/"),
 		chartRepo:    envOr("CHART_REPO", "https://modelsphere.github.io/helm-charts"),
 		llmOperator:  envOr("LLM_OPERATOR_VERSION", "v0.5.0"),
 		autoconfig:   envOr("AUTOCONFIG_CHART_VERSION", "0.4.1"),

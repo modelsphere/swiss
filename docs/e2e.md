@@ -83,7 +83,7 @@ The autoscale spec applies the DisaggregatedSet CRD, runs an nginx stub for deci
 | `SKIP_BUILD` | unset. `true` or `1` skips the image build and still `kind load`s it |
 | `IMG` | `swissd:e2e` |
 | `IMAGE_REPO`, `IMAGE_TAG` | unset. When `IMAGE_REPO` is set it wins over `IMG`; `IMAGE_TAG` defaults to `e2e` |
-| `CATALOG` | `https://modelsphere.github.io/model-catalog/` |
+| `CATALOG` | `https://modelsphere.github.io/mock-llmd/` |
 | `CHART_REPO` | `https://modelsphere.github.io/helm-charts`, for the engine chart and the CRD charts |
 | `LLM_OPERATOR_VERSION` | `v0.5.0` |
 | `AUTOCONFIG_CHART_VERSION` | `0.4.1` |
