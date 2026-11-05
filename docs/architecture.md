@@ -195,11 +195,3 @@ form / flags  ─┘             (hash)     ↓
 | `GET /api/nodes` | the GPU inventory: type, allocatable, in use, and what holds it |
 | `GET /api/profile` | the site profile as parsed, after defaults |
 | `GET /api/autoscaling`, `GET /api/releases/{ns}/{release}/autoscaling` | the autoscale loop's last pass per PD release with the form SLO on; in memory only, lost on restart |
-
-## Canary service operations
-
-- List/status reports ownership and assignment metadata for Console.
-- Console controls experiment-service actions. Swiss has no Canary-specific guard for apply, install, rollback, scale, uninstall, or SLO access.
-- `adaptiveOnly` is an optional plan composition mode that pins the live source and other values. It requires neither a Canary assignment nor a controller baseline; normal plan requests remain available.
-- LLMService deletion retains UID/resourceVersion preconditions and conflict recovery to avoid deleting a replacement object.
-- Kubernetes RBAC and any separately enabled admission webhook still apply to API writes.

@@ -70,10 +70,6 @@ POST /api/plans /api/diff /api/apply /api/install     (allowDeploy only)
 
 `applyWith` on the site profile chooses the backend for a new install: `helm` (the default when the field is omitted) or `llmsvc` when the LLMService CRD is served. A release already in the cluster stays on the backend that owns it. `llmsvc` requires the plan's `source.schema` to be v2; empty means v1 and is rejected with 400 and nothing is written. Helm accepts v1 and v2. The CLI `swiss install` and `swiss apply` stay on helm. See [docs/architecture.md](docs/architecture.md).
 
-## Canary service metadata
-
-List/status includes service UIDs and `managedBy` / `assignedTo` identities for Console. Console controls experiment-service actions; Swiss applies normal backend rules to these services without Canary-specific write or SLO restrictions.
-
 ## Deploy
 
 CI publishes the image to `ghcr.io/modelsphere/swissd` and
