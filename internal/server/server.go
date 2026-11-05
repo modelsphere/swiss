@@ -461,6 +461,8 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /api/deployments", s.handleDeployments)
 	mux.HandleFunc("GET /api/nodes", s.handleNodes)
+	// A read: POST only to carry the unsaved nodes.gpus entry.
+	mux.HandleFunc("POST /api/nodes/gpus", s.handleNodeGPUs)
 	mux.HandleFunc("GET /api/profile", s.handleProfile)
 	// swissd owns the profile now: the chart no longer writes one, so this is
 	// both the first-run setup and every later edit. One endpoint, because a

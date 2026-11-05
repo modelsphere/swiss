@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -562,6 +563,101 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		body["usageError"] = allocErr.Error()
 	}
 	writeJSON(w, http.StatusOK, body)
+}
+
+type gpuScanCount struct {
+	Nodes int `json:"nodes"`
+	GPUs  int `json:"gpus"`
+}
+
+func (c *gpuScanCount) add(gpus int) { c.Nodes, c.GPUs = c.Nodes+1, c.GPUs+gpus }
+
+type gpuScanName struct {
+	Name string `json:"name"`
+	gpuScanCount
+}
+
+type gpuScanProduct struct {
+	Product string `json:"product"`
+	gpuScanCount
+	// Names are the label values naming it -- the product itself, then its
+	// values -- each with the nodes it was read from.
+	Names []*gpuScanName `json:"names"`
+}
+
+func (p *gpuScanProduct) name(v string) *gpuScanName {
+	for _, n := range p.Names {
+		if n.Name == v {
+			return n
+		}
+	}
+	n := &gpuScanName{Name: v}
+	p.Names = append(p.Names, n)
+	return n
+}
+
+// handleNodeGPUs reads the nodes by one nodes.gpus entry, saved or not: what
+// the site page shows while the entry is edited, before /api/nodes can. The
+// entry's own products are listed even when no node carries them.
+func (s *Server) handleNodeGPUs(w http.ResponseWriter, r *http.Request) {
+	var g gpu.GPU
+	if err := json.NewDecoder(r.Body).Decode(&g); err != nil {
+		writeError(w, http.StatusBadRequest, "body: "+err.Error())
+		return
+	}
+	g.Resource, g.LabelKey = strings.TrimSpace(g.Resource), strings.TrimSpace(g.LabelKey)
+	if g.Resource == "" {
+		writeError(w, http.StatusBadRequest, "resource is required")
+		return
+	}
+	ctx, cancel := contextWithTimeout(r, 30*time.Second)
+	defer cancel()
+	nodes, err := s.probe.Nodes(ctx, gpu.Table{g})
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	var listed, found []*gpuScanProduct
+	byProduct := map[string]*gpuScanProduct{}
+	for _, p := range g.Products {
+		if byProduct[p.Product] != nil {
+			continue
+		}
+		sp := &gpuScanProduct{Product: p.Product}
+		for _, v := range g.Values(p.Product) {
+			sp.name(v)
+		}
+		byProduct[p.Product] = sp
+		listed = append(listed, sp)
+	}
+	var total, unlabelled gpuScanCount
+	for _, n := range nodes {
+		if n.GPUResource != g.Resource {
+			continue
+		}
+		total.add(n.GPUs)
+		if n.GPUProduct == "" {
+			unlabelled.add(n.GPUs)
+			continue
+		}
+		sp := byProduct[n.GPUProduct]
+		if sp == nil {
+			sp = &gpuScanProduct{Product: n.GPUProduct}
+			byProduct[n.GPUProduct] = sp
+			found = append(found, sp)
+		}
+		sp.add(n.GPUs)
+		sp.name(cmp.Or(n.Labels[g.LabelKey], n.GPUProduct)).add(n.GPUs)
+	}
+	sort.Slice(found, func(i, j int) bool { return found[i].Product < found[j].Product })
+	writeJSON(w, http.StatusOK, map[string]any{
+		"resource":   g.Resource,
+		"nodes":      total.Nodes,
+		"gpus":       total.GPUs,
+		"products":   append(append([]*gpuScanProduct{}, listed...), found...),
+		"unlabelled": unlabelled,
+	})
 }
 
 type deployment struct {

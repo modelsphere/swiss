@@ -296,6 +296,78 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "502": { $ref: "#/components/responses/BadGateway" }
 
+  /api/nodes/gpus:
+    post:
+      tags: [cluster]
+      summary: Read nodes by one GPU entry
+      description: |
+        The nodes read by one `nodes.gpus` entry, saved or not, as the site page
+        edits it. A read: POST only to carry the entry. Lists every node, so a
+        page calls it on request rather than polling.
+        Only `resource` is required; `vendor` plays no part in reading nodes
+        and is ignored.
+      operationId: scanNodeGPUs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [resource]
+              properties:
+                resource: { type: string }
+                labelKey: { type: string, description: "Without it every node with the resource reads as unlabelled." }
+                products:
+                  type: array
+                  items:
+                    type: object
+                    required: [product]
+                    properties:
+                      product: { type: string }
+                      values: { type: array, items: { type: string } }
+      responses:
+        "200":
+          description: What the nodes carry under the resource.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [resource, nodes, gpus, products, unlabelled]
+                properties:
+                  resource: { type: string }
+                  nodes: { type: integer, description: "Nodes with the resource allocatable." }
+                  gpus: { type: integer }
+                  products:
+                    type: array
+                    description: The entry's own products first, listed even when no node carries them, then any other product the nodes carry.
+                    items:
+                      type: object
+                      required: [product, nodes, gpus, names]
+                      properties:
+                        product: { type: string, description: "The canonical name the entry reads." }
+                        nodes: { type: integer }
+                        gpus: { type: integer }
+                        names:
+                          type: array
+                          description: Every label value naming the product -- the product itself, then its values -- with the nodes read from it.
+                          items:
+                            type: object
+                            required: [name, nodes, gpus]
+                            properties:
+                              name: { type: string }
+                              nodes: { type: integer }
+                              gpus: { type: integer }
+                  unlabelled:
+                    type: object
+                    description: Nodes with the resource but no value under labelKey.
+                    required: [nodes, gpus]
+                    properties:
+                      nodes: { type: integer }
+                      gpus: { type: integer }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
   /api/profile:
     get:
       tags: [profile]

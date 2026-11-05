@@ -234,3 +234,51 @@ func TestNodeViewReadsByTheProfilesGPUTable(t *testing.T) {
 		})
 	}
 }
+
+// An unsaved nodes.gpus entry reads the nodes by itself, not by the saved
+// table. Each product comes back with the nodes behind every name for it, its
+// own products first and listed even when no node carries them.
+func TestNodeGPUsReadsByTheDraftEntry(t *testing.T) {
+	probe := gpuProbe()
+	probe.Nod = []cluster.Node{
+		{Name: "a", GPUResource: "volcano.sh/Ascend910B4-1", GPUProduct: "Ascend-910B4", GPUs: 8, Labels: map[string]string{"volcano.sh/npu-name": "Ascend910B4-1"}},
+		{Name: "b", GPUResource: "volcano.sh/Ascend910B4-1", GPUProduct: "Ascend-910B4", GPUs: 8, Labels: map[string]string{"volcano.sh/npu-name": "Ascend910B4-1"}},
+		{Name: "c", GPUResource: "volcano.sh/Ascend910B4-1", GPUProduct: "Ascend-910B2", GPUs: 8, Labels: map[string]string{"volcano.sh/npu-name": "Ascend-910B2"}},
+		{Name: "d", GPUResource: "volcano.sh/Ascend910B4-1", GPUs: 4},
+		{Name: "e", GPUResource: "nvidia.com/gpu", GPUProduct: "NVIDIA-H800", GPUs: 8},
+	}
+	draft := gpu.GPU{Vendor: "ascend", Resource: "volcano.sh/Ascend910B4-1", LabelKey: "volcano.sh/npu-name", Products: []gpu.Product{
+		{Product: "Ascend-910B4", Values: []string{"Ascend910B4-1"}},
+		{Product: "Ascend-910B3", Values: []string{"Ascend910B3"}},
+	}}
+	var got []gpu.Table
+	srv := testServer(t, tableProbe{Fake: probe, got: &got})
+	code, body := post(t, srv, "/api/nodes/gpus", draft)
+	if code != 200 {
+		t.Fatalf("status %d: %v", code, body)
+	}
+	if len(got) != 1 || !reflect.DeepEqual(got[0], gpu.Table{draft}) {
+		t.Fatalf("want the nodes read by the draft alone, got %+v", got)
+	}
+	name := func(n string, nodes, gpus float64) map[string]any {
+		return map[string]any{"name": n, "nodes": nodes, "gpus": gpus}
+	}
+	want := map[string]any{
+		"resource": "volcano.sh/Ascend910B4-1", "nodes": 4.0, "gpus": 28.0,
+		"products": []any{
+			map[string]any{"product": "Ascend-910B4", "nodes": 2.0, "gpus": 16.0, "names": []any{name("Ascend-910B4", 0, 0), name("Ascend910B4-1", 2, 16)}},
+			map[string]any{"product": "Ascend-910B3", "nodes": 0.0, "gpus": 0.0, "names": []any{name("Ascend-910B3", 0, 0), name("Ascend910B3", 0, 0)}},
+			map[string]any{"product": "Ascend-910B2", "nodes": 1.0, "gpus": 8.0, "names": []any{name("Ascend-910B2", 1, 8)}},
+		},
+		"unlabelled": map[string]any{"nodes": 1.0, "gpus": 4.0},
+	}
+	if !reflect.DeepEqual(body, want) {
+		t.Fatalf("got %v\nwant %v", body, want)
+	}
+	if code, _ := post(t, srv, "/api/nodes/gpus", map[string]string{"resource": "nvidia.com/gpu"}); code != 200 {
+		t.Fatalf("a resource alone: status %d, want 200", code)
+	}
+	if code, _ := post(t, srv, "/api/nodes/gpus", gpu.GPU{Vendor: "ascend"}); code != 400 {
+		t.Fatalf("an entry without a resource: status %d, want 400", code)
+	}
+}
