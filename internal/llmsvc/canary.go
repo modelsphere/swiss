@@ -34,11 +34,7 @@ type CanaryAssignment struct {
 	Verified      bool   `json:"verified"`
 }
 
-func (a *CanaryAssignment) WriteBlocked() bool {
-	return a != nil && (!a.Verified || a.Role == "arm")
-}
-
-// CanaryOwnership keeps orphaned or inconsistent ownership protected too.
+// CanaryOwnership reports incomplete ownership metadata with Verified=false.
 func CanaryOwnership(u *unstructured.Unstructured) *CanaryOwner {
 	if u == nil {
 		return nil
@@ -65,8 +61,7 @@ func CanaryOwnership(u *unstructured.Unstructured) *CanaryOwner {
 	return nil
 }
 
-// CanaryAssigned parses canary.modelsphere.dev/assignment and keeps malformed
-// or incomplete assignment metadata protected too.
+// CanaryAssigned reports malformed or incomplete assignments with Verified=false.
 func CanaryAssigned(u *unstructured.Unstructured) *CanaryAssignment {
 	if u == nil {
 		return nil

@@ -169,7 +169,7 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, error) {
 	if req.AdaptiveOnly {
-		return s.composeAssignedAdaptive(ctx, req)
+		return s.composeAdaptive(ctx, req)
 	}
 	if req.FromRelease != "" {
 		var err error
@@ -840,9 +840,6 @@ func (s *Server) apply(ctx context.Context, p *plan.Plan, mode exec.Mode, applyW
 // marker is written, so an apply cannot write its applying phase over the
 // marker and an uninstall cannot start in the middle of an apply.
 func (s *Server) applyLocked(ctx context.Context, p *plan.Plan, mode exec.Mode, applyWith string, o applyOpts) (applyResult, error) {
-	if err := s.refuseCanaryPlanWrite(ctx, p, mode, o.Action); err != nil {
-		return applyResult{}, err
-	}
 	if err := s.refuseUninstalling(ctx, p.Release.Namespace, p.Release.Name); err != nil {
 		return applyResult{}, err
 	}
@@ -879,10 +876,6 @@ func (s *Server) handleUninstall(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	ns, release := r.PathValue("namespace"), r.PathValue("release")
-	if err := s.refuseCanaryWrite(ctx, ns, release); err != nil {
-		writeStatus(w, err, http.StatusBadGateway)
-		return
-	}
 	if !s.tryApplyLock(ns, release) {
 		// The lock may be held by the uninstall itself, still running helm,
 		// or by another call while an LLMService is already being deleted.

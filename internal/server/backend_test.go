@@ -245,8 +245,9 @@ func newGateServer(t *testing.T, kind, applyWith, helmBin, helmfileBin string) *
 	return g
 }
 
-// Read fallback remains available; mutations require an ownership check.
-func TestLLMInvisibleKeepsReadsAndRefusesWrites(t *testing.T) {
+// A served CRD that this swissd cannot read must not turn the helm paths into
+// 502s. Forbidden and a discovery error both behave as an unserved CRD.
+func TestLLMInvisibleMatchesUnserved(t *testing.T) {
 	helmBin := failBin(t, "helm")
 	helmfileBin := failBin(t, "helmfile")
 	base := newGateServer(t, "unserved", backendHelm, helmBin, helmfileBin)
@@ -272,15 +273,26 @@ func TestLLMInvisibleKeepsReadsAndRefusesWrites(t *testing.T) {
 				t.Fatalf("status called get after forbidden was cached: %d", other.calls.Load())
 			}
 
+			bHash := gatePlan(t, base)
 			oHash := gatePlan(t, other)
-			for _, endpoint := range []string{"/api/install", "/api/apply"} {
-				code, body := post(t, other.srv, endpoint, map[string]any{"planHash": oHash})
-				if code != http.StatusBadGateway || !strings.Contains(errText(body), "cannot verify service ownership") {
-					t.Fatalf("%s: %d %v", endpoint, code, body)
-				}
+			bc, bb := post(t, base.srv, "/api/install", map[string]any{"planHash": bHash})
+			oc, ob := post(t, other.srv, "/api/install", map[string]any{"planHash": oHash})
+			if bc != oc || bc == http.StatusBadGateway {
+				t.Fatalf("install base %d %v other %d %v", bc, bb, oc, ob)
 			}
-			if len(other.w.written) != 0 {
-				t.Fatal("unverified ownership wrote a plan")
+			if _, ok := base.w.written[planRef("models", "qwen-new")]; !ok {
+				t.Fatal("unserved install did not write the plan ConfigMap")
+			}
+			if _, ok := other.w.written[planRef("models", "qwen-new")]; !ok {
+				t.Fatal("hidden install did not write the plan ConfigMap")
+			}
+			bc, bb = post(t, base.srv, "/api/apply", map[string]any{"planHash": bHash})
+			oc, ob = post(t, other.srv, "/api/apply", map[string]any{"planHash": oHash})
+			if bc != oc || bc == http.StatusBadGateway {
+				t.Fatalf("upgrade base %d %v other %d %v", bc, bb, oc, ob)
+			}
+			if kind == "forbidden" && other.calls.Load() != 1 {
+				t.Fatalf("apply called the API after forbidden was cached: %d", other.calls.Load())
 			}
 
 			_, body := get(t, other.srv, "/api/cluster")
@@ -306,8 +318,9 @@ func TestLLMInvisibleKeepsReadsAndRefusesWrites(t *testing.T) {
 	}
 }
 
-// An llmsvc profile cannot bypass ownership checks by falling back to helm.
-func TestLLMApplyWithHiddenRefusesWrites(t *testing.T) {
+// applyWith llmsvc falls back to helm when the CRD is served but not granted,
+// and when discovery itself fails.
+func TestLLMApplyWithHiddenFallsBackToHelm(t *testing.T) {
 	helmBin := failBin(t, "helm")
 	helmfileBin := failBin(t, "helmfile")
 	for _, kind := range []string{"forbidden", "discovery"} {
@@ -315,11 +328,11 @@ func TestLLMApplyWithHiddenRefusesWrites(t *testing.T) {
 			g := newGateServer(t, kind, backendLLMSVC, helmBin, helmfileBin)
 			hash := gatePlan(t, g)
 			code, out := post(t, g.srv, "/api/install", map[string]any{"planHash": hash})
-			if code != http.StatusBadGateway {
+			if code == http.StatusBadGateway {
 				t.Fatalf("install %d %v", code, out)
 			}
-			if len(g.w.written) != 0 {
-				t.Fatal("unverified ownership wrote a helm plan")
+			if _, ok := g.w.written[planRef("models", "qwen-new")]; !ok {
+				t.Fatal("fallback did not write the helm plan ConfigMap")
 			}
 			_, body := get(t, g.srv, "/api/cluster")
 			info := body["llmservice"].(map[string]any)

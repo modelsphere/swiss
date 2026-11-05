@@ -7,7 +7,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-func TestCanaryOwnershipProtectsIncompleteMetadata(t *testing.T) {
+func TestCanaryOwnershipReportsIncompleteMetadata(t *testing.T) {
 	controller := true
 	ref := metav1.OwnerReference{APIVersion: "canary.modelsphere.dev/v1alpha1", Kind: "LLMCanary", Name: "demo", UID: "old-uid", Controller: &controller}
 	labels := map[string]string{CanaryPrefix + "canary-name": "demo", CanaryPrefix + "canary-namespace": "canary", CanaryPrefix + "canary-uid": "old-uid"}
@@ -63,22 +63,22 @@ func TestCanarySystemLayerIsEffectiveInReadPlan(t *testing.T) {
 	}
 }
 
-func TestCanaryAssignedProtectsArmAndMalformedMetadata(t *testing.T) {
+func TestCanaryAssignedReportsArmAndMalformedMetadata(t *testing.T) {
 	for _, tc := range []struct {
-		name                        string
-		raw                         string
-		present, verified, blocking bool
+		name              string
+		raw               string
+		present, verified bool
 	}{
-		{"none", "", false, false, false},
-		{"valid arm", `{"apiVersion":"canary.modelsphere.dev/v1alpha1","kind":"LLMCanary","namespace":"canary","name":"demo","uid":"parent-uid","role":"arm","arm":"baseline","configDigest":"sha256:abc","configVersion":"7"}`, true, true, true},
-		{"valid production", `{"apiVersion":"canary.modelsphere.dev/v1alpha1","kind":"LLMCanary","namespace":"canary","name":"demo","uid":"parent-uid","role":"production"}`, true, true, false},
-		{"empty annotation", " ", true, false, true},
-		{"malformed json", "{not-json", true, false, true},
-		{"missing uid", `{"apiVersion":"canary.modelsphere.dev/v1alpha1","kind":"LLMCanary","namespace":"canary","name":"demo","role":"arm","arm":"baseline"}`, true, false, true},
-		{"arm without arm name", `{"apiVersion":"canary.modelsphere.dev/v1alpha1","kind":"LLMCanary","namespace":"canary","name":"demo","uid":"parent-uid","role":"arm"}`, true, false, true},
-		{"production with arm name", `{"apiVersion":"canary.modelsphere.dev/v1alpha1","kind":"LLMCanary","namespace":"canary","name":"demo","uid":"parent-uid","role":"production","arm":"baseline"}`, true, false, true},
-		{"cross namespace production", `{"apiVersion":"canary.modelsphere.dev/v1alpha1","kind":"LLMCanary","namespace":"other","name":"demo","uid":"parent-uid","role":"production"}`, true, true, false},
-		{"cross namespace", `{"apiVersion":"canary.modelsphere.dev/v1alpha1","kind":"LLMCanary","namespace":"other","name":"demo","uid":"parent-uid","role":"arm","arm":"baseline"}`, true, false, true},
+		{"none", "", false, false},
+		{"valid arm", `{"apiVersion":"canary.modelsphere.dev/v1alpha1","kind":"LLMCanary","namespace":"canary","name":"demo","uid":"parent-uid","role":"arm","arm":"baseline","configDigest":"sha256:abc","configVersion":"7"}`, true, true},
+		{"valid production", `{"apiVersion":"canary.modelsphere.dev/v1alpha1","kind":"LLMCanary","namespace":"canary","name":"demo","uid":"parent-uid","role":"production"}`, true, true},
+		{"empty annotation", " ", true, false},
+		{"malformed json", "{not-json", true, false},
+		{"missing uid", `{"apiVersion":"canary.modelsphere.dev/v1alpha1","kind":"LLMCanary","namespace":"canary","name":"demo","role":"arm","arm":"baseline"}`, true, false},
+		{"arm without arm name", `{"apiVersion":"canary.modelsphere.dev/v1alpha1","kind":"LLMCanary","namespace":"canary","name":"demo","uid":"parent-uid","role":"arm"}`, true, false},
+		{"production with arm name", `{"apiVersion":"canary.modelsphere.dev/v1alpha1","kind":"LLMCanary","namespace":"canary","name":"demo","uid":"parent-uid","role":"production","arm":"baseline"}`, true, false},
+		{"cross namespace production", `{"apiVersion":"canary.modelsphere.dev/v1alpha1","kind":"LLMCanary","namespace":"other","name":"demo","uid":"parent-uid","role":"production"}`, true, true},
+		{"cross namespace", `{"apiVersion":"canary.modelsphere.dev/v1alpha1","kind":"LLMCanary","namespace":"other","name":"demo","uid":"parent-uid","role":"arm","arm":"baseline"}`, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			u := &unstructured.Unstructured{}
@@ -87,8 +87,8 @@ func TestCanaryAssignedProtectsArmAndMalformedMetadata(t *testing.T) {
 				u.SetAnnotations(map[string]string{AssignmentKey: tc.raw})
 			}
 			got := CanaryAssigned(u)
-			if (got != nil) != tc.present || (got != nil && got.Verified != tc.verified) || got.WriteBlocked() != tc.blocking {
-				t.Fatalf("got %+v, blocking=%v", got, got.WriteBlocked())
+			if (got != nil) != tc.present || (got != nil && got.Verified != tc.verified) {
+				t.Fatalf("got %+v", got)
 			}
 		})
 	}

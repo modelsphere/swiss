@@ -1,7 +1,6 @@
 package server
 
 import (
-	"net/http"
 	"testing"
 
 	"github.com/modelsphere/swiss/internal/llmsvc"
@@ -49,7 +48,7 @@ func TestLLMDeleteUsesObservedIdentity(t *testing.T) {
 	}
 }
 
-func TestCanaryArmReadAndWriteBoundaries(t *testing.T) {
+func TestCanaryArmReadMetadata(t *testing.T) {
 	rig := startRig(t, llmProbe(), true, false, backendLLMSVC)
 	u := ownedArm()
 	if _, err := rig.c.Create(t.Context(), u); err != nil {
@@ -68,48 +67,9 @@ func TestCanaryArmReadAndWriteBoundaries(t *testing.T) {
 			t.Fatal(body)
 		}
 	}
-	hash := rig.storePlan(t, map[string]any{"release": "demo-baseline"})
-	rig.dyn.ClearActions()
-	checks := []struct {
-		path string
-		call func() (int, map[string]any)
-	}{
-		{"apply", func() (int, map[string]any) {
-			return post(t, rig.srv, "/api/apply", map[string]any{"planHash": hash, "expectRevision": 1, "forceConflicts": true})
-		}},
-		{"install", func() (int, map[string]any) {
-			return post(t, rig.srv, "/api/install", map[string]any{"planHash": hash})
-		}},
-		{"rollback", func() (int, map[string]any) {
-			return post(t, rig.srv, "/api/releases/models/demo-baseline/rollback", map[string]any{"toRevision": 1, "expectRevision": 1})
-		}},
-		{"uninstall", func() (int, map[string]any) { return del(t, rig.srv, "/api/releases/models/demo-baseline") }},
-		{"slo write", func() (int, map[string]any) {
-			return put(t, rig.srv, "/api/releases/models/demo-baseline/slo", map[string]any{"priority": 10})
-		}},
-		{"slo reset", func() (int, map[string]any) { return del(t, rig.srv, "/api/releases/models/demo-baseline/slo") }},
-		{"slo read", func() (int, map[string]any) { return get(t, rig.srv, "/api/releases/models/demo-baseline/slo") }},
-	}
-	for _, check := range checks {
-		t.Run(check.path, func(t *testing.T) {
-			code, body := check.call()
-			if code != http.StatusConflict || body["code"] != "CANARY_MANAGED_SERVICE" {
-				t.Fatalf("%d %v", code, body)
-			}
-			owner, _ := body["owner"].(map[string]any)
-			if owner["uid"] != "parent-uid" {
-				t.Fatal(body)
-			}
-		})
-	}
-	for _, a := range rig.dyn.Actions() {
-		if a.GetVerb() == "delete" || a.GetVerb() == "update" || a.GetVerb() == "patch" || a.GetVerb() == "create" {
-			t.Fatalf("blocked write reached Kubernetes: %v", a)
-		}
-	}
 }
 
-func TestCanaryAssignedArmReadAndWriteBoundaries(t *testing.T) {
+func TestCanaryAssignedArmReadMetadata(t *testing.T) {
 	rig := startRig(t, llmProbe(), true, false, backendLLMSVC)
 	u := llmObject("models", "demo-existing-arm", map[string]string{
 		llmsvc.AnnProfile:    "prod",
@@ -137,56 +97,76 @@ func TestCanaryAssignedArmReadAndWriteBoundaries(t *testing.T) {
 			t.Fatalf("unexpected assignedTo: %v", body)
 		}
 	}
-	hash := rig.storePlan(t, map[string]any{"release": "demo-existing-arm"})
-	rig.dyn.ClearActions()
-	checks := []struct {
-		path string
-		call func() (int, map[string]any)
-	}{
-		{"apply", func() (int, map[string]any) {
-			return post(t, rig.srv, "/api/apply", map[string]any{"planHash": hash, "expectRevision": 1, "forceConflicts": true})
-		}},
-		{"install", func() (int, map[string]any) {
-			return post(t, rig.srv, "/api/install", map[string]any{"planHash": hash})
-		}},
-		{"rollback", func() (int, map[string]any) {
-			return post(t, rig.srv, "/api/releases/models/demo-existing-arm/rollback", map[string]any{"toRevision": 1, "expectRevision": 1})
-		}},
-		{"uninstall", func() (int, map[string]any) { return del(t, rig.srv, "/api/releases/models/demo-existing-arm") }},
-		{"slo write", func() (int, map[string]any) {
-			return put(t, rig.srv, "/api/releases/models/demo-existing-arm/slo", map[string]any{"priority": 10})
-		}},
-		{"slo reset", func() (int, map[string]any) { return del(t, rig.srv, "/api/releases/models/demo-existing-arm/slo") }},
-	}
-	for _, check := range checks {
-		t.Run(check.path, func(t *testing.T) {
-			code, body := check.call()
-			if code != http.StatusConflict || body["code"] != "CANARY_ASSIGNED_SERVICE" {
-				t.Fatalf("%d %v", code, body)
-			}
-			assigned, _ := body["assignedTo"].(map[string]any)
-			if assigned["uid"] != "parent-uid" || assigned["arm"] != "candidate" {
-				t.Fatal(body)
-			}
-		})
-	}
-	for _, method := range []string{http.MethodPut, http.MethodDelete} {
-		req, err := http.NewRequest(method, rig.srv.URL+"/api/releases/models/demo-existing-arm/autoscaling", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp, err := rig.srv.Client().Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusMethodNotAllowed {
-			t.Fatalf("removed autoscaling mutation %s: %d", method, resp.StatusCode)
-		}
-	}
-	for _, a := range rig.dyn.Actions() {
-		if a.GetVerb() == "delete" || a.GetVerb() == "update" || a.GetVerb() == "patch" || a.GetVerb() == "create" {
-			t.Fatalf("blocked write reached Kubernetes: %v", a)
+}
+
+func TestCanaryMetadataKeepsNormalServiceOperations(t *testing.T) {
+	for _, kind := range []string{"owned", "assigned", "malformed", "orphaned"} {
+		for _, operation := range []string{"apply", "install", "rollback", "uninstall", "slo read", "slo write", "slo reset"} {
+			t.Run(kind+"/"+operation, func(t *testing.T) {
+				statuses := make([]int, 0, 2)
+				for _, marked := range []bool{false, true} {
+					var sent map[string]any
+					up := sloStub(t, true, true, &sent)
+					probe := llmProbe()
+					probe.Maps["swiss/site-profile"] = map[string]string{"profile.yaml": probe.Maps["swiss/site-profile"]["profile.yaml"] + "\nscaler:\n  sloAddress: " + up.URL + "\n  sloTokenSecret: llm-scaler/slo-api\n"}
+					probe.Secrets["llm-scaler/slo-api"] = map[string]string{"token": "slo-secret"}
+					rig := startRig(t, probe, true, true, backendLLMSVC)
+					u := ownedArm()
+					u.SetName("glm")
+					if !marked || kind != "owned" {
+						u.SetOwnerReferences(nil)
+						u.SetLabels(nil)
+					}
+					if marked {
+						switch kind {
+						case "assigned":
+							anns := u.GetAnnotations()
+							anns[llmsvc.AssignmentKey] = `{"apiVersion":"canary.modelsphere.dev/v1alpha1","kind":"LLMCanary","namespace":"models","name":"demo","uid":"parent-uid","role":"arm","arm":"baseline"}`
+							u.SetAnnotations(anns)
+						case "malformed":
+							anns := u.GetAnnotations()
+							anns[llmsvc.AssignmentKey] = "{broken"
+							u.SetAnnotations(anns)
+						case "orphaned":
+							u.SetLabels(map[string]string{llmsvc.CanaryPrefix + "canary-name": "demo"})
+						}
+					}
+					if _, err := rig.c.Create(t.Context(), u); err != nil {
+						t.Fatal(err)
+					}
+					hash := rig.storePlan(t, map[string]any{"release": "glm"})
+					var code int
+					var body map[string]any
+					switch operation {
+					case "apply":
+						code, body = post(t, rig.srv, "/api/apply", map[string]any{"planHash": hash, "expectRevision": 1})
+					case "install":
+						code, body = post(t, rig.srv, "/api/install", map[string]any{"planHash": hash})
+					case "rollback":
+						code, body = post(t, rig.srv, "/api/releases/models/glm/rollback", map[string]any{"toRevision": 1, "expectRevision": 1})
+					case "uninstall":
+						code, body = del(t, rig.srv, "/api/releases/models/glm")
+					case "slo read":
+						code, body = get(t, rig.srv, "/api/releases/models/glm/slo")
+					case "slo write":
+						code, body = put(t, rig.srv, "/api/releases/models/glm/slo", map[string]any{"priority": 10})
+					case "slo reset":
+						code, body = del(t, rig.srv, "/api/releases/models/glm/slo")
+					}
+					if body["code"] == "CANARY_MANAGED_SERVICE" || body["code"] == "CANARY_ASSIGNED_SERVICE" {
+						t.Fatalf("Canary metadata blocked operation: %d %v", code, body)
+					}
+					if operation == "apply" || operation == "uninstall" || operation == "slo read" || operation == "slo write" || operation == "slo reset" {
+						if code < 200 || code >= 300 {
+							t.Fatalf("marked=%v: %d %v", marked, code, body)
+						}
+					}
+					statuses = append(statuses, code)
+				}
+				if statuses[0] != statuses[1] {
+					t.Fatalf("ordinary=%d marked=%d", statuses[0], statuses[1])
+				}
+			})
 		}
 	}
 }

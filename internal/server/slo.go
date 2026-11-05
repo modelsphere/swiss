@@ -38,10 +38,6 @@ func (s *Server) handleSLO(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := contextWithTimeout(r, 15*time.Second)
 	defer cancel()
-	if err := s.refuseCanaryAccess(ctx, ns, release, r.Method != http.MethodGet); err != nil {
-		writeStatus(w, err, http.StatusBadGateway)
-		return
-	}
 	prof, err := s.Profile(ctx)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())

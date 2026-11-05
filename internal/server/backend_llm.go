@@ -184,9 +184,6 @@ func (b llmBackend) Apply(ctx context.Context, p *plan.Plan, mode exec.Mode, o a
 		if err != nil {
 			return applyResult{}, failErr(http.StatusBadGateway, err)
 		}
-		if err := refuseCanaryPlan(cur, p, mode, o.Action); err != nil {
-			return applyResult{}, err
-		}
 		if llmsvc.IsExternal(cur) {
 			return applyResult{}, fail(http.StatusConflict, "release %s is an external LLMService: swiss did not deploy it, so it cannot be upgraded", ref)
 		}
@@ -340,9 +337,6 @@ func (b llmBackend) Uninstall(ctx context.Context, ns, release string) (uninstal
 	if err != nil {
 		return uninstallResult{}, failErr(http.StatusBadGateway, err)
 	}
-	if err := refuseCanaryService(u); err != nil {
-		return uninstallResult{}, err
-	}
 	// The operator's finalizer holds the object through route removal and pod
 	// termination. This call returns once that delete is accepted; the reap
 	// drops swiss's records when the object is finally gone.
@@ -389,9 +383,6 @@ func (b llmBackend) Uninstall(ctx context.Context, ns, release string) (uninstal
 		}
 		if fresh.GetUID() != u.GetUID() {
 			return restoreRejected(fail(http.StatusConflict, "service %s/%s was replaced; refresh before uninstalling", ns, release))
-		}
-		if err := refuseCanaryService(fresh); err != nil {
-			return restoreRejected(err)
 		}
 		delErr = s.llms.DeleteObserved(ctx, fresh)
 	}

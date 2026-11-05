@@ -3,7 +3,6 @@ package server
 import (
 	"fmt"
 	"maps"
-	"net/http"
 	"testing"
 
 	"github.com/modelsphere/swiss/internal/cluster"
@@ -22,8 +21,8 @@ func TestLLMUninstallConflictRecovery(t *testing.T) {
 	}{
 		{"status update", 200, 2, ""},
 		{"repeated conflict", 409, 2, ""},
-		{"adopted", 409, 1, "CANARY_MANAGED_SERVICE"},
-		{"assigned", 409, 1, "CANARY_ASSIGNED_SERVICE"},
+		{"adopted", 200, 2, ""},
+		{"assigned", 200, 2, ""},
 		{"replacement", 409, 1, ""},
 		{"gone", 404, 1, ""},
 		{"read failure", 502, 1, ""},
@@ -107,46 +106,6 @@ func TestLLMUninstallConflictRecovery(t *testing.T) {
 			}
 			if rig.s.llmUninstalling("models", "ordinary") {
 				t.Fatal("rejected deletion still tracked")
-			}
-		})
-	}
-}
-
-func TestSLOReadFallbackWithInvisibleLLMService(t *testing.T) {
-	for _, kind := range []string{"forbidden", "discovery"} {
-		t.Run(kind, func(t *testing.T) {
-			var sent map[string]any
-			up := sloStub(t, true, true, &sent)
-			g := newGateServer(t, kind, backendHelm, failBin(t, "helm"), failBin(t, "helmfile"))
-			probe := llmProbe()
-			probe.Maps["swiss/site-profile"] = map[string]string{"profile.yaml": profileYAML + "\nscaler:\n  sloAddress: " + up.URL + "\n  sloTokenSecret: llm-scaler/slo-api\n"}
-			probe.Secrets["llm-scaler/slo-api"] = map[string]string{"token": "slo-secret"}
-			g.s.probe = probe
-			for range 2 {
-				code, body := get(t, g.srv, "/api/releases/models/glm/slo")
-				if code != http.StatusOK || body["found"] != true {
-					t.Fatalf("read fallback %d: %v", code, body)
-				}
-			}
-			for _, call := range []func() (int, map[string]any){
-				func() (int, map[string]any) {
-					return put(t, g.srv, "/api/releases/models/glm/slo", map[string]any{"priority": 10})
-				},
-				func() (int, map[string]any) { return del(t, g.srv, "/api/releases/models/glm/slo") },
-				func() (int, map[string]any) { return del(t, g.srv, "/api/releases/models/glm") },
-				func() (int, map[string]any) {
-					return post(t, g.srv, "/api/releases/models/glm/rollback", map[string]any{"toRevision": 1, "expectRevision": 1})
-				},
-			} {
-				if code, body := call(); code != http.StatusBadGateway {
-					t.Fatalf("unverified write %d: %v", code, body)
-				}
-			}
-			if sent != nil || len(g.w.written) != 0 {
-				t.Fatal("blocked write reached SLO or cluster writer")
-			}
-			if g.calls.Load() != 1 {
-				t.Fatalf("API error not cached: %d calls", g.calls.Load())
 			}
 		})
 	}
