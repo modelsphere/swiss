@@ -565,11 +565,12 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 }
 
 type deployment struct {
-	UID       string `json:"uid,omitempty"`
-	Release   string `json:"release"`
-	Namespace string `json:"namespace"`
-	Chart     string `json:"chart,omitempty"`
-	Status    string `json:"status,omitempty"`
+	CanaryState llmsvc.CanaryState `json:"canaryState,omitempty"`
+	UID         string             `json:"uid,omitempty"`
+	Release     string             `json:"release"`
+	Namespace   string             `json:"namespace"`
+	Chart       string             `json:"chart,omitempty"`
+	Status      string             `json:"status,omitempty"`
 	// Revision is helm's. Omitted when there is none, so an uninstalling row
 	// whose release is already gone does not report 0.
 	Revision   int    `json:"revision,omitempty"`
@@ -675,7 +676,7 @@ func (s *Server) deploymentFromService(ctx context.Context, ref deployRef) *depl
 	u := ref.obj
 	d := &deployment{
 		Release: u.GetName(), Namespace: u.GetNamespace(), UID: string(u.GetUID()),
-		Backend: backendLLMSVC, External: llmsvc.IsExternal(u), CleanupPending: ref.cleanup,
+		Backend: backendLLMSVC, External: llmsvc.IsExternal(u), CleanupPending: ref.cleanup, CanaryState: llmsvc.CanaryRelationship(u),
 		ManagedBy: llmsvc.CanaryOwnership(u), AssignedTo: llmsvc.CanaryAssigned(u),
 	}
 	obj, err := llmsvc.FromUnstructured(u)

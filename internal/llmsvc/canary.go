@@ -111,3 +111,23 @@ func CanaryAssigned(u *unstructured.Unstructured) *CanaryAssignment {
 	}
 	return &a
 }
+
+type CanaryState string
+
+const (
+	CanaryStandalone CanaryState = "standalone"
+	CanaryReferenced CanaryState = "referenced"
+	CanaryOwned      CanaryState = "owned"
+)
+
+func CanaryRelationship(u *unstructured.Unstructured) CanaryState {
+	if CanaryOwnership(u) != nil {
+		return CanaryOwned
+	}
+	if u != nil {
+		if _, ok := u.GetAnnotations()[AssignmentKey]; ok {
+			return CanaryReferenced
+		}
+	}
+	return CanaryStandalone
+}

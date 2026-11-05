@@ -22,16 +22,17 @@ import (
 )
 
 type releaseStatus struct {
-	UID        string        `json:"uid,omitempty"`
-	Release    string        `json:"release"`
-	Namespace  string        `json:"namespace"`
-	Exists     bool          `json:"exists"`
-	Revision   int           `json:"revision"`
-	HelmStatus string        `json:"helmStatus,omitempty"`
-	Pods       []cluster.Pod `json:"pods"`
-	Ready      int           `json:"ready"`
-	Total      int           `json:"total"`
-	Route      string        `json:"route,omitempty"`
+	CanaryState llmsvc.CanaryState `json:"canaryState,omitempty"`
+	UID         string             `json:"uid,omitempty"`
+	Release     string             `json:"release"`
+	Namespace   string             `json:"namespace"`
+	Exists      bool               `json:"exists"`
+	Revision    int                `json:"revision"`
+	HelmStatus  string             `json:"helmStatus,omitempty"`
+	Pods        []cluster.Pod      `json:"pods"`
+	Ready       int                `json:"ready"`
+	Total       int                `json:"total"`
+	Route       string             `json:"route,omitempty"`
 	// URL is that route on the site's gateway, when the profile names one.
 	URL string `json:"url,omitempty"`
 	// Model is what the engine advertises, so a caller can name it in a request.
@@ -137,6 +138,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadGateway, err.Error())
 			return
 		}
+		out.CanaryState = llmsvc.CanaryRelationship(u)
 		out.UID = string(u.GetUID())
 		out.ManagedBy = llmsvc.CanaryOwnership(u)
 		out.AssignedTo = llmsvc.CanaryAssigned(u)

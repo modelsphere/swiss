@@ -674,8 +674,8 @@ paths:
 
         With `fromRelease` it recomposes that release: its stored plan supplies
         the form layer, model and variant, and only what the request names moves.
-        With `adaptiveOnly: true`, it instead reads the live LLMService plan and
-        replaces only adaptive concurrency form values, without resolving a catalog.
+        With `reuseSource: true`, it instead reads the live LLMService plan and
+        merges arbitrary form overrides and optional edit values, without resolving a catalog.
       operationId: composePlan
       requestBody:
         required: true
@@ -1807,18 +1807,18 @@ components:
         `overrides`; the named fields below exist because their key path or
         validation is swissd's business, not the form's.
       properties:
-        fromRelease: { type: string, description: "Recompose this release; release, namespace, model and variant come from its plan. With adaptiveOnly, names the live LLMService in the explicitly supplied namespace." }
-        adaptiveOnly:
+        fromRelease: { type: string, description: "Recompose this release; release, namespace, model and variant come from its plan. With reuseSource, names the live LLMService in the explicitly supplied namespace." }
+        reuseSource:
           type: boolean
           default: false
           description: |
-            Compose from the live LLMService named by `fromRelease` and `namespace`.
-            Both fields and nonempty `overrides.modelRoute.nginx.values` are required.
-            Only `adaptive_cc` and keys beginning with `adaptive_cc_` may be supplied
-            in overrides; they replace the previous adaptive form values. Other
-            request fields must be omitted or empty. The source, chart and all
-            other values, including the canary-system layer, stay pinned.
-            No Canary assignment or baseline is required. False uses normal composition.
+            Reuse the live LLMService plan named by `fromRelease` and `namespace`.
+            Both identity fields are required. Merge arbitrary `overridesYAML`
+            and `overrides` into its form layer; null clears a value. A nonempty
+            `editsYAML` replaces the edit layer. The source, chart and remaining
+            layers are reused without catalog resolution. Catalog and source
+            selection fields are unused in this mode. No Canary or adaptive
+            concurrency restrictions are enforced; false uses normal composition.
         catalog: { type: string, description: "Deploy: the catalog to compose from. Upgrade: a different catalog moves the release (same HF model and engine only)." }
         model: { type: string, description: "Required unless `fromRelease`." }
         version: { type: string }
@@ -1883,7 +1883,7 @@ components:
             form: { type: object }
             edit: { type: object }
             autoscale: { type: object, description: "Only `replicaCount`. swissd writes it when the plan is disaggregated (`pd.enabled` true, `pd.colocate` not true) and the form layer has `sloRequirement.enabled` true, clamping the decision into [1, 64]." }
-            canary-system: { type: object, description: "Final values imposed by the Canary controller, preserved when reading a live LLMService plan and when composing an adaptive-only upgrade." }
+            canary-system: { type: object, description: "Final values imposed by the Canary controller, preserved when reading a live LLMService plan and when reusing its source." }
         createNamespace: { type: boolean, default: false, deprecated: true, description: "Use `applyFlags.createNamespace`." }
         helmfile: { type: string, description: "The helmfile these values are applied through. Not hashed." }
         warnings: { type: array, items: { type: string }, description: "Accepted but worth seeing. Not hashed." }
@@ -1931,6 +1931,20 @@ components:
         status: { type: string, examples: [applied] }
         statusError: { type: string, description: "The release is live but its status record was not updated." }
 
+    CanaryState:
+      type: string
+      enum: [standalone, referenced, owned]
+      description: |
+        LLMService relationship derived from Kubernetes metadata. Owned means
+        Canary ownership labels or an ownerReference are present; referenced
+        means an assignment annotation is present without ownership metadata;
+        standalone means neither is present. Ownership takes precedence.
+        Incomplete labels and malformed annotations retain their relationship
+        with verified=false in managedBy or assignedTo. Owned services follow
+        the Canary lifecycle through ownerReferences; referenced services are
+        retained when the experiment ends. Omitted on Helm releases or when
+        no LLMService exists. This field imposes no Swiss write restrictions.
+
     CanaryOwner:
       type: object
       description: |
@@ -1971,6 +1985,7 @@ components:
       type: object
       required: [release, namespace, backend]
       properties:
+        canaryState: { $ref: "#/components/schemas/CanaryState" }
         uid: { type: string, description: "Kubernetes UID of the LLMService; omitted for Helm releases or when unavailable." }
         managedBy: { $ref: "#/components/schemas/CanaryOwner" }
         assignedTo: { $ref: "#/components/schemas/CanaryAssignment" }
@@ -2025,6 +2040,7 @@ components:
       type: object
       required: [release, namespace, exists, revision, pods, ready, total, authPrefix]
       properties:
+        canaryState: { $ref: "#/components/schemas/CanaryState" }
         uid: { type: string, description: "Kubernetes UID of the LLMService; omitted for Helm releases or when unavailable." }
         managedBy: { $ref: "#/components/schemas/CanaryOwner" }
         assignedTo: { $ref: "#/components/schemas/CanaryAssignment" }

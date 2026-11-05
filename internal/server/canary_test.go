@@ -170,3 +170,60 @@ func TestCanaryMetadataKeepsNormalServiceOperations(t *testing.T) {
 		}
 	}
 }
+
+func TestCanaryRelationshipsFollowLiveMetadata(t *testing.T) {
+	rig := startRig(t, llmProbe(), true, false, backendLLMSVC)
+	u := ownedArm()
+	u.SetLabels(nil)
+	u.SetOwnerReferences(nil)
+	live, err := rig.c.Create(t.Context(), u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range []struct {
+		state      string
+		assignment bool
+		ownership  bool
+	}{
+		{"standalone", false, false},
+		{"referenced", true, false},
+		{"owned", true, true},
+		{"referenced", true, false},
+		{"standalone", false, false},
+	} {
+		labels := map[string]string{}
+		if step.ownership {
+			labels[llmsvc.CanaryPrefix+"canary-name"] = "demo"
+		}
+		live.SetLabels(labels)
+		anns := live.GetAnnotations()
+		if step.assignment {
+			anns[llmsvc.AssignmentKey] = "{incomplete"
+		} else {
+			delete(anns, llmsvc.AssignmentKey)
+		}
+		live.SetAnnotations(anns)
+		live, err = rig.c.Update(t.Context(), live)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, path := range []string{"/api/deployments", "/api/releases/models/demo-baseline/status"} {
+			code, body := get(t, rig.srv, path)
+			if code != 200 {
+				t.Fatalf("%s: %d %v", path, code, body)
+			}
+			if path == "/api/deployments" {
+				body = body["deployments"].([]any)[0].(map[string]any)
+			}
+			if body["canaryState"] != step.state {
+				t.Fatalf("%s: want %s, got %v", path, step.state, body)
+			}
+			if step.state == "owned" && body["managedBy"].(map[string]any)["verified"] != false {
+				t.Fatal("incomplete ownership was verified")
+			}
+			if step.state == "referenced" && body["assignedTo"].(map[string]any)["verified"] != false {
+				t.Fatal("malformed assignment was verified")
+			}
+		}
+	}
+}
