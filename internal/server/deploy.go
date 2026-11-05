@@ -55,8 +55,13 @@ type planRequest struct {
 	// list, provided each one is on this cluster under the resource the variant's
 	// own products resolve to.
 	// The variant's GPU count, image and values are used unchanged.
-	ForceGPUProducts bool        `json:"forceGpuProducts,omitempty"`
-	Overrides        values.Tree `json:"overrides,omitempty"`
+	ForceGPUProducts bool `json:"forceGpuProducts,omitempty"`
+	// GPUResource picks the extended resource to request among those the site
+	// profile's nodes.gpus lists for the variant's vendor, in place of the one
+	// its products' nodes report or the vendor's default. An upgrade sending
+	// no form keeps the resource the release runs on.
+	GPUResource string      `json:"gpuResource,omitempty"`
+	Overrides   values.Tree `json:"overrides,omitempty"`
 	// OverridesYAML is the advanced section: a values fragment typed by hand.
 	// Parsed here rather than in the browser so there is one parser, and the
 	// ownership check still decides what it may contain.
@@ -244,7 +249,10 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 		products = v.Requires.GPUProduct
 	}
 	gpus := prof.Nodes.GPUTable()
-	gpuRes, resWarnings, err := s.gpuResource(ctx, gpus, v.Requires, products)
+	gpuRes, resWarnings, err := req.GPUResource, []string(nil), checkPickedResource(gpus, v.Requires, req.GPUResource)
+	if gpuRes == "" {
+		gpuRes, resWarnings, err = s.gpuResource(ctx, gpus, v.Requires, products)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -361,6 +369,7 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 		ChartVersion: req.ChartVersion,
 		runningChart: prev.Chart,
 		movedFrom:    movedFrom,
+		GPUResource:  req.GPUResource,
 	}
 	if req.Variant != "" {
 		out.Variant = req.Variant
@@ -377,6 +386,10 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 	if len(req.Overrides) == 0 {
 		if edits := prev.Layers[values.LayerEdit]; len(edits) > 0 {
 			out.EditsYAML = mustYAML(edits)
+		}
+		if out.GPUResource == "" {
+			res, _ := values.Get(prev.Layers[values.LayerDerived], "model.gpuResource")
+			out.GPUResource, _ = res.(string)
 		}
 		return s.withAutoscale(prev, out), nil
 	}
@@ -540,6 +553,25 @@ func (s *Server) checkVariantResource(ctx context.Context, gpus gpu.Table, v cat
 	}
 	return fmt.Errorf("%s: GPU products %s request %s, but variant %s targets %s (from %s) -- its image and args are built for that hardware",
 		field, strings.Join(products, ", "), res, v.ID, strings.Join(want, " or "), from)
+}
+
+// checkPickedResource refuses a deploy's gpuResource the site does not list
+// under the variant's vendor. Empty is no pick.
+func checkPickedResource(gpus gpu.Table, r catalog.Requires, res string) error {
+	if res == "" {
+		return nil
+	}
+	if r.GPUs == 0 {
+		return fmt.Errorf("gpuResource %s: the variant requests no GPUs", res)
+	}
+	g, ok := gpus.Lookup(res)
+	switch {
+	case !ok:
+		return fmt.Errorf("gpuResource %s is not in the site profile's nodes.gpus", res)
+	case g.Vendor != r.VendorOrDefault():
+		return fmt.Errorf("gpuResource %s is a %s resource, but the variant is built for %s", res, g.Vendor, r.VendorOrDefault())
+	}
+	return nil
 }
 
 // variantResources is the resource the variant's own products resolve to on

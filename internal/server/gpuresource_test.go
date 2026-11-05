@@ -322,3 +322,54 @@ func TestVariantResources(t *testing.T) {
 		})
 	}
 }
+
+// A deploy may pick its resource among the vendor's: the pick is what the pods
+// request, and the nodes are pinned by its own label.
+func TestGPUResourcePicked(t *testing.T) {
+	s := ascendServer(t, []cluster.Node{{Name: "npu-1", GPUResource: "huawei.com/Ascend910", GPUProduct: "Ascend-910B3", GPUs: 8}}, nil, volcanoGPUs)
+	req := planRequest{Model: "qwen3-8b", Variant: "vllm-tp2-910b", ServiceID: "q", ChartVersion: "0.9.1", GPUResource: volcano910B3}
+	p, err := s.compose(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := values.Get(p.Values(), "model.gpuResource"); got != volcano910B3 {
+		t.Errorf("model.gpuResource = %v, want the pick %s", got, volcano910B3)
+	}
+	if terms := requiredTerms(t, p); !strings.Contains(terms, "npu.example.com/product") {
+		t.Errorf("want the pick's label pinned, got %s", terms)
+	}
+	for _, res := range []string{"nvidia.com/gpu", "acme.com/x"} {
+		req.GPUResource = res
+		if _, err := s.compose(context.Background(), req); err == nil {
+			t.Errorf("%s: want refused, not the variant's vendor or not in nodes.gpus", res)
+		}
+	}
+}
+
+// An upgrade that sends no form keeps the resource the release runs on; an
+// upgrade form is authoritative, so one naming none lets swissd pick.
+func TestGPUResourcePickCarries(t *testing.T) {
+	_, s, _, _ := twoCatalogs(t, "", func(a, _ string) []cluster.Release {
+		r := deployedFrom(catalogSource(a, "v1"), "public", "sha256:old")
+		r.SwissFiles["derived.yaml"] = "model:\n  gpuResource: volcano.sh/Ascend910B3-1\n"
+		return []cluster.Release{r}
+	})
+	for name, tc := range map[string]struct {
+		req  planRequest
+		want string
+	}{
+		"no form":          {planRequest{FromRelease: "r", Namespace: "ns"}, "volcano.sh/Ascend910B3-1"},
+		"form, no pick":    {planRequest{FromRelease: "r", Namespace: "ns", Overrides: values.Tree{"replicaCount": 2}}, ""},
+		"form, a new pick": {planRequest{FromRelease: "r", Namespace: "ns", Overrides: values.Tree{"replicaCount": 2}, GPUResource: "huawei.com/Ascend910"}, "huawei.com/Ascend910"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			out, err := s.carryForward(t.Context(), tc.req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if out.GPUResource != tc.want {
+				t.Errorf("GPUResource = %q, want %q", out.GPUResource, tc.want)
+			}
+		})
+	}
+}
