@@ -9,11 +9,12 @@ package values
 // not a veto but a report, so plan.Shadowed lists the values one layer set and a
 // later one overrode.
 const (
-	LayerDefaults  = "defaults"  // the site's preferences; the variant overrides them
-	LayerCatalog   = "catalog"   // what makes this model run
-	LayerSite      = "site"      // what makes it work here
-	LayerDerived   = "derived"   // computed from catalog x site; a provenance label only
-	LayerForm      = "form"      // how much, where, how routed
-	LayerEdit      = "edit"      // typed into the plan editor
-	LayerAutoscale = "autoscale" // replicaCount from PD autoscaling, applied last
+	LayerDefaults     = "defaults"      // the site's preferences; the variant overrides them
+	LayerCatalog      = "catalog"       // what makes this model run
+	LayerSite         = "site"          // what makes it work here
+	LayerDerived      = "derived"       // computed from catalog x site; a provenance label only
+	LayerForm         = "form"          // how much, where, how routed
+	LayerEdit         = "edit"          // typed into the plan editor
+	LayerAutoscale    = "autoscale"     // replicaCount from PD autoscaling
+	LayerCanarySystem = "canary-system" // final policy imposed by the owning experiment
 )

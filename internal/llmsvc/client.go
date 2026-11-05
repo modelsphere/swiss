@@ -87,6 +87,11 @@ func (c *Client) Delete(ctx context.Context, ns, name string) error {
 	return c.resource(ns).Delete(ctx, name, metav1.DeleteOptions{})
 }
 
+func (c *Client) DeleteObserved(ctx context.Context, u *unstructured.Unstructured) error {
+	uid, rv := u.GetUID(), u.GetResourceVersion()
+	return c.resource(u.GetNamespace()).Delete(ctx, u.GetName(), metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid, ResourceVersion: &rv}})
+}
+
 // Patch applies a patch and returns the updated object.
 func (c *Client) Patch(ctx context.Context, ns, name string, pt types.PatchType, data []byte) (*unstructured.Unstructured, error) {
 	got, err := c.resource(ns).Patch(ctx, name, pt, data, metav1.PatchOptions{})

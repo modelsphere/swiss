@@ -22,15 +22,17 @@ import (
 )
 
 type releaseStatus struct {
-	Release    string        `json:"release"`
-	Namespace  string        `json:"namespace"`
-	Exists     bool          `json:"exists"`
-	Revision   int           `json:"revision"`
-	HelmStatus string        `json:"helmStatus,omitempty"`
-	Pods       []cluster.Pod `json:"pods"`
-	Ready      int           `json:"ready"`
-	Total      int           `json:"total"`
-	Route      string        `json:"route,omitempty"`
+	CanaryState llmsvc.CanaryState `json:"canaryState,omitempty"`
+	UID         string             `json:"uid,omitempty"`
+	Release     string             `json:"release"`
+	Namespace   string             `json:"namespace"`
+	Exists      bool               `json:"exists"`
+	Revision    int                `json:"revision"`
+	HelmStatus  string             `json:"helmStatus,omitempty"`
+	Pods        []cluster.Pod      `json:"pods"`
+	Ready       int                `json:"ready"`
+	Total       int                `json:"total"`
+	Route       string             `json:"route,omitempty"`
 	// URL is that route on the site's gateway, when the profile names one.
 	URL string `json:"url,omitempty"`
 	// Model is what the engine advertises, so a caller can name it in a request.
@@ -53,9 +55,11 @@ type releaseStatus struct {
 	// (llmPlanStatus); Service carries the operator's own words.
 	Plan *planStatus `json:"planStatus,omitempty"`
 	// Backend is helm or llmsvc when swiss manages the release.
-	Backend        string         `json:"backend,omitempty"`
-	CleanupPending bool           `json:"cleanupPending,omitempty"`
-	Service        *llmStatusView `json:"llmservice,omitempty"`
+	Backend        string                   `json:"backend,omitempty"`
+	ManagedBy      *llmsvc.CanaryOwner      `json:"managedBy,omitempty"`
+	AssignedTo     *llmsvc.CanaryAssignment `json:"assignedTo,omitempty"`
+	CleanupPending bool                     `json:"cleanupPending,omitempty"`
+	Service        *llmStatusView           `json:"llmservice,omitempty"`
 }
 
 // llmStatusView is the operator's status, in place of status.yaml.
@@ -134,6 +138,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadGateway, err.Error())
 			return
 		}
+		out.CanaryState = llmsvc.CanaryRelationship(u)
+		out.UID = string(u.GetUID())
+		out.ManagedBy = llmsvc.CanaryOwnership(u)
+		out.AssignedTo = llmsvc.CanaryAssigned(u)
 		var obj *llmsvc.LLMService
 		if decoded, err := llmsvc.FromUnstructured(u); err == nil {
 			obj = decoded

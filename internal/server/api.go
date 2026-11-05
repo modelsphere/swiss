@@ -661,10 +661,12 @@ func (s *Server) handleNodeGPUs(w http.ResponseWriter, r *http.Request) {
 }
 
 type deployment struct {
-	Release   string `json:"release"`
-	Namespace string `json:"namespace"`
-	Chart     string `json:"chart,omitempty"`
-	Status    string `json:"status,omitempty"`
+	CanaryState llmsvc.CanaryState `json:"canaryState,omitempty"`
+	UID         string             `json:"uid,omitempty"`
+	Release     string             `json:"release"`
+	Namespace   string             `json:"namespace"`
+	Chart       string             `json:"chart,omitempty"`
+	Status      string             `json:"status,omitempty"`
 	// Revision is helm's. Omitted when there is none, so an uninstalling row
 	// whose release is already gone does not report 0.
 	Revision   int    `json:"revision,omitempty"`
@@ -684,10 +686,12 @@ type deployment struct {
 	Route string `json:"route,omitempty"`
 	// Backend is helm or llmsvc. External is an LLMService swiss did not
 	// write. CleanupPending means both records still exist.
-	Backend        string           `json:"backend"`
-	External       bool             `json:"external,omitempty"`
-	CleanupPending bool             `json:"cleanupPending,omitempty"`
-	Deletion       *llmDeletionView `json:"deletion,omitempty"`
+	Backend        string                   `json:"backend"`
+	External       bool                     `json:"external,omitempty"`
+	ManagedBy      *llmsvc.CanaryOwner      `json:"managedBy,omitempty"`
+	AssignedTo     *llmsvc.CanaryAssignment `json:"assignedTo,omitempty"`
+	CleanupPending bool                     `json:"cleanupPending,omitempty"`
+	Deletion       *llmDeletionView         `json:"deletion,omitempty"`
 
 	// What the plan recorded about its catalog, for finding the configured
 	// catalog the release belongs to.
@@ -767,8 +771,9 @@ func (s *Server) deploymentRefs(ctx context.Context) ([]deployRef, error) {
 func (s *Server) deploymentFromService(ctx context.Context, ref deployRef) *deployment {
 	u := ref.obj
 	d := &deployment{
-		Release: u.GetName(), Namespace: u.GetNamespace(),
-		Backend: backendLLMSVC, External: llmsvc.IsExternal(u), CleanupPending: ref.cleanup,
+		Release: u.GetName(), Namespace: u.GetNamespace(), UID: string(u.GetUID()),
+		Backend: backendLLMSVC, External: llmsvc.IsExternal(u), CleanupPending: ref.cleanup, CanaryState: llmsvc.CanaryRelationship(u),
+		ManagedBy: llmsvc.CanaryOwnership(u), AssignedTo: llmsvc.CanaryAssigned(u),
 	}
 	obj, err := llmsvc.FromUnstructured(u)
 	if err != nil {

@@ -30,6 +30,7 @@ type planRequest struct {
 	// FromRelease recomposes a deployed release: its stored plan supplies the
 	// form layer, the model and the variant, and only the catalog layer moves.
 	FromRelease string `json:"fromRelease,omitempty"`
+	ReuseSource bool   `json:"reuseSource,omitempty"`
 	// Catalog names the configured catalog to compose from. Required when the
 	// site lists several. An upgrade naming none stays on the one its release
 	// came from; naming another moves the release there, same model id.
@@ -168,6 +169,9 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, error) {
+	if req.ReuseSource {
+		return s.composeLive(ctx, req)
+	}
 	if req.FromRelease != "" {
 		var err error
 		if req, err = s.carryForward(ctx, req); err != nil {
