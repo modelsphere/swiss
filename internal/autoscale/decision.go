@@ -48,41 +48,32 @@ var decisionsSchema = object(props{
 	}, "namespace", "serviceId", "replicas")),
 }, "apiVersion", "decisions")
 
-// decisionsResponse is a response that matched decisionsSchema.
-type decisionsResponse struct {
-	Decisions []decision `json:"decisions"`
-}
-
-type decision struct {
-	Namespace string `json:"namespace"`
-	ServiceID string `json:"serviceId"`
-	Replicas  struct {
-		Active int `json:"active"`
-	} `json:"replicas"`
-	Shape struct {
-		PD *struct {
-			Slices  int `json:"slices"`
-			Prefill struct {
-				Replicas int `json:"replicas"`
-			} `json:"prefill"`
-			Decode struct {
-				Replicas int `json:"replicas"`
-			} `json:"decode"`
-		} `json:"pd"`
-	} `json:"shape"`
-}
-
 // toDecision is the row as the loop applies it: replicas.active, or on a
 // pdengine row shape.pd.slices with its per-slice prefill and decode. An off
 // pdengine row reports active 0 while slices stays the count to run.
 // liveReplicas is not read: the loop reads the DisaggregatedSet itself.
-func (d decision) toDecision() *Decision {
-	out := &Decision{OK: true, Replicas: d.Replicas.Active}
-	if pd := d.Shape.PD; pd != nil {
-		out.Replicas = pd.Slices
-		out.PD = &Engines{Prefill: pd.Prefill.Replicas, Decode: pd.Decode.Replicas}
+func toDecision(row map[string]any) *Decision {
+	out := &Decision{OK: true, Replicas: intAt(row, "replicas", "active")}
+	if pd, ok := at(row, "shape", "pd").(map[string]any); ok {
+		out.Replicas = intAt(pd, "slices")
+		out.PD = &Engines{Prefill: intAt(pd, "prefill", "replicas"), Decode: intAt(pd, "decode", "replicas")}
 	}
 	return out
+}
+
+// at is the value at path in decoded JSON, nil when absent.
+func at(v any, path ...string) any {
+	for _, k := range path {
+		m, _ := v.(map[string]any)
+		v = m[k]
+	}
+	return v
+}
+
+// intAt is a count the schema has already checked.
+func intAt(v any, path ...string) int {
+	n, _ := at(v, path...).(float64)
+	return int(n)
 }
 
 // Query asks decision-gen for one service. A non-200 or a transport error is
@@ -131,7 +122,8 @@ func Query(ctx context.Context, client *http.Client, base string, headers map[st
 // ParseDecisions checks body against decisionsSchema and returns the one
 // decision addressed to serviceID in namespace. Anything other than exactly
 // one match is an error. Query filters the response to this service, so the
-// schema check sees only its rows.
+// schema check sees only its rows. The rows are read from the tree the schema
+// checked, never decoded again.
 func ParseDecisions(body []byte, namespace, serviceID string) (*Decision, error) {
 	var raw any
 	if err := json.Unmarshal(body, &raw); err != nil {
@@ -144,22 +136,20 @@ func ParseDecisions(body []byte, namespace, serviceID string) (*Decision, error)
 		}
 		return nil, fmt.Errorf("decision response does not match decision-gen's schema: %s", strings.Join(msgs, "; "))
 	}
-	var resp decisionsResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("failed to decode decision response: %w", err)
-	}
-	var matches []decision
-	for _, d := range resp.Decisions {
-		if d.Namespace == namespace && d.ServiceID == serviceID {
-			matches = append(matches, d)
+	rows, _ := at(raw, "decisions").([]any)
+	var matches []map[string]any
+	for _, r := range rows {
+		row, _ := r.(map[string]any)
+		if row["namespace"] == namespace && row["serviceId"] == serviceID {
+			matches = append(matches, row)
 		}
 	}
 	switch len(matches) {
 	case 1:
-		return matches[0].toDecision(), nil
+		return toDecision(matches[0]), nil
 	case 0:
 		return nil, fmt.Errorf("%w for serviceId %q in namespace %q among the %d returned",
-			ErrNoDecision, serviceID, namespace, len(resp.Decisions))
+			ErrNoDecision, serviceID, namespace, len(rows))
 	default:
 		return nil, fmt.Errorf("%d decisions match serviceId %q in namespace %q, expected 1",
 			len(matches), serviceID, namespace)
