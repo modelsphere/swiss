@@ -131,3 +131,21 @@ func (p *Plan) chartRef(chartRoot string) (chart, version string, repo *Reposito
 	}
 	return "", "", nil, fmt.Errorf("no chart source: set chartRepo or chartPath in the site profile, or pass --chart-root")
 }
+
+// HelmChartArgs name p's chart to a helm command such as `helm show values`,
+// resolved as chartRef does, except that a classic repository goes by --repo:
+// there is no repositories entry to alias it.
+func (p *Plan) HelmChartArgs(chartRoot string) ([]string, error) {
+	chart, version, repo, err := p.chartRef(chartRoot)
+	if err != nil {
+		return nil, err
+	}
+	args := []string{chart}
+	if repo != nil {
+		args = []string{p.Chart.Name, "--repo", repo.URL}
+	}
+	if version != "" {
+		args = append(args, "--version", version)
+	}
+	return args, nil
+}

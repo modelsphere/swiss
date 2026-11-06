@@ -500,6 +500,9 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("DELETE /api/releases/{namespace}/{release}", s.handleUninstall)
 		mux.HandleFunc("POST /api/releases/{namespace}/{release}/revisions/{revision}/diff", s.handleRevisionDiff)
 		mux.HandleFunc("POST /api/releases/{namespace}/{release}/rollback", s.handleRollback)
+
+		// v2 APIs. Unfinished, Experimental
+		mux.HandleFunc("POST /api/v2/compose", s.handleComposeV2)
 	} else {
 		for _, p := range []string{
 			"POST /api/plans", "POST /api/diff", "POST /api/apply", "POST /api/install",
