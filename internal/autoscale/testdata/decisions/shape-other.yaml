@@ -1,0 +1,7 @@
+name: shape-other
+description: a shape other than pd is ignored and the row stays a slice count
+namespace: models
+serviceId: pd
+status: 200
+body: '{"apiVersion":"llmscaling.inference.x-k8s.io/v1alpha1","decisions":[{"namespace":"models","serviceId":"pd","replicas":{"active": 1},"shape":{"other":{"x":1}}}]}'
+want: 1

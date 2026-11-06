@@ -10,18 +10,23 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
 
+	"github.com/modelsphere/swiss/internal/autoscale"
 	"github.com/modelsphere/swiss/internal/cluster"
 	"github.com/modelsphere/swiss/internal/llmsvc"
+	"github.com/modelsphere/swiss/internal/plan"
 	"github.com/modelsphere/swiss/internal/store"
 	"github.com/modelsphere/swiss/internal/testutil/cases"
+	"github.com/modelsphere/swiss/internal/values"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8stesting "k8s.io/client-go/testing"
+	"sigs.k8s.io/yaml"
 )
 
 type loopCase struct {
@@ -45,6 +50,13 @@ type loopCase struct {
 	// LLMPhase overrides status.phase. Deleting holds without a deletionTimestamp,
 	// and the rig operator stays off so it does not rewrite that phase.
 	LLMPhase string `json:"llmPhase,omitempty"`
+	// DecisionPD adds shape.pd to the decision row, with decision as its
+	// slices. Engines is the DisaggregatedSet's spec.roles and PlanEngines the
+	// form's pd.<role>.replicas, each omitted when nil. WantPD is the layer's.
+	DecisionPD  *autoscale.Engines `json:"decisionPD,omitempty"`
+	Engines     *autoscale.Engines `json:"engines,omitempty"`
+	PlanEngines *autoscale.Engines `json:"planEngines,omitempty"`
+	WantPD      *autoscale.Engines `json:"wantPD,omitempty"`
 }
 
 func TestAutoscaleLoop(t *testing.T) {
@@ -63,13 +75,16 @@ func TestAutoscaleLoop(t *testing.T) {
 func runHelmLoop(t *testing.T, tc loopCase) {
 	t.Helper()
 	const ns, release = "models", "pd"
-	dec := decisionServer(t, ns, release, tc.Decision)
-	_, seed := pdPlan(t, ns, release, release, tc.Slices, true, false, boolPtr(true), "")
+	dec := decisionServerPD(t, ns, release, tc.Decision, tc.DecisionPD)
+	p, seed := pdPlan(t, ns, release, release, tc.Slices, true, false, boolPtr(true), "")
+	if tc.PlanEngines != nil {
+		seed = withPlanEngines(t, p, *tc.PlanEngines)
+	}
 
 	probe := fakeProbe()
 	setDecisionProfile(probe, dec.URL)
 	probe.Deps = readyRouters(ns, release, tc.Slices)
-	probe.DSs = map[string]cluster.DisaggregatedSet{ns + "/" + release: readyDS(tc.Slices)}
+	probe.DSs = map[string]cluster.DisaggregatedSet{ns + "/" + release: loopDS(tc)}
 	if tc.PlanPhase != "" {
 		seed[statusFile] = "phase: " + tc.PlanPhase + "\naction: uninstall\nrevision: 2\n"
 	}
@@ -111,28 +126,90 @@ func runHelmLoop(t *testing.T, tc loopCase) {
 		}
 		return
 	}
-	if tc.WantHold != "" {
+	if tc.WantHold != "" || tc.WantApplies == 0 {
 		if applies != 0 {
-			t.Fatal("held tick applied")
+			t.Fatal("held or unchanged tick applied")
 		}
 		if len(w.written) != 0 {
-			t.Fatalf("held tick wrote %v", w.written)
+			t.Fatalf("held or unchanged tick wrote %v", w.written)
 		}
 		return
 	}
 	assertHelmScale(t, tc, w.written[planRef(ns, release)], seed)
+	assertLoopState(t, s, tc)
+}
+
+func loopDS(tc loopCase) cluster.DisaggregatedSet {
+	ds := readyDS(tc.Slices)
+	if tc.Engines != nil {
+		ds.RoleReplicas = map[string]int{"prefill": tc.Engines.Prefill, "decode": tc.Engines.Decode}
+	}
+	return ds
+}
+
+// withPlanEngines puts per-slice role replicas in p's form layer and
+// returns the plan files to seed with.
+func withPlanEngines(t *testing.T, p *plan.Plan, e autoscale.Engines) map[string]string {
+	t.Helper()
+	pd := p.Layers[values.LayerForm]["pd"].(values.Tree)
+	pd["prefill"] = values.Tree{"replicas": e.Prefill}
+	pd["decode"] = values.Tree{"replicas": e.Decode}
+	if err := p.ComputeHash(); err != nil {
+		t.Fatal(err)
+	}
+	files, err := p.Files("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files["status.yaml"] = "phase: applied\n"
+	return files
+}
+
+// loopNote is the status note a scale writes.
+func loopNote(tc loopCase) string {
+	note := fmt.Sprintf("autoscale %d -> %d", *tc.WantFrom, *tc.WantTo)
+	if tc.WantPD != nil {
+		note += fmt.Sprintf(", prefill %d -> %d, decode %d -> %d",
+			tc.Engines.Prefill, tc.WantPD.Prefill, tc.Engines.Decode, tc.WantPD.Decode)
+	}
+	return note + " (decision-gen)"
+}
+
+// assertLoopState checks the recorded pass of a scale: slices, and the roles
+// in pd when the decision set them.
+func assertLoopState(t *testing.T, s *Server, tc loopCase) {
+	t.Helper()
+	st, ok := s.autoscaleStateOf("models", "pd")
+	if !ok {
+		t.Fatal("no recorded pass")
+	}
+	if tc.WantPD == nil {
+		if st.PD != nil {
+			t.Fatalf("pd %+v on a slice decision", *st.PD)
+		}
+		return
+	}
+	if st.PD == nil || st.PD.Want == nil || st.PD.Current == nil || st.PD.Decision == nil {
+		t.Fatalf("pd %+v, want current, want and decision", st.PD)
+	}
+	if *st.PD.Want != *tc.WantPD || *st.PD.Current != *tc.Engines || *st.PD.Decision != *tc.DecisionPD {
+		t.Fatalf("pd current %+v want %+v decision %+v", *st.PD.Current, *st.PD.Want, *st.PD.Decision)
+	}
+	if st.Want == nil || *st.Want != *tc.WantTo || st.Current != *tc.WantFrom {
+		t.Fatalf("slices current %d want %v, want %d -> %d", st.Current, st.Want, *tc.WantFrom, *tc.WantTo)
+	}
 }
 
 func runLLMLoop(t *testing.T, tc loopCase) {
 	t.Helper()
 	const ns, release = "models", "pd"
-	dec := decisionServer(t, ns, release, tc.Decision)
+	dec := decisionServerPD(t, ns, release, tc.Decision, tc.DecisionPD)
 	p, _ := pdPlan(t, ns, release, release, tc.Slices, true, false, boolPtr(true), "v2")
 
 	probe := fakeProbe()
 	setDecisionProfile(probe, dec.URL)
 	probe.Deps = readyRouters(ns, release, tc.Slices)
-	probe.DSs = map[string]cluster.DisaggregatedSet{ns + "/" + release: readyDS(tc.Slices)}
+	probe.DSs = map[string]cluster.DisaggregatedSet{ns + "/" + release: loopDS(tc)}
 	probe.Secrets = map[string]map[string]string{}
 	probe.SecretLabels = map[string]map[string]string{}
 
@@ -241,11 +318,15 @@ func runLLMLoop(t *testing.T, tc loopCase) {
 	if got.GetAnnotations()[llmsvc.AnnAction] != "autoscale" {
 		t.Fatalf("action %q", got.GetAnnotations()[llmsvc.AnnAction])
 	}
-	note := fmt.Sprintf("autoscale %d -> %d (decision-gen)", *tc.WantFrom, *tc.WantTo)
+	note := loopNote(tc)
 	if got.GetAnnotations()[llmsvc.AnnNote] != note {
 		t.Fatalf("note %q, want %q", got.GetAnnotations()[llmsvc.AnnNote], note)
 	}
 	assertLLMAutoscaleLayer(t, got, tc.Slices, *tc.WantTo)
+	if tc.WantPD != nil {
+		assertLLMAutoscaleRoles(t, got, *tc.WantPD)
+	}
+	assertLoopState(t, rig.s, tc)
 }
 
 func assertHelmScale(t *testing.T, tc loopCase, written, seed map[string]string) {
@@ -253,9 +334,7 @@ func assertHelmScale(t *testing.T, tc loopCase, written, seed map[string]string)
 	if written == nil {
 		t.Fatal("plan was not written")
 	}
-	if !strings.Contains(written["autoscale.yaml"], fmt.Sprintf("replicaCount: %d", *tc.WantTo)) {
-		t.Fatalf("autoscale.yaml:\n%s", written["autoscale.yaml"])
-	}
+	assertAutoscaleYAML(t, tc, written["autoscale.yaml"])
 	if seed["form.yaml"] != written["form.yaml"] {
 		t.Fatalf("form.yaml changed\n got %s\n want %s", written["form.yaml"], seed["form.yaml"])
 	}
@@ -263,9 +342,44 @@ func assertHelmScale(t *testing.T, tc loopCase, written, seed map[string]string)
 	if !strings.Contains(raw, "action: autoscale") {
 		t.Fatalf("status action:\n%s", raw)
 	}
-	note := fmt.Sprintf("autoscale %d -> %d (decision-gen)", *tc.WantFrom, *tc.WantTo)
+	note := loopNote(tc)
 	if !strings.Contains(raw, note) {
 		t.Fatalf("status note missing %q:\n%s", note, raw)
+	}
+}
+
+// assertAutoscaleYAML is the whole autoscale layer: replicaCount, and the
+// role replicas when the decision set them.
+func assertAutoscaleYAML(t *testing.T, tc loopCase, raw string) {
+	t.Helper()
+	var got map[string]any
+	if err := yaml.Unmarshal([]byte(raw), &got); err != nil {
+		t.Fatalf("autoscale.yaml: %v\n%s", err, raw)
+	}
+	want := map[string]any{"replicaCount": float64(*tc.WantTo)}
+	if tc.WantPD != nil {
+		want["pd"] = map[string]any{
+			"prefill": map[string]any{"replicas": float64(tc.WantPD.Prefill)},
+			"decode":  map[string]any{"replicas": float64(tc.WantPD.Decode)},
+		}
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("autoscale.yaml %v, want %v\n%s", got, want, raw)
+	}
+}
+
+// assertLLMAutoscaleRoles is the role replicas in the LLMService's last layer,
+// which assertLLMAutoscaleLayer has checked is the autoscale one.
+func assertLLMAutoscaleRoles(t *testing.T, got *unstructured.Unstructured, want autoscale.Engines) {
+	t.Helper()
+	layers, _, _ := unstructured.NestedSlice(got.Object, "spec", "layers")
+	last, _ := layers[len(layers)-1].(map[string]any)
+	vals, _ := last["values"].(map[string]any)
+	for role, n := range map[string]int{"prefill": want.Prefill, "decode": want.Decode} {
+		v, _, _ := unstructured.NestedFieldNoCopy(vals, "pd", role, "replicas")
+		if asNumber(v) != n {
+			t.Fatalf("autoscale pd.%s.replicas %v, want %d: %v", role, v, n, vals)
+		}
 	}
 }
 
@@ -349,7 +463,19 @@ func newLoopServer(t *testing.T, probe cluster.Probe, helm, helmfile string) (*S
 
 func decisionServer(t *testing.T, ns, serviceID string, active int) *httptest.Server {
 	t.Helper()
-	body := fmt.Sprintf(`{"apiVersion":"llmscaling.inference.x-k8s.io/v1alpha1","decisions":[{"namespace":"%s","serviceId":"%s","replicas":{"active":%d}}]}`, ns, serviceID, active)
+	return decisionServerPD(t, ns, serviceID, active, nil)
+}
+
+// decisionServerPD is decisionServer whose row carries shape.pd when pd is set,
+// as a pdengine CR's does.
+func decisionServerPD(t *testing.T, ns, serviceID string, active int, pd *autoscale.Engines) *httptest.Server {
+	t.Helper()
+	shape := ""
+	if pd != nil {
+		shape = fmt.Sprintf(`,"shape":{"pd":{"prefill":{"replicas":%d,"liveReplicas":1},"decode":{"replicas":%d,"liveReplicas":1},"slices":%d}}`,
+			pd.Prefill, pd.Decode, active)
+	}
+	body := fmt.Sprintf(`{"apiVersion":"llmscaling.inference.x-k8s.io/v1alpha1","decisions":[{"namespace":"%s","serviceId":"%s","replicas":{"active":%d}%s}]}`, ns, serviceID, active, shape)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("namespace") == "" || r.URL.Query().Get("serviceId") == "" {
 			http.Error(w, "missing query", http.StatusBadRequest)

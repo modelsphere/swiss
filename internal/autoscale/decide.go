@@ -1,5 +1,6 @@
-// Package autoscale decides a prefill/decode slice count. It does not touch
-// a cluster: the server applies whatever Decide returns.
+// Package autoscale decides a prefill/decode slice count, and the prefill and
+// decode engines per slice when decision-gen sets them. It does not touch a
+// cluster: the server applies whatever Decide returns.
 package autoscale
 
 import (
@@ -26,12 +27,15 @@ const (
 	// HoldUninstalling is a release on its way out: the plan is marked
 	// uninstalling, or the LLMService is being deleted. Nothing is applied.
 	HoldUninstalling = "uninstalling"
-
-	// MinSlices and MaxSlices are the only bounds swiss applies. decision-gen
-	// already clamps to the LLMSLORequirement; this is a safety clamp.
-	MinSlices = 1
-	MaxSlices = 64
 )
+
+// Engines is prefill and decode engines per slice: the DisaggregatedSet's
+// spec.roles[].spec.replicas, and the chart's pd.prefill.replicas and
+// pd.decode.replicas.
+type Engines struct {
+	Prefill int `json:"prefill" yaml:"prefill"`
+	Decode  int `json:"decode" yaml:"decode"`
+}
 
 // Live is the cluster, as the loop saw it this tick.
 type Live struct {
@@ -52,6 +56,9 @@ type Live struct {
 	LockBusy              bool     `json:"lockBusy,omitempty" yaml:"lockBusy,omitempty"`
 	// LLMDeleting is an LLMService with a deletionTimestamp or status.phase Deleting.
 	LLMDeleting bool `json:"llmDeleting,omitempty" yaml:"llmDeleting,omitempty"`
+	// Engines is the per-slice prefill and decode the loop saw: the
+	// DisaggregatedSet's spec.roles, else the plan's pd.<role>.replicas.
+	Engines Engines `json:"engines" yaml:"engines"`
 }
 
 // Role is one DisaggregatedSet roleStatuses entry.
@@ -71,13 +78,16 @@ type Router struct {
 }
 
 // Decision is one reply from decision-gen. OK false is a hold, never a count of 0.
+// Replicas is the slice count. PD, from shape.pd, is engines per slice; nil
+// leaves the roles as they are.
 type Decision struct {
-	OK       bool   `json:"ok" yaml:"ok"`
-	Replicas int    `json:"replicas" yaml:"replicas"`
-	Error    string `json:"error,omitempty" yaml:"error,omitempty"`
+	OK       bool     `json:"ok" yaml:"ok"`
+	Replicas int      `json:"replicas" yaml:"replicas"`
+	PD       *Engines `json:"pd,omitempty" yaml:"pd,omitempty"`
+	Error    string   `json:"error,omitempty" yaml:"error,omitempty"`
 }
 
-// Result is what the loop should do. Scale means apply Want.
+// Result is what the loop should do. Scale means apply Want, and WantPD when set.
 type Result struct {
 	Scale      bool
 	Current    int
@@ -86,6 +96,23 @@ type Result struct {
 	Decision   *int
 	// TimedOut is the workload or readiness hold that timedOut skipped.
 	TimedOut string
+	// CurrentPD and DecisionPD are set when the decision has PD, WantPD when
+	// Want is as well.
+	CurrentPD  *Engines
+	WantPD     *Engines
+	DecisionPD *Engines
+}
+
+// Grows is a result that adds slices, or engines to either role.
+func (r Result) Grows() bool {
+	if r.WantPD != nil && (r.WantPD.Prefill > r.CurrentPD.Prefill || r.WantPD.Decode > r.CurrentPD.Decode) {
+		return true
+	}
+	return r.Want > r.Current
+}
+
+func (r Result) changes() bool {
+	return r.Want != r.Current || (r.WantPD != nil && *r.WantPD != *r.CurrentPD)
 }
 
 // Decide is pure. Holds come in three classes:
@@ -94,13 +121,19 @@ type Result struct {
 //	workload  DS observedGeneration behind, release failed           times out, either direction
 //	readiness role or router not ready or not updated                times out, scale-up only
 //
-// timedOut skips the workload and readiness holds. want is clamp(decision, MinSlices, MaxSlices).
+// timedOut skips the workload and readiness holds. want is the decision as
+// decision-gen gave it: swiss does not bound it. Growing either role is a
+// scale-up, even when the other shrinks.
 func Decide(live Live, d Decision, timedOut bool) Result {
 	cur := current(live)
 	res := Result{Current: cur}
 	if d.OK {
 		n := d.Replicas
 		res.Decision = &n
+		if d.PD != nil {
+			pd, c := *d.PD, live.Engines
+			res.DecisionPD, res.CurrentPD = &pd, &c
+		}
 	}
 	if hold := fixedHold(live); hold != "" {
 		res.HoldReason = hold
@@ -120,19 +153,23 @@ func Decide(live Live, d Decision, timedOut bool) Result {
 		}
 		res.TimedOut = hold
 	}
-	want := clamp(d.Replicas, MinSlices, MaxSlices)
-	if hold := readinessHold(live); hold != "" && want > cur {
+	want := res
+	want.Want = d.Replicas
+	if d.PD != nil {
+		pd := *d.PD
+		want.WantPD = &pd
+	}
+	if hold := readinessHold(live); hold != "" && want.Grows() {
 		if !timedOut {
 			res.HoldReason = hold
 			return res
 		}
-		if res.TimedOut == "" {
-			res.TimedOut = hold
+		if want.TimedOut == "" {
+			want.TimedOut = hold
 		}
 	}
-	res.Want = want
-	res.Scale = want != cur
-	return res
+	want.Scale = want.changes()
+	return want
 }
 
 // DecideWithTimeout is Decide under the defer timeout, the clock of the
@@ -253,14 +290,4 @@ func readinessHold(live Live) string {
 
 func routerHeld(r Router) bool {
 	return r.Missing || r.ReadyReplicas != r.SpecReplicas || r.ObservedGeneration < r.Generation
-}
-
-func clamp(n, min, max int) int {
-	if n < min {
-		return min
-	}
-	if n > max {
-		return max
-	}
-	return n
 }

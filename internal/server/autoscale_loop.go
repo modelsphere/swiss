@@ -118,11 +118,14 @@ func (s *Server) autoscaleOne(ctx context.Context, ns, release string) bool {
 		return true
 	}
 	timeout := s.deferTimeout(ctx)
-	res, since := autoscale.DecideWithTimeout(live, d, st.DeferredSince, s.clock(), timeout)
+	res, since := autoscale.DecideWithTimeout(live, *d, st.DeferredSince, s.clock(), timeout)
 	st.DeferredSince = since
 	st.Current = res.Current
 	st.Decision = res.Decision
 	st.TimedOut = res.TimedOut
+	if res.DecisionPD != nil {
+		st.PD = &autoscalePD{Current: res.CurrentPD, Want: res.WantPD, Decision: res.DecisionPD}
+	}
 	if !res.Scale {
 		if res.HoldReason != "" {
 			s.log.DebugContext(ctx, "autoscale hold", "release", release, "hold", res.HoldReason)
@@ -141,9 +144,9 @@ func (s *Server) autoscaleOne(ctx context.Context, ns, release string) bool {
 	st.Want = &want
 	if res.TimedOut != "" {
 		s.log.InfoContext(ctx, "autoscale deferral timed out", "release", release, "hold", res.TimedOut,
-			"deferredSince", *st.DeferredSince, "deferTimeout", timeout, "from", res.Current, "to", res.Want)
+			"deferredSince", *st.DeferredSince, "deferTimeout", timeout, "change", autoscaleChange(res))
 	}
-	if _, scaleErr := s.scaleTo(ctx, ns, release, res.Current, res.Want, rev, res.TimedOut); scaleErr != nil {
+	if _, scaleErr := s.scaleTo(ctx, ns, release, res, rev); scaleErr != nil {
 		if errors.Is(scaleErr, errAutoscaleInactive) {
 			s.dropAutoscale(autoscaleKey(ns, release))
 			return false
@@ -155,7 +158,7 @@ func (s *Server) autoscaleOne(ctx context.Context, ns, release string) bool {
 		return true
 	}
 	st.Outcome = outcomeScaledDown
-	if res.Want > res.Current {
+	if res.Grows() {
 		st.Outcome = outcomeScaledUp
 	}
 	now := s.clock()
@@ -189,21 +192,17 @@ func liveReplicaCount(live autoscale.Live) int {
 	return live.PlanReplicaCount
 }
 
-func (s *Server) queryDecision(ctx context.Context, ns, serviceID string) (autoscale.Decision, error) {
+func (s *Server) queryDecision(ctx context.Context, ns, serviceID string) (*autoscale.Decision, error) {
 	prof, err := s.Profile(ctx)
 	if err != nil {
-		return autoscale.Decision{}, err
+		return nil, err
 	}
 	base := prof.Scaler.DecisionServer()
-	n, err := autoscale.Query(ctx, s.decisionHTTP, base, prof.Scaler.ServerHeaders, ns, serviceID)
-	if err != nil {
-		return autoscale.Decision{}, err
-	}
-	return autoscale.Decision{OK: true, Replicas: n}, nil
+	return autoscale.Query(ctx, s.decisionHTTP, base, prof.Scaler.ServerHeaders, ns, serviceID)
 }
 
 func (s *Server) autoscaleLive(ctx context.Context, ns, release, backend string, p *plan.Plan) (autoscale.Live, int, error) {
-	live := autoscale.Live{Backend: backend, PD: disaggregated(p), PlanReplicaCount: planReplicaCount(p)}
+	live := autoscale.Live{Backend: backend, PD: disaggregated(p), PlanReplicaCount: planReplicaCount(p), Engines: planEngines(p)}
 	if data, err := s.probe.ConfigMap(ctx, planRef(ns, release)); err != nil && !apierrors.IsNotFound(err) {
 		return live, 0, err
 	} else if err == nil {
@@ -272,6 +271,12 @@ func (s *Server) autoscaleLive(ctx context.Context, ns, release, backend string,
 			n := *ds.Slices
 			live.DSSlices = &n
 		}
+		if n, ok := ds.RoleReplicas[rolePrefill]; ok {
+			live.Engines.Prefill = n
+		}
+		if n, ok := ds.RoleReplicas[roleDecode]; ok {
+			live.Engines.Decode = n
+		}
 		for _, role := range ds.Roles {
 			live.Roles = append(live.Roles, autoscale.Role{
 				Replicas: role.Replicas, ReadyReplicas: role.ReadyReplicas, UpdatedReplicas: role.UpdatedReplicas,
@@ -307,7 +312,53 @@ func (s *Server) autoscaleLive(ctx context.Context, ns, release, backend string,
 // The tick stops. It is not a failure and it writes nothing.
 var errAutoscaleInactive = errors.New("autoscale inactive")
 
-func (s *Server) scaleTo(ctx context.Context, ns, release string, from, want, expectRev int, timedOut string) (int, error) {
+// The DisaggregatedSet role names the chart renders from pd.prefill and pd.decode.
+const (
+	rolePrefill = "prefill"
+	roleDecode  = "decode"
+)
+
+// planEngines is the plan's pd.prefill.replicas and pd.decode.replicas, 0 when unset.
+func planEngines(p *plan.Plan) autoscale.Engines {
+	if p == nil {
+		return autoscale.Engines{}
+	}
+	vals := p.Values()
+	role := func(name string) int {
+		v, _ := values.Get(vals, "pd."+name+".replicas")
+		n, ok := coerceInt(v)
+		if !ok || n < 0 {
+			return 0
+		}
+		return n
+	}
+	return autoscale.Engines{Prefill: role(rolePrefill), Decode: role(roleDecode)}
+}
+
+// autoscaleLayer is the whole autoscale layer: what the decision sets,
+// replicaCount and, when it has them, the per-slice role replicas.
+func autoscaleLayer(res autoscale.Result) values.Tree {
+	layer := values.Tree{"replicaCount": res.Want}
+	if res.WantPD != nil {
+		layer["pd"] = map[string]any{
+			rolePrefill: map[string]any{"replicas": res.WantPD.Prefill},
+			roleDecode:  map[string]any{"replicas": res.WantPD.Decode},
+		}
+	}
+	return layer
+}
+
+// autoscaleChange is res's move for the status note and the log.
+func autoscaleChange(res autoscale.Result) string {
+	change := fmt.Sprintf("%d -> %d", res.Current, res.Want)
+	if res.WantPD != nil {
+		change += fmt.Sprintf(", prefill %d -> %d, decode %d -> %d",
+			res.CurrentPD.Prefill, res.WantPD.Prefill, res.CurrentPD.Decode, res.WantPD.Decode)
+	}
+	return change
+}
+
+func (s *Server) scaleTo(ctx context.Context, ns, release string, res autoscale.Result, expectRev int) (int, error) {
 	if s.store == nil {
 		return 0, fmt.Errorf("no database: autoscale needs a stored plan")
 	}
@@ -334,18 +385,18 @@ func (s *Server) scaleTo(ctx context.Context, ns, release string, from, want, ex
 	if p.Layers == nil {
 		p.Layers = map[string]values.Tree{}
 	}
-	p.Layers[values.LayerAutoscale] = values.Tree{"replicaCount": want}
+	p.Layers[values.LayerAutoscale] = autoscaleLayer(res)
 	if err := p.ComputeHash(); err != nil {
 		return 0, err
 	}
 	if err := s.store.PutPlan(ctx, p); err != nil {
 		return 0, err
 	}
-	note := fmt.Sprintf("autoscale %d -> %d (decision-gen)", from, want)
-	if timedOut != "" {
-		note = fmt.Sprintf("autoscale %d -> %d (decision-gen, deferral timed out: %s)", from, want, timedOut)
+	note := fmt.Sprintf("autoscale %s (decision-gen)", autoscaleChange(res))
+	if res.TimedOut != "" {
+		note = fmt.Sprintf("autoscale %s (decision-gen, deferral timed out: %s)", autoscaleChange(res), res.TimedOut)
 	}
-	res, err := s.applyLocked(ctx, p, exec.Upgrade, "", applyOpts{
+	applied, err := s.applyLocked(ctx, p, exec.Upgrade, "", applyOpts{
 		ExpectRevision: expectRev,
 		Action:         "autoscale",
 		Note:           note,
@@ -358,5 +409,5 @@ func (s *Server) scaleTo(ctx context.Context, ns, release string, from, want, ex
 	if err != nil {
 		return 0, err
 	}
-	return res.Revision, nil
+	return applied.Revision, nil
 }

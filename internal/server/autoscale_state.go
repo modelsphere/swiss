@@ -3,6 +3,8 @@ package server
 import (
 	"sort"
 	"time"
+
+	"github.com/modelsphere/swiss/internal/autoscale"
 )
 
 const (
@@ -34,6 +36,17 @@ type autoscaleState struct {
 	// this process's clock. TimedOut is the hold the defer timeout then skipped.
 	DeferredSince *time.Time `json:"deferredSince,omitempty"`
 	TimedOut      string     `json:"timedOut,omitempty"`
+	// PD is the per-slice prefill and decode engines, when the decision sets
+	// them (shape.pd, a pdengine CR). Current, Want and Decision are slices.
+	PD *autoscalePD `json:"pd,omitempty"`
+}
+
+// autoscalePD is prefill and decode engines per slice. Current is the
+// DisaggregatedSet spec, else the plan. Want is Decision, absent on a hold.
+type autoscalePD struct {
+	Current  *autoscale.Engines `json:"current,omitempty"`
+	Want     *autoscale.Engines `json:"want,omitempty"`
+	Decision *autoscale.Engines `json:"decision,omitempty"`
 }
 
 func autoscaleKey(ns, release string) string { return ns + "/" + release }

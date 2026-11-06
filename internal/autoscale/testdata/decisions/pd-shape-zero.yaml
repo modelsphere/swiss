@@ -1,0 +1,10 @@
+name: pd-shape-zero
+description: an off pdengine row reports active 0 but shape.pd.slices is the count; roles at 0 are real counts
+namespace: models
+serviceId: pd
+status: 200
+body: '{"apiVersion":"llmscaling.inference.x-k8s.io/v1alpha1","decisions":[{"namespace":"models","serviceId":"pd","replicas":{"active": 0},"shape":{"pd":{"prefill":{"replicas":0,"liveReplicas":2},"decode":{"replicas":0,"liveReplicas":1},"slices":1}}}]}'
+want: 1
+wantPD:
+  prefill: 0
+  decode: 0

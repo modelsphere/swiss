@@ -1,13 +1,13 @@
-name: clamp-max
-description: a decision above the safety ceiling clamps down
+name: no-clamp-min
+description: a decision of 0 slices applies as given
 live:
   backend: helm
   helmStatus: deployed
   pd: true
   dsGeneration: 1
   dsObservedGeneration: 1
-  dsSlices: 1
-  planReplicaCount: 1
+  dsSlices: 3
+  planReplicaCount: 3
   roles:
     - replicas: 1
       readyReplicas: 1
@@ -17,11 +17,19 @@ live:
       readyReplicas: 1
       generation: 1
       observedGeneration: 1
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
 decision:
   ok: true
-  replicas: 80
+  replicas: 0
 wantHold: ""
 wantScale: true
-wantCurrent: 1
-want: 64
+wantCurrent: 3
+want: 0
 hasDecision: true

@@ -21,6 +21,7 @@ type decisionCase struct {
 	Transport      bool              `json:"transport,omitempty"`
 	Headers        map[string]string `json:"headers,omitempty"`
 	Want           *int              `json:"want,omitempty"`
+	WantPD         *Engines          `json:"wantPD,omitempty"`
 	ErrorContains  string            `json:"errorContains,omitempty"`
 	WantNoDecision bool              `json:"wantNoDecision,omitempty"`
 	WantHeader     string            `json:"wantHeader,omitempty"`
@@ -70,8 +71,19 @@ func TestDecisions(t *testing.T) {
 		if tc.Want == nil {
 			t.Fatal("success case needs want")
 		}
-		if got != *tc.Want {
-			t.Fatalf("replicas %d, want %d", got, *tc.Want)
+		if !got.OK {
+			t.Fatal("decision not OK")
+		}
+		if got.Replicas != *tc.Want {
+			t.Fatalf("replicas %d, want %d", got.Replicas, *tc.Want)
+		}
+		switch {
+		case tc.WantPD == nil && got.PD != nil:
+			t.Fatalf("pd %+v, want none", *got.PD)
+		case tc.WantPD != nil && got.PD == nil:
+			t.Fatalf("pd none, want %+v", *tc.WantPD)
+		case tc.WantPD != nil && *got.PD != *tc.WantPD:
+			t.Fatalf("pd %+v, want %+v", *got.PD, *tc.WantPD)
 		}
 	})
 }

@@ -4,4 +4,4 @@ namespace: models
 serviceId: pd
 status: 200
 body: '{"apiVersion":"other/v1","decisions":[{"namespace":"models","serviceId":"pd","replicas":{"active":2}}]}'
-errorContains: unsupported decision schema
+errorContains: apiVersion in body should be one of

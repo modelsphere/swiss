@@ -19,6 +19,9 @@ type decideCase struct {
 	Want         int      `json:"want"`
 	HasDecision  bool     `json:"hasDecision"`
 	WantTimedOut string   `json:"wantTimedOut,omitempty"`
+	// WantPD and WantCurrentPD are Result.WantPD and Result.CurrentPD; omitted is nil.
+	WantPD        *Engines `json:"wantPD,omitempty"`
+	WantCurrentPD *Engines `json:"wantCurrentPD,omitempty"`
 }
 
 func TestDecide(t *testing.T) {
@@ -45,7 +48,27 @@ func TestDecide(t *testing.T) {
 		if got.Decision != nil && tc.Decision.OK && *got.Decision != tc.Decision.Replicas {
 			t.Errorf("decision %d, want %d", *got.Decision, tc.Decision.Replicas)
 		}
+		checkEngines(t, "wantPD", got.WantPD, tc.WantPD)
+		checkEngines(t, "currentPD", got.CurrentPD, tc.WantCurrentPD)
+		if tc.Decision.OK && tc.Decision.PD != nil {
+			checkEngines(t, "decisionPD", got.DecisionPD, tc.Decision.PD)
+		} else if got.DecisionPD != nil {
+			t.Errorf("decisionPD %+v, want nil", *got.DecisionPD)
+		}
 	})
+}
+
+func checkEngines(t *testing.T, name string, got, want *Engines) {
+	t.Helper()
+	switch {
+	case got == nil && want == nil:
+	case got == nil:
+		t.Errorf("%s nil, want %+v", name, *want)
+	case want == nil:
+		t.Errorf("%s %+v, want nil", name, *got)
+	case *got != *want:
+		t.Errorf("%s %+v, want %+v", name, *got, *want)
+	}
 }
 
 type timeoutCase struct {
