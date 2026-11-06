@@ -233,6 +233,24 @@ func (r Runner) Values(ctx context.Context, namespace, release string, revision 
 	return r.runHelm(ctx, args...)
 }
 
+// ChartValues is the chart's own values.yaml, as `helm show values` prints it:
+// the defaults every layer of p is merged onto. Only stdout is read, since
+// pulling an OCI chart reports Pulled and Digest lines on stderr.
+func (r Runner) ChartValues(ctx context.Context, p *plan.Plan) (string, error) {
+	chart, err := p.HelmChartArgs(r.ChartRoot)
+	if err != nil {
+		return "", err
+	}
+	args := append([]string{"show", "values"}, chart...)
+	cmd := exec.CommandContext(ctx, r.bin("helm"), args...)
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("helm %s: %w\n%s", strings.Join(args, " "), err, errb.String())
+	}
+	return out.String(), nil
+}
+
 func (r Runner) runHelm(ctx context.Context, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, r.bin("helm"), args...)
 	var buf bytes.Buffer

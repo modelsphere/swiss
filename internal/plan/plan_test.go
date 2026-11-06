@@ -144,3 +144,28 @@ func TestWarningsAreKeptButNotHashed(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestHelmChartArgs(t *testing.T) {
+	for _, tc := range []struct {
+		repo, path, root string
+		want             string
+	}{
+		{repo: "oci://ghcr.io/modelsphere/charts/", want: "oci://ghcr.io/modelsphere/charts/sglang --version 0.8.0"},
+		{repo: "https://charts.example.com/", want: "sglang --repo https://charts.example.com --version 0.8.0"},
+		{path: "/charts", want: "/charts/sglang"},
+		{root: "/root", want: "/root/sglang"},
+	} {
+		p := testPlan()
+		p.Chart.Repo, p.Chart.Path = tc.repo, tc.path
+		args, err := p.HelmChartArgs(tc.root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Join(args, " "); got != tc.want {
+			t.Errorf("args %q, want %q", got, tc.want)
+		}
+	}
+	if _, err := testPlan().HelmChartArgs(""); err == nil {
+		t.Fatal("a plan with no chart source named a chart")
+	}
+}

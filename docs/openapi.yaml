@@ -766,6 +766,57 @@ paths:
         "500": { $ref: "#/components/responses/ServerError" }
         "502": { $ref: "#/components/responses/BadGateway" }
 
+  /api/v2/compose:
+    post:
+      tags: [deploy]
+      summary: Compose (v2, experimental, incomplete)
+      x-experimental: true
+      description: |
+        **Experimental and incomplete**: the request, response and errors may
+        change without notice, and only the dry run below is served.
+
+        v2 compose, the start of the v2 install and upgrade. The `PlanRequest`
+        composes as `/api/plans` does and nothing is stored or applied, so
+        retrying is safe. With `dumpHelmValues`, the response carries the
+        values helm would be handed.
+
+        Errors carry a `code` beside `error`: `INVALID_QUERY`, `INVALID_REQUEST`,
+        `CATALOG_UNAVAILABLE`, `GPU_INVENTORY_UNAVAILABLE`, `CHART_VALUES_UNAVAILABLE`.
+      operationId: composeV2
+      parameters:
+        - name: dryRun
+          in: query
+          required: true
+          description: Must be `true`; a stored compose is not served yet.
+          schema: { type: string, enum: ["true"] }
+        - name: dumpHelmValues
+          in: query
+          description: "`true` adds `helmValues`, at the cost of reading the chart."
+          schema: { type: string, enum: ["true", "false"], default: "false" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PlanRequest" }
+      responses:
+        "200":
+          description: The request composes. Empty without dumpHelmValues.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  helmValues:
+                    type: object
+                    required: [defaults, overrides]
+                    properties:
+                      defaults: { type: string, description: "The chart's values.yaml verbatim, from `helm show values`, comments kept." }
+                      overrides: { type: string, description: "YAML: the plan's layers merged in order, a null kept for helm to delete that default." }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
   /api/diff:
     post:
       tags: [deploy]
