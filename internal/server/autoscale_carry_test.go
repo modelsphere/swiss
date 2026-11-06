@@ -12,8 +12,13 @@ import (
 )
 
 type carryCase struct {
-	Name              string `json:"name"`
-	Description       string `json:"description,omitempty"`
+	Name        string        `json:"name"`
+	Description string        `json:"description,omitempty"`
+	Input       carryInput    `json:"input"`
+	Expected    carryExpected `json:"expected"`
+}
+
+type carryInput struct {
 	Kind              string `json:"kind"`
 	On                bool   `json:"rule,omitempty"`
 	Overrides         bool   `json:"overrides,omitempty"`
@@ -23,19 +28,22 @@ type carryCase struct {
 	LiveAutoscale     *int   `json:"liveAutoscale,omitempty"`
 	ArchivedAutoscale *int   `json:"archivedAutoscale,omitempty"`
 	ArchivedForm      *int   `json:"archivedForm,omitempty"`
-	WantLayer         bool   `json:"wantLayer"`
-	WantReplicaCount  *int   `json:"wantReplicaCount,omitempty"`
+}
+
+type carryExpected struct {
+	Layer        bool `json:"layer"`
+	ReplicaCount *int `json:"replicaCount,omitempty"`
 }
 
 func TestAutoscaleCarry(t *testing.T) {
 	cases.Run(t, "testdata/autoscale-carry", func(t *testing.T, tc carryCase) {
-		switch tc.Kind {
+		switch tc.Input.Kind {
 		case "upgrade":
 			runUpgradeCarry(t, tc)
 		case "rollback":
 			runRollbackCarry(t, tc)
 		default:
-			t.Fatalf("kind %q", tc.Kind)
+			t.Fatalf("kind %q", tc.Input.Kind)
 		}
 	})
 }
@@ -46,14 +54,14 @@ func runUpgradeCarry(t *testing.T, tc carryCase) {
 		Model: "qwen3.6-35b-a3b", Release: "r", ServiceID: "r",
 		Overrides: values.Tree{"replicaCount": 3},
 	})
-	if tc.On {
+	if tc.Input.On {
 		setAutoscaleRule(p)
 	}
-	if tc.LiveAutoscale != nil {
+	if tc.Input.LiveAutoscale != nil {
 		if p.Layers == nil {
 			p.Layers = map[string]values.Tree{}
 		}
-		p.Layers[values.LayerAutoscale] = values.Tree{"replicaCount": *tc.LiveAutoscale}
+		p.Layers[values.LayerAutoscale] = values.Tree{"replicaCount": *tc.Input.LiveAutoscale}
 		if err := p.ComputeHash(); err != nil {
 			t.Fatal(err)
 		}
@@ -70,29 +78,29 @@ func runUpgradeCarry(t *testing.T, tc carryCase) {
 
 	body := map[string]any{"fromRelease": "r"}
 	overrides := map[string]any{}
-	if tc.Overrides {
+	if tc.Input.Overrides {
 		overrides["replicaCount"] = 5
 	}
-	if tc.SLOOff {
+	if tc.Input.SLOOff {
 		overrides["sloRequirement"] = map[string]any{"enabled": false}
 	}
 	if len(overrides) > 0 {
 		body["overrides"] = overrides
 	}
-	if tc.Edits != "" {
-		body["editsYAML"] = tc.Edits
+	if tc.Input.Edits != "" {
+		body["editsYAML"] = tc.Input.Edits
 	}
 	code, up := post(t, srv, "/api/plans", body)
 	if code != http.StatusOK {
 		t.Fatalf("status %d: %v", code, up)
 	}
 	layer := layerDoc(up, values.LayerAutoscale)
-	if tc.WantLayer {
-		if jsonInt(layer["replicaCount"]) != *tc.WantReplicaCount {
-			t.Fatalf("autoscale replicaCount %v, want %d (layer %v)", layer["replicaCount"], *tc.WantReplicaCount, layer)
+	if tc.Expected.Layer {
+		if jsonInt(layer["replicaCount"]) != *tc.Expected.ReplicaCount {
+			t.Fatalf("autoscale replicaCount %v, want %d (layer %v)", layer["replicaCount"], *tc.Expected.ReplicaCount, layer)
 		}
-		if jsonInt(planValues(up)["replicaCount"]) != *tc.WantReplicaCount {
-			t.Fatalf("merged replicaCount %v, want the autoscale value %d", planValues(up)["replicaCount"], *tc.WantReplicaCount)
+		if jsonInt(planValues(up)["replicaCount"]) != *tc.Expected.ReplicaCount {
+			t.Fatalf("merged replicaCount %v, want the autoscale value %d", planValues(up)["replicaCount"], *tc.Expected.ReplicaCount)
 		}
 		return
 	}
@@ -100,7 +108,7 @@ func runUpgradeCarry(t *testing.T, tc carryCase) {
 		t.Fatalf("autoscale layer should be absent, got %v", layer)
 	}
 	wantForm := 3
-	if tc.Overrides {
+	if tc.Input.Overrides {
 		wantForm = 5
 	}
 	if jsonInt(planValues(up)["replicaCount"]) != wantForm {
@@ -111,8 +119,8 @@ func runUpgradeCarry(t *testing.T, tc carryCase) {
 func runRollbackCarry(t *testing.T, tc carryCase) {
 	t.Helper()
 	form := 1
-	if tc.ArchivedForm != nil {
-		form = *tc.ArchivedForm
+	if tc.Input.ArchivedForm != nil {
+		form = *tc.Input.ArchivedForm
 	}
 	probe, baseFiles := seedRelease(t, 6, values.Tree{"replicaCount": form})
 	base, err := plan.FromFiles(baseFiles)
@@ -120,14 +128,14 @@ func runRollbackCarry(t *testing.T, tc carryCase) {
 		t.Fatal(err)
 	}
 	arch := clonePlan(base)
-	if tc.ArchivedRule {
+	if tc.Input.ArchivedRule {
 		setAutoscaleRule(arch)
 	}
-	if tc.ArchivedAutoscale != nil {
+	if tc.Input.ArchivedAutoscale != nil {
 		if arch.Layers == nil {
 			arch.Layers = map[string]values.Tree{}
 		}
-		arch.Layers[values.LayerAutoscale] = values.Tree{"replicaCount": *tc.ArchivedAutoscale}
+		arch.Layers[values.LayerAutoscale] = values.Tree{"replicaCount": *tc.Input.ArchivedAutoscale}
 	}
 	if err := arch.ComputeHash(); err != nil {
 		t.Fatal(err)
@@ -141,14 +149,14 @@ func runRollbackCarry(t *testing.T, tc carryCase) {
 	}
 
 	live := clonePlan(base)
-	if tc.On {
+	if tc.Input.On {
 		setAutoscaleRule(live)
 	}
-	if tc.LiveAutoscale != nil {
+	if tc.Input.LiveAutoscale != nil {
 		if live.Layers == nil {
 			live.Layers = map[string]values.Tree{}
 		}
-		live.Layers[values.LayerAutoscale] = values.Tree{"replicaCount": *tc.LiveAutoscale}
+		live.Layers[values.LayerAutoscale] = values.Tree{"replicaCount": *tc.Input.LiveAutoscale}
 	}
 	if err := live.ComputeHash(); err != nil {
 		t.Fatal(err)
@@ -183,7 +191,7 @@ func runRollbackCarry(t *testing.T, tc carryCase) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	overlay := tc.On && tc.ArchivedRule && tc.LiveAutoscale != nil
+	overlay := tc.Input.On && tc.Input.ArchivedRule && tc.Input.LiveAutoscale != nil
 	if overlay {
 		stored, err := s.store.Plan(context.Background(), hash)
 		if err != nil {
@@ -193,8 +201,8 @@ func runRollbackCarry(t *testing.T, tc carryCase) {
 		if layer := stored.Layers[values.LayerAutoscale]; layer != nil {
 			got = jsonInt(layer["replicaCount"])
 		}
-		if !tc.WantLayer || got != *tc.WantReplicaCount {
-			t.Fatalf("applied autoscale replicaCount %d, want %d", got, *tc.WantReplicaCount)
+		if !tc.Expected.Layer || got != *tc.Expected.ReplicaCount {
+			t.Fatalf("applied autoscale replicaCount %d, want %d", got, *tc.Expected.ReplicaCount)
 		}
 		if hash == archived.Hash {
 			t.Fatal("overlay did not recompute the hash")

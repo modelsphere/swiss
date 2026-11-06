@@ -1,12 +1,14 @@
 name: llm-pd-scale-up
 description: an llmsvc shape.pd decision writes replicaCount and the per-slice role replicas
-backend: llmsvc
-decision: 1
-slices: 1
-revision: 2
-wantApplies: 1
-decisionPD: {prefill: 1, decode: 3}
-engines: {prefill: 1, decode: 1}
-wantPD: {prefill: 1, decode: 3}
-wantFrom: 1
-wantTo: 1
+input:
+  backend: llmsvc
+  decision: 1
+  slices: 1
+  revision: 2
+  decisionPD: {prefill: 1, decode: 3}
+  engines: {prefill: 1, decode: 1}
+expected:
+  applies: 1
+  pd: {prefill: 1, decode: 3}
+  from: 1
+  to: 1

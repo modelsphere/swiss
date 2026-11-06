@@ -1,29 +1,31 @@
 name: timeout-scale-up-readiness
 description: a timeout lets a scale-up through a role that is not ready
-live:
-  backend: helm
-  helmStatus: deployed
-  pd: true
-  dsGeneration: 1
-  dsObservedGeneration: 1
-  dsSlices: 1
-  planReplicaCount: 1
-  roles:
-  - replicas: 2
-    readyReplicas: 1
-    updatedReplicas: 0
-  routers:
-  - specReplicas: 1
-    readyReplicas: 1
-    generation: 1
-    observedGeneration: 1
-decision:
-  ok: true
-  replicas: 2
-timedOut: true
-wantHold: ""
-wantTimedOut: role not ready
-wantScale: true
-wantCurrent: 1
-want: 2
-hasDecision: true
+input:
+  live:
+    backend: helm
+    helmStatus: deployed
+    pd: true
+    dsGeneration: 1
+    dsObservedGeneration: 1
+    dsSlices: 1
+    planReplicaCount: 1
+    roles:
+    - replicas: 2
+      readyReplicas: 1
+      updatedReplicas: 0
+    routers:
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
+  decision:
+    ok: true
+    replicas: 2
+  timedOut: true
+expected:
+  hold: ""
+  timedOut: role not ready
+  scale: true
+  current: 1
+  want: 2
+  hasDecision: true

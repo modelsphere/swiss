@@ -1,7 +1,9 @@
 name: pd-shape-negative
 description: a negative role count is out of range
-namespace: models
-serviceId: pd
-status: 200
-body: '{"apiVersion":"llmscaling.inference.x-k8s.io/v1alpha1","decisions":[{"namespace":"models","serviceId":"pd","replicas":{"active": 1},"shape":{"pd":{"prefill":{"replicas":-1,"liveReplicas":2},"decode":{"replicas":1,"liveReplicas":1},"slices":1}}}]}'
-errorContains: shape.pd.prefill.replicas in body should be greater than or equal to 0
+input:
+  namespace: models
+  serviceId: pd
+  status: 200
+  body: '{"apiVersion":"llmscaling.inference.x-k8s.io/v1alpha1","decisions":[{"namespace":"models","serviceId":"pd","replicas":{"active": 1},"shape":{"pd":{"prefill":{"replicas":-1,"liveReplicas":2},"decode":{"replicas":1,"liveReplicas":1},"slices":1}}}]}'
+expected:
+  errorContains: shape.pd.prefill.replicas in body should be greater than or equal to 0

@@ -16,23 +16,31 @@ import (
 )
 
 type autoscaleAPICase struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	Decision    int             `json:"decision,omitempty"`
-	NoDecision  bool            `json:"noDecision,omitempty"`
-	HelmStatus  string          `json:"helmStatus,omitempty"`
-	SLO         *bool           `json:"slo,omitempty"`
-	PD          *bool           `json:"pd,omitempty"`
-	Slices      int             `json:"slices,omitempty"`
-	Extra       *autoscaleExtra `json:"extra,omitempty"`
-	Unknown     bool            `json:"unknown,omitempty"`
-	WantOutcome string          `json:"wantOutcome,omitempty"`
-	WantHold    string          `json:"wantHold,omitempty"`
-	WantWant    *int            `json:"wantWant,omitempty"`
-	WantCurrent *int            `json:"wantCurrent,omitempty"`
-	WantEnabled *bool           `json:"wantEnabled,omitempty"`
-	WantList    []string        `json:"wantList,omitempty"`
-	WantStatus  int             `json:"wantStatus,omitempty"`
+	Name        string               `json:"name"`
+	Description string               `json:"description,omitempty"`
+	Input       autoscaleAPIInput    `json:"input"`
+	Expected    autoscaleAPIExpected `json:"expected"`
+}
+
+type autoscaleAPIInput struct {
+	Decision   int             `json:"decision,omitempty"`
+	NoDecision bool            `json:"noDecision,omitempty"`
+	HelmStatus string          `json:"helmStatus,omitempty"`
+	SLO        *bool           `json:"slo,omitempty"`
+	PD         *bool           `json:"pd,omitempty"`
+	Slices     int             `json:"slices,omitempty"`
+	Extra      *autoscaleExtra `json:"extra,omitempty"`
+	Unknown    bool            `json:"unknown,omitempty"`
+}
+
+type autoscaleAPIExpected struct {
+	Outcome string   `json:"outcome,omitempty"`
+	Hold    string   `json:"hold,omitempty"`
+	Want    *int     `json:"want,omitempty"`
+	Current *int     `json:"current,omitempty"`
+	Enabled *bool    `json:"enabled,omitempty"`
+	List    []string `json:"list,omitempty"`
+	Status  int      `json:"status,omitempty"`
 }
 
 type autoscaleExtra struct {
@@ -51,32 +59,32 @@ func runAutoscaleStateCase(t *testing.T, tc autoscaleAPICase) {
 	t.Helper()
 	const ns, release = "models", "pd"
 	probe := fakeProbe()
-	if !tc.Unknown {
+	if !tc.Input.Unknown {
 		var decURL string
-		if tc.NoDecision {
+		if tc.Input.NoDecision {
 			dec, _ := countingDecisions(t, ns, release, 2, true)
 			decURL = dec.URL
 		} else {
-			if tc.Decision == 0 {
+			if tc.Input.Decision == 0 {
 				t.Fatal("decision is required")
 			}
-			decURL = decisionServer(t, ns, release, tc.Decision).URL
+			decURL = decisionServer(t, ns, release, tc.Input.Decision).URL
 		}
 		setDecisionProfile(probe, decURL)
-		n := tc.Slices
+		n := tc.Input.Slices
 		if n == 0 {
 			n = 1
 		}
 		slo := true
-		if tc.SLO != nil {
-			slo = *tc.SLO
+		if tc.Input.SLO != nil {
+			slo = *tc.Input.SLO
 		}
-		seedAutoscaleRelease(t, &probe, ns, release, n, boolOr(tc.PD, true), boolPtr(slo), tc.HelmStatus)
-		if tc.Extra != nil {
-			if tc.Extra.Release == "" {
+		seedAutoscaleRelease(t, &probe, ns, release, n, boolOr(tc.Input.PD, true), boolPtr(slo), tc.Input.HelmStatus)
+		if tc.Input.Extra != nil {
+			if tc.Input.Extra.Release == "" {
 				t.Fatal("extra.release is empty")
 			}
-			seedAutoscaleRelease(t, &probe, ns, tc.Extra.Release, 1, boolOr(tc.Extra.PD, false), tc.Extra.SLO, "")
+			seedAutoscaleRelease(t, &probe, ns, tc.Input.Extra.Release, 1, boolOr(tc.Input.Extra.PD, false), tc.Input.Extra.SLO, "")
 		}
 	}
 
@@ -86,65 +94,65 @@ func runAutoscaleStateCase(t *testing.T, tc autoscaleAPICase) {
 	s.autoscaleTick(t.Context())
 	h := s.Handler()
 
-	if tc.WantStatus == 0 {
-		tc.WantStatus = http.StatusOK
+	if tc.Expected.Status == 0 {
+		tc.Expected.Status = http.StatusOK
 	}
 	code, body := autoscaleGET(t, h, "/api/releases/"+ns+"/"+release+"/autoscaling")
-	if code != tc.WantStatus {
-		t.Fatalf("status %d, want %d: %v", code, tc.WantStatus, body)
+	if code != tc.Expected.Status {
+		t.Fatalf("status %d, want %d: %v", code, tc.Expected.Status, body)
 	}
-	if tc.WantStatus == http.StatusNotFound {
+	if tc.Expected.Status == http.StatusNotFound {
 		if body["error"] != "no such release" {
 			t.Fatalf("error %v", body["error"])
 		}
 	}
-	if tc.WantStatus == http.StatusOK {
+	if tc.Expected.Status == http.StatusOK {
 		if body["namespace"] != ns || body["release"] != release {
 			t.Fatalf("identity %v", body)
 		}
-		if tc.WantOutcome == "" {
+		if tc.Expected.Outcome == "" {
 			if o, ok := body["outcome"]; ok {
 				t.Fatalf("outcome %v", o)
 			}
-		} else if body["outcome"] != tc.WantOutcome {
-			t.Fatalf("outcome %v, want %q", body["outcome"], tc.WantOutcome)
+		} else if body["outcome"] != tc.Expected.Outcome {
+			t.Fatalf("outcome %v, want %q", body["outcome"], tc.Expected.Outcome)
 		}
-		if tc.WantHold == "" {
+		if tc.Expected.Hold == "" {
 			if hold, ok := body["hold"]; ok {
 				t.Fatalf("hold %v", hold)
 			}
-		} else if body["hold"] != tc.WantHold {
-			t.Fatalf("hold %v, want %q", body["hold"], tc.WantHold)
+		} else if body["hold"] != tc.Expected.Hold {
+			t.Fatalf("hold %v, want %q", body["hold"], tc.Expected.Hold)
 		}
-		if tc.WantWant == nil {
+		if tc.Expected.Want == nil {
 			if w, ok := body["want"]; ok {
 				t.Fatalf("want %v", w)
 			}
-		} else if jsonInt(body["want"]) != *tc.WantWant {
-			t.Fatalf("want %v, want %d", body["want"], *tc.WantWant)
+		} else if jsonInt(body["want"]) != *tc.Expected.Want {
+			t.Fatalf("want %v, want %d", body["want"], *tc.Expected.Want)
 		}
-		if tc.WantCurrent != nil && jsonInt(body["current"]) != *tc.WantCurrent {
-			t.Fatalf("current %v, want %d", body["current"], *tc.WantCurrent)
+		if tc.Expected.Current != nil && jsonInt(body["current"]) != *tc.Expected.Current {
+			t.Fatalf("current %v, want %d", body["current"], *tc.Expected.Current)
 		}
-		if tc.WantEnabled != nil && body["enabled"] != *tc.WantEnabled {
-			t.Fatalf("enabled %v, want %v", body["enabled"], *tc.WantEnabled)
+		if tc.Expected.Enabled != nil && body["enabled"] != *tc.Expected.Enabled {
+			t.Fatalf("enabled %v, want %v", body["enabled"], *tc.Expected.Enabled)
 		}
-		if tc.WantOutcome != "" {
-			if tc.NoDecision {
+		if tc.Expected.Outcome != "" {
+			if tc.Input.NoDecision {
 				if body["noDecision"] != true {
 					t.Fatalf("noDecision %v", body["noDecision"])
 				}
 				if _, ok := body["decision"]; ok {
 					t.Fatalf("decision %v", body["decision"])
 				}
-			} else if jsonInt(body["decision"]) != tc.Decision {
-				t.Fatalf("decision %v, want %d", body["decision"], tc.Decision)
+			} else if jsonInt(body["decision"]) != tc.Input.Decision {
+				t.Fatalf("decision %v, want %d", body["decision"], tc.Input.Decision)
 			}
 			assertTimestamp(t, body["lastEvaluated"])
 		} else if _, ok := body["lastEvaluated"]; ok {
 			t.Fatalf("lastEvaluated %v", body["lastEvaluated"])
 		}
-		scaled := tc.WantOutcome == outcomeScaledUp || tc.WantOutcome == outcomeScaledDown
+		scaled := tc.Expected.Outcome == outcomeScaledUp || tc.Expected.Outcome == outcomeScaledDown
 		if scaled {
 			assertTimestamp(t, body["lastScaled"])
 		} else if _, ok := body["lastScaled"]; ok {
@@ -152,9 +160,9 @@ func runAutoscaleStateCase(t *testing.T, tc autoscaleAPICase) {
 		}
 	}
 
-	if tc.Extra != nil {
-		extraCode, extra := autoscaleGET(t, h, "/api/releases/"+ns+"/"+tc.Extra.Release+"/autoscaling")
-		if extraCode != http.StatusOK || extra["enabled"] != false || extra["release"] != tc.Extra.Release {
+	if tc.Input.Extra != nil {
+		extraCode, extra := autoscaleGET(t, h, "/api/releases/"+ns+"/"+tc.Input.Extra.Release+"/autoscaling")
+		if extraCode != http.StatusOK || extra["enabled"] != false || extra["release"] != tc.Input.Extra.Release {
 			t.Fatalf("extra %d %v", extraCode, extra)
 		}
 		if _, ok := extra["outcome"]; ok {
@@ -169,8 +177,8 @@ func runAutoscaleStateCase(t *testing.T, tc autoscaleAPICase) {
 	if listCode != http.StatusOK {
 		t.Fatalf("list %d %v", listCode, list)
 	}
-	if names := autoscaleReleaseNames(t, list); !slices.Equal(names, tc.WantList) {
-		t.Fatalf("list %v, want %v", names, tc.WantList)
+	if names := autoscaleReleaseNames(t, list); !slices.Equal(names, tc.Expected.List) {
+		t.Fatalf("list %v, want %v", names, tc.Expected.List)
 	}
 }
 

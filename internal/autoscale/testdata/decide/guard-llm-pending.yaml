@@ -1,18 +1,20 @@
 name: guard-llm-pending
 description: an LLMService in Pending holds the tick
-live:
-  backend: llmsvc
-  helmStatus: deployed
-  llmPhase: Pending
-  llmGeneration: 2
-  llmObservedGeneration: 2
-  pd: true
-  planReplicaCount: 1
-decision:
-  ok: true
-  replicas: 2
-wantHold: llmservice pending
-wantScale: false
-wantCurrent: 1
-want: 0
-hasDecision: true
+input:
+  live:
+    backend: llmsvc
+    helmStatus: deployed
+    llmPhase: Pending
+    llmGeneration: 2
+    llmObservedGeneration: 2
+    pd: true
+    planReplicaCount: 1
+  decision:
+    ok: true
+    replicas: 2
+expected:
+  hold: llmservice pending
+  scale: false
+  current: 1
+  want: 0
+  hasDecision: true

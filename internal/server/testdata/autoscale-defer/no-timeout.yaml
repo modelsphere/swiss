@@ -1,14 +1,17 @@
 name: no-timeout
 description: pdScale.deferTimeoutSeconds 0 defers indefinitely
-deferTimeoutSeconds: 0
-decision: 2
-slices: 1
-roleNotReady: true
+input:
+  deferTimeoutSeconds: 0
+  decision: 2
+  slices: 1
+  roleNotReady: true
 ticks:
-  - wantOutcome: held
-    wantHold: role not ready
-    wantDeferredFor: 0s
-  - advance: 72h
-    wantOutcome: held
-    wantHold: role not ready
-    wantDeferredFor: 72h
+- expected:
+    outcome: held
+    hold: role not ready
+    deferredFor: 0s
+- advance: 72h
+  expected:
+    outcome: held
+    hold: role not ready
+    deferredFor: 72h

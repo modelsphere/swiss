@@ -1,9 +1,11 @@
 name: helm-pd-unchanged-from-plan
 description: with no role replicas in the DisaggregatedSet spec the plan's are current, so a decision already applied is not applied again
-backend: helm
-decision: 1
-slices: 1
-revision: 2
-wantApplies: 0
-decisionPD: {prefill: 2, decode: 1}
-planEngines: {prefill: 2, decode: 1}
+input:
+  backend: helm
+  decision: 1
+  slices: 1
+  revision: 2
+  decisionPD: {prefill: 2, decode: 1}
+  planEngines: {prefill: 2, decode: 1}
+expected:
+  applies: 0

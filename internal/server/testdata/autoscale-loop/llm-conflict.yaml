@@ -1,9 +1,11 @@
 name: llm-conflict
 description: an llmsvc revision conflict is not retried this tick
-backend: llmsvc
-decision: 2
-slices: 1
-revision: 2
-conflict: true
-wantApplies: 0
-errorContains: moved
+input:
+  backend: llmsvc
+  decision: 2
+  slices: 1
+  revision: 2
+  conflict: true
+expected:
+  applies: 0
+  errorContains: moved

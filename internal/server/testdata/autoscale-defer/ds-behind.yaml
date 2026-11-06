@@ -1,14 +1,17 @@
 name: ds-behind
 description: a DisaggregatedSet whose rollout never lands, as with no room for its pods, scales once deferred for the timeout
-deferTimeoutSeconds: 600
-decision: 2
-slices: 1
-dsBehind: true
+input:
+  deferTimeoutSeconds: 600
+  decision: 2
+  slices: 1
+  dsBehind: true
 ticks:
-  - wantOutcome: held
-    wantHold: disaggregatedset observedGeneration behind
-    wantDeferredFor: 0s
-  - advance: 10m
-    wantOutcome: scaled-up
-    wantTimedOut: disaggregatedset observedGeneration behind
-    wantDeferredFor: 10m
+- expected:
+    outcome: held
+    hold: disaggregatedset observedGeneration behind
+    deferredFor: 0s
+- advance: 10m
+  expected:
+    outcome: scaled-up
+    timedOut: disaggregatedset observedGeneration behind
+    deferredFor: 10m

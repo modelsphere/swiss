@@ -1,9 +1,11 @@
 name: llm-deleting
 description: an LLMService with a deletionTimestamp holds and is not updated
-backend: llmsvc
-decision: 3
-slices: 1
-revision: 2
-deleting: true
-wantApplies: 0
-wantHold: uninstalling
+input:
+  backend: llmsvc
+  decision: 3
+  slices: 1
+  revision: 2
+  deleting: true
+expected:
+  applies: 0
+  hold: uninstalling

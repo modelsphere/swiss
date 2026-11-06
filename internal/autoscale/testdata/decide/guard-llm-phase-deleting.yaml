@@ -1,17 +1,19 @@
 name: guard-llm-phase-deleting
 description: status.phase Deleting holds, even when deletionTimestamp is not set
-live:
-  backend: llmsvc
-  llmPhase: Deleting
-  llmGeneration: 1
-  llmObservedGeneration: 1
-  pd: true
-  planReplicaCount: 3
-decision:
-  ok: true
-  replicas: 1
-wantHold: uninstalling
-wantScale: false
-wantCurrent: 3
-want: 0
-hasDecision: true
+input:
+  live:
+    backend: llmsvc
+    llmPhase: Deleting
+    llmGeneration: 1
+    llmObservedGeneration: 1
+    pd: true
+    planReplicaCount: 3
+  decision:
+    ok: true
+    replicas: 1
+expected:
+  hold: uninstalling
+  scale: false
+  current: 3
+  want: 0
+  hasDecision: true

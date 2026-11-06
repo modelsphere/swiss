@@ -1,8 +1,10 @@
 name: llmsvc-non-pd
 description: an llmsvc release that is not disaggregated is not queried
-backend: llmsvc
-pd: false
-colocate: false
-slo: true
-wantQueries: 0
-wantApplies: 0
+input:
+  backend: llmsvc
+  pd: false
+  colocate: false
+  slo: true
+expected:
+  queries: 0
+  applies: 0

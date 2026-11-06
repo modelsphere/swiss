@@ -1,18 +1,22 @@
 name: forced-again
 description: an apply past the defer timeout keeps the clock, so while the hold lasts the next pass applies at once instead of waiting out the timeout again
-deferTimeoutSeconds: 600
-decision: 2
-slices: 1
-roleNotReady: true
+input:
+  deferTimeoutSeconds: 600
+  decision: 2
+  slices: 1
+  roleNotReady: true
 ticks:
-  - wantOutcome: held
-    wantHold: role not ready
-    wantDeferredFor: 0s
-  - advance: 10m
-    wantOutcome: scaled-up
-    wantTimedOut: role not ready
-    wantDeferredFor: 10m
-  - advance: 1m
-    wantOutcome: scaled-up
-    wantTimedOut: role not ready
-    wantDeferredFor: 11m
+- expected:
+    outcome: held
+    hold: role not ready
+    deferredFor: 0s
+- advance: 10m
+  expected:
+    outcome: scaled-up
+    timedOut: role not ready
+    deferredFor: 10m
+- advance: 1m
+  expected:
+    outcome: scaled-up
+    timedOut: role not ready
+    deferredFor: 11m

@@ -1,11 +1,13 @@
 name: unchanged
 description: a decision that matches the slice count leaves the release
-decision: 1
-slo: true
-pd: true
-wantOutcome: unchanged
-wantWant: 1
-wantCurrent: 1
-wantEnabled: true
-wantList:
+input:
+  decision: 1
+  slo: true
+  pd: true
+expected:
+  outcome: unchanged
+  want: 1
+  current: 1
+  enabled: true
+  list:
   - pd

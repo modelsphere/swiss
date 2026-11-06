@@ -1,18 +1,19 @@
 name: no-clamp-min
 description: a decision of 0 slices applies as given
-live:
-  backend: helm
-  helmStatus: deployed
-  pd: true
-  dsGeneration: 1
-  dsObservedGeneration: 1
-  dsSlices: 3
-  planReplicaCount: 3
-  roles:
+input:
+  live:
+    backend: helm
+    helmStatus: deployed
+    pd: true
+    dsGeneration: 1
+    dsObservedGeneration: 1
+    dsSlices: 3
+    planReplicaCount: 3
+    roles:
     - replicas: 1
       readyReplicas: 1
       updatedReplicas: 1
-  routers:
+    routers:
     - specReplicas: 1
       readyReplicas: 1
       generation: 1
@@ -25,11 +26,12 @@ live:
       readyReplicas: 1
       generation: 1
       observedGeneration: 1
-decision:
-  ok: true
-  replicas: 0
-wantHold: ""
-wantScale: true
-wantCurrent: 3
-want: 0
-hasDecision: true
+  decision:
+    ok: true
+    replicas: 0
+expected:
+  hold: ""
+  scale: true
+  current: 3
+  want: 0
+  hasDecision: true

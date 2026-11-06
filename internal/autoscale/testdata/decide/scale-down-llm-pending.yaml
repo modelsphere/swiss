@@ -1,38 +1,40 @@
 name: scale-down-llm-pending
 description: a scale-down still holds while the LLMService is Pending
-live:
-  backend: llmsvc
-  helmStatus: deployed
-  llmPhase: Pending
-  llmGeneration: 2
-  llmObservedGeneration: 2
-  pd: true
-  dsGeneration: 1
-  dsObservedGeneration: 1
-  dsSlices: 3
-  planReplicaCount: 3
-  roles:
-  - replicas: 1
-    readyReplicas: 1
-    updatedReplicas: 1
-  routers:
-  - specReplicas: 1
-    readyReplicas: 1
-    generation: 1
-    observedGeneration: 1
-  - specReplicas: 1
-    readyReplicas: 1
-    generation: 1
-    observedGeneration: 1
-  - specReplicas: 1
-    readyReplicas: 1
-    generation: 1
-    observedGeneration: 1
-decision:
-  ok: true
-  replicas: 1
-wantHold: llmservice pending
-wantScale: false
-wantCurrent: 3
-want: 0
-hasDecision: true
+input:
+  live:
+    backend: llmsvc
+    helmStatus: deployed
+    llmPhase: Pending
+    llmGeneration: 2
+    llmObservedGeneration: 2
+    pd: true
+    dsGeneration: 1
+    dsObservedGeneration: 1
+    dsSlices: 3
+    planReplicaCount: 3
+    roles:
+    - replicas: 1
+      readyReplicas: 1
+      updatedReplicas: 1
+    routers:
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
+  decision:
+    ok: true
+    replicas: 1
+expected:
+  hold: llmservice pending
+  scale: false
+  current: 3
+  want: 0
+  hasDecision: true

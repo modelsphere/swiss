@@ -11,9 +11,15 @@ import (
 	"github.com/modelsphere/swiss/internal/testutil/cases"
 )
 
+// deferCase runs its ticks in order, each with its own expected.
 type deferCase struct {
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
+	Name        string      `json:"name"`
+	Description string      `json:"description,omitempty"`
+	Input       deferInput  `json:"input"`
+	Ticks       []deferTick `json:"ticks"`
+}
+
+type deferInput struct {
 	// DeferTimeoutSeconds is pdScale.deferTimeoutSeconds. Unset leaves the key out.
 	DeferTimeoutSeconds *int   `json:"deferTimeoutSeconds,omitempty"`
 	Decision            int    `json:"decision"`
@@ -21,44 +27,47 @@ type deferCase struct {
 	HelmStatus          string `json:"helmStatus,omitempty"`
 	RoleNotReady        bool   `json:"roleNotReady,omitempty"`
 	// DSBehind leaves the DisaggregatedSet observedGeneration a generation back.
-	DSBehind bool        `json:"dsBehind,omitempty"`
-	Ticks    []deferTick `json:"ticks"`
+	DSBehind bool `json:"dsBehind,omitempty"`
 }
 
 type deferTick struct {
-	Advance      string `json:"advance,omitempty"`
-	WantOutcome  string `json:"wantOutcome"`
-	WantHold     string `json:"wantHold,omitempty"`
-	WantTimedOut string `json:"wantTimedOut,omitempty"`
-	// WantDeferredFor is the tick's time minus deferredSince. Empty is none.
-	WantDeferredFor string `json:"wantDeferredFor,omitempty"`
+	Advance  string            `json:"advance,omitempty"`
+	Expected deferTickExpected `json:"expected"`
+}
+
+type deferTickExpected struct {
+	Outcome  string `json:"outcome"`
+	Hold     string `json:"hold,omitempty"`
+	TimedOut string `json:"timedOut,omitempty"`
+	// DeferredFor is the tick's time minus deferredSince. Empty is none.
+	DeferredFor string `json:"deferredFor,omitempty"`
 }
 
 func TestAutoscaleDeferTimeout(t *testing.T) {
 	cases.Run(t, "testdata/autoscale-defer", func(t *testing.T, tc deferCase) {
 		const ns, release = "models", "pd"
-		dec := decisionServer(t, ns, release, tc.Decision)
-		_, seed := pdPlan(t, ns, release, release, tc.Slices, true, false, boolPtr(true), "")
+		dec := decisionServer(t, ns, release, tc.Input.Decision)
+		_, seed := pdPlan(t, ns, release, release, tc.Input.Slices, true, false, boolPtr(true), "")
 
 		probe := fakeProbe()
 		prof := profileYAML + "scaler:\n  serverAddress: " + dec.URL + "\n"
-		if tc.DeferTimeoutSeconds != nil {
-			prof += fmt.Sprintf("pdScale:\n  deferTimeoutSeconds: %d\n", *tc.DeferTimeoutSeconds)
+		if tc.Input.DeferTimeoutSeconds != nil {
+			prof += fmt.Sprintf("pdScale:\n  deferTimeoutSeconds: %d\n", *tc.Input.DeferTimeoutSeconds)
 		}
 		probe.Maps["swiss/site-profile"]["profile.yaml"] = prof
-		probe.Deps = readyRouters(ns, release, tc.Slices)
-		ds := readyDS(tc.Slices)
-		if tc.RoleNotReady {
+		probe.Deps = readyRouters(ns, release, tc.Input.Slices)
+		ds := readyDS(tc.Input.Slices)
+		if tc.Input.RoleNotReady {
 			ds.Roles[0].ReadyReplicas = 0
 		}
-		if tc.DSBehind {
+		if tc.Input.DSBehind {
 			ds.Generation++
 		}
 		probe.DSs = map[string]cluster.DisaggregatedSet{ns + "/" + release: ds}
 		probe.Maps[planRef(ns, release)] = seed
 		helmStatus := "deployed"
-		if tc.HelmStatus != "" {
-			helmStatus = tc.HelmStatus
+		if tc.Input.HelmStatus != "" {
+			helmStatus = tc.Input.HelmStatus
 		}
 		probe.Rel = []cluster.Release{{
 			Name: release, Namespace: ns, Status: helmStatus, Revision: 2,
@@ -82,17 +91,17 @@ func TestAutoscaleDeferTimeout(t *testing.T) {
 			if !ok {
 				t.Fatalf("tick %d: no state", i)
 			}
-			if st.Outcome != tick.WantOutcome || st.Hold != tick.WantHold || st.TimedOut != tick.WantTimedOut {
+			if st.Outcome != tick.Expected.Outcome || st.Hold != tick.Expected.Hold || st.TimedOut != tick.Expected.TimedOut {
 				t.Fatalf("tick %d: outcome %q hold %q timedOut %q, want %q %q %q (err %q) log=%s",
-					i, st.Outcome, st.Hold, st.TimedOut, tick.WantOutcome, tick.WantHold, tick.WantTimedOut, st.Error, logs.String())
+					i, st.Outcome, st.Hold, st.TimedOut, tick.Expected.Outcome, tick.Expected.Hold, tick.Expected.TimedOut, st.Error, logs.String())
 			}
 			switch {
-			case tick.WantDeferredFor == "" && st.DeferredSince != nil:
+			case tick.Expected.DeferredFor == "" && st.DeferredSince != nil:
 				t.Fatalf("tick %d: deferredSince %v, want none", i, st.DeferredSince)
-			case tick.WantDeferredFor != "" && st.DeferredSince == nil:
-				t.Fatalf("tick %d: no deferredSince, want %s", i, tick.WantDeferredFor)
-			case tick.WantDeferredFor != "" && now.Sub(*st.DeferredSince) != mustDuration(t, tick.WantDeferredFor):
-				t.Fatalf("tick %d: deferred for %s, want %s", i, now.Sub(*st.DeferredSince), tick.WantDeferredFor)
+			case tick.Expected.DeferredFor != "" && st.DeferredSince == nil:
+				t.Fatalf("tick %d: no deferredSince, want %s", i, tick.Expected.DeferredFor)
+			case tick.Expected.DeferredFor != "" && now.Sub(*st.DeferredSince) != mustDuration(t, tick.Expected.DeferredFor):
+				t.Fatalf("tick %d: deferred for %s, want %s", i, now.Sub(*st.DeferredSince), tick.Expected.DeferredFor)
 			}
 			if st.Outcome == outcomeScaledUp || st.Outcome == outcomeScaledDown {
 				applies++

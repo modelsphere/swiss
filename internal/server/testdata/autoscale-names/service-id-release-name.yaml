@@ -1,6 +1,7 @@
 name: service-id-release-name
 description: serviceIDOf keeps the release name and ignores fullnameOverride and truncation
-fn: serviceId
-release: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-zzzz
-fullnameOverride: from-override
-want: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-zzzz
+input:
+  fn: serviceId
+  release: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-zzzz
+  fullnameOverride: from-override
+expected: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-zzzz

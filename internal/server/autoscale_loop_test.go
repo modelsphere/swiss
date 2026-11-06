@@ -30,19 +30,19 @@ import (
 )
 
 type loopCase struct {
-	Name          string `json:"name"`
-	Description   string `json:"description,omitempty"`
-	Backend       string `json:"backend"`
-	Decision      int    `json:"decision"`
-	Slices        int    `json:"slices"`
-	Revision      int    `json:"revision"`
-	Conflict      bool   `json:"conflict,omitempty"`
-	WantApplies   int    `json:"wantApplies"`
-	WantFrom      *int   `json:"wantFrom,omitempty"`
-	WantTo        *int   `json:"wantTo,omitempty"`
-	ErrorContains string `json:"errorContains,omitempty"`
-	HelmStatus    string `json:"helmStatus,omitempty"`
-	WantHold      string `json:"wantHold,omitempty"`
+	Name        string       `json:"name"`
+	Description string       `json:"description,omitempty"`
+	Input       loopInput    `json:"input"`
+	Expected    loopExpected `json:"expected"`
+}
+
+type loopInput struct {
+	Backend    string `json:"backend"`
+	Decision   int    `json:"decision"`
+	Slices     int    `json:"slices"`
+	Revision   int    `json:"revision"`
+	Conflict   bool   `json:"conflict,omitempty"`
+	HelmStatus string `json:"helmStatus,omitempty"`
 	// PlanPhase seeds status.yaml in the helm plan ConfigMap.
 	PlanPhase string `json:"planPhase,omitempty"`
 	// Deleting gives the LLMService a deletionTimestamp.
@@ -52,22 +52,31 @@ type loopCase struct {
 	LLMPhase string `json:"llmPhase,omitempty"`
 	// DecisionPD adds shape.pd to the decision row, with decision as its
 	// slices. Engines is the DisaggregatedSet's spec.roles and PlanEngines the
-	// form's pd.<role>.replicas, each omitted when nil. WantPD is the layer's.
+	// form's pd.<role>.replicas, each omitted when nil.
 	DecisionPD  *autoscale.Engines `json:"decisionPD,omitempty"`
 	Engines     *autoscale.Engines `json:"engines,omitempty"`
 	PlanEngines *autoscale.Engines `json:"planEngines,omitempty"`
-	WantPD      *autoscale.Engines `json:"wantPD,omitempty"`
+}
+
+type loopExpected struct {
+	Applies       int    `json:"applies"`
+	From          *int   `json:"from,omitempty"`
+	To            *int   `json:"to,omitempty"`
+	Hold          string `json:"hold,omitempty"`
+	ErrorContains string `json:"errorContains,omitempty"`
+	// PD is the autoscale layer's pd.prefill and pd.decode replicas.
+	PD *autoscale.Engines `json:"pd,omitempty"`
 }
 
 func TestAutoscaleLoop(t *testing.T) {
 	cases.Run(t, "testdata/autoscale-loop", func(t *testing.T, tc loopCase) {
-		switch tc.Backend {
+		switch tc.Input.Backend {
 		case backendHelm:
 			runHelmLoop(t, tc)
 		case backendLLMSVC:
 			runLLMLoop(t, tc)
 		default:
-			t.Fatalf("backend %q", tc.Backend)
+			t.Fatalf("backend %q", tc.Input.Backend)
 		}
 	})
 }
@@ -75,27 +84,27 @@ func TestAutoscaleLoop(t *testing.T) {
 func runHelmLoop(t *testing.T, tc loopCase) {
 	t.Helper()
 	const ns, release = "models", "pd"
-	dec := decisionServerPD(t, ns, release, tc.Decision, tc.DecisionPD)
-	p, seed := pdPlan(t, ns, release, release, tc.Slices, true, false, boolPtr(true), "")
-	if tc.PlanEngines != nil {
-		seed = withPlanEngines(t, p, *tc.PlanEngines)
+	dec := decisionServerPD(t, ns, release, tc.Input.Decision, tc.Input.DecisionPD)
+	p, seed := pdPlan(t, ns, release, release, tc.Input.Slices, true, false, boolPtr(true), "")
+	if tc.Input.PlanEngines != nil {
+		seed = withPlanEngines(t, p, *tc.Input.PlanEngines)
 	}
 
 	probe := fakeProbe()
 	setDecisionProfile(probe, dec.URL)
-	probe.Deps = readyRouters(ns, release, tc.Slices)
+	probe.Deps = readyRouters(ns, release, tc.Input.Slices)
 	probe.DSs = map[string]cluster.DisaggregatedSet{ns + "/" + release: loopDS(tc)}
-	if tc.PlanPhase != "" {
-		seed[statusFile] = "phase: " + tc.PlanPhase + "\naction: uninstall\nrevision: 2\n"
+	if tc.Input.PlanPhase != "" {
+		seed[statusFile] = "phase: " + tc.Input.PlanPhase + "\naction: uninstall\nrevision: 2\n"
 	}
 	probe.Maps[planRef(ns, release)] = seed
-	rev := tc.Revision
+	rev := tc.Input.Revision
 	if rev < 1 {
 		rev = 2
 	}
 	helmStatus := "deployed"
-	if tc.HelmStatus != "" {
-		helmStatus = tc.HelmStatus
+	if tc.Input.HelmStatus != "" {
+		helmStatus = tc.Input.HelmStatus
 	}
 	probe.Rel = []cluster.Release{{
 		Name: release, Namespace: ns, Status: helmStatus, Revision: rev,
@@ -105,7 +114,7 @@ func runHelmLoop(t *testing.T, tc loopCase) {
 	logPath := filepath.Join(t.TempDir(), "helmfile.log")
 	bin := countBin(t, logPath)
 	cp := &revProbe{Fake: probe}
-	if tc.Conflict {
+	if tc.Input.Conflict {
 		cp.flipAt = 4
 	}
 	s, w := newLoopServer(t, cp, bin, bin)
@@ -113,11 +122,11 @@ func runHelmLoop(t *testing.T, tc loopCase) {
 	s.autoscaleTick(t.Context())
 
 	applies := countLines(t, logPath)
-	if applies != tc.WantApplies {
-		t.Fatalf("helmfile calls %d, want %d (Release calls %d) log=%s", applies, tc.WantApplies, cp.calls.Load(), logs.String())
+	if applies != tc.Expected.Applies {
+		t.Fatalf("helmfile calls %d, want %d (Release calls %d) log=%s", applies, tc.Expected.Applies, cp.calls.Load(), logs.String())
 	}
 	assertLoopLog(t, logs, tc)
-	if tc.Conflict {
+	if tc.Input.Conflict {
 		if cp.calls.Load() != 4 {
 			t.Errorf("Release calls %d, want 4", cp.calls.Load())
 		}
@@ -126,7 +135,7 @@ func runHelmLoop(t *testing.T, tc loopCase) {
 		}
 		return
 	}
-	if tc.WantHold != "" || tc.WantApplies == 0 {
+	if tc.Expected.Hold != "" || tc.Expected.Applies == 0 {
 		if applies != 0 {
 			t.Fatal("held or unchanged tick applied")
 		}
@@ -140,9 +149,9 @@ func runHelmLoop(t *testing.T, tc loopCase) {
 }
 
 func loopDS(tc loopCase) cluster.DisaggregatedSet {
-	ds := readyDS(tc.Slices)
-	if tc.Engines != nil {
-		ds.RoleReplicas = map[string]int{"prefill": tc.Engines.Prefill, "decode": tc.Engines.Decode}
+	ds := readyDS(tc.Input.Slices)
+	if tc.Input.Engines != nil {
+		ds.RoleReplicas = map[string]int{"prefill": tc.Input.Engines.Prefill, "decode": tc.Input.Engines.Decode}
 	}
 	return ds
 }
@@ -167,10 +176,10 @@ func withPlanEngines(t *testing.T, p *plan.Plan, e autoscale.Engines) map[string
 
 // loopNote is the status note a scale writes.
 func loopNote(tc loopCase) string {
-	note := fmt.Sprintf("autoscale %d -> %d", *tc.WantFrom, *tc.WantTo)
-	if tc.WantPD != nil {
+	note := fmt.Sprintf("autoscale %d -> %d", *tc.Expected.From, *tc.Expected.To)
+	if tc.Expected.PD != nil {
 		note += fmt.Sprintf(", prefill %d -> %d, decode %d -> %d",
-			tc.Engines.Prefill, tc.WantPD.Prefill, tc.Engines.Decode, tc.WantPD.Decode)
+			tc.Input.Engines.Prefill, tc.Expected.PD.Prefill, tc.Input.Engines.Decode, tc.Expected.PD.Decode)
 	}
 	return note + " (decision-gen)"
 }
@@ -183,7 +192,7 @@ func assertLoopState(t *testing.T, s *Server, tc loopCase) {
 	if !ok {
 		t.Fatal("no recorded pass")
 	}
-	if tc.WantPD == nil {
+	if tc.Expected.PD == nil {
 		if st.PD != nil {
 			t.Fatalf("pd %+v on a slice decision", *st.PD)
 		}
@@ -192,37 +201,37 @@ func assertLoopState(t *testing.T, s *Server, tc loopCase) {
 	if st.PD == nil || st.PD.Want == nil || st.PD.Current == nil || st.PD.Decision == nil {
 		t.Fatalf("pd %+v, want current, want and decision", st.PD)
 	}
-	if *st.PD.Want != *tc.WantPD || *st.PD.Current != *tc.Engines || *st.PD.Decision != *tc.DecisionPD {
+	if *st.PD.Want != *tc.Expected.PD || *st.PD.Current != *tc.Input.Engines || *st.PD.Decision != *tc.Input.DecisionPD {
 		t.Fatalf("pd current %+v want %+v decision %+v", *st.PD.Current, *st.PD.Want, *st.PD.Decision)
 	}
-	if st.Want == nil || *st.Want != *tc.WantTo || st.Current != *tc.WantFrom {
-		t.Fatalf("slices current %d want %v, want %d -> %d", st.Current, st.Want, *tc.WantFrom, *tc.WantTo)
+	if st.Want == nil || *st.Want != *tc.Expected.To || st.Current != *tc.Expected.From {
+		t.Fatalf("slices current %d want %v, want %d -> %d", st.Current, st.Want, *tc.Expected.From, *tc.Expected.To)
 	}
 }
 
 func runLLMLoop(t *testing.T, tc loopCase) {
 	t.Helper()
 	const ns, release = "models", "pd"
-	dec := decisionServerPD(t, ns, release, tc.Decision, tc.DecisionPD)
-	p, _ := pdPlan(t, ns, release, release, tc.Slices, true, false, boolPtr(true), "v2")
+	dec := decisionServerPD(t, ns, release, tc.Input.Decision, tc.Input.DecisionPD)
+	p, _ := pdPlan(t, ns, release, release, tc.Input.Slices, true, false, boolPtr(true), "v2")
 
 	probe := fakeProbe()
 	setDecisionProfile(probe, dec.URL)
-	probe.Deps = readyRouters(ns, release, tc.Slices)
+	probe.Deps = readyRouters(ns, release, tc.Input.Slices)
 	probe.DSs = map[string]cluster.DisaggregatedSet{ns + "/" + release: loopDS(tc)}
 	probe.Secrets = map[string]map[string]string{}
 	probe.SecretLabels = map[string]map[string]string{}
 
 	phase := llmsvc.PhaseApplied
-	if tc.LLMPhase != "" {
-		phase = tc.LLMPhase
+	if tc.Input.LLMPhase != "" {
+		phase = tc.Input.LLMPhase
 	}
-	rig := startRig(t, probe, true, !tc.Conflict && phase != llmsvc.PhaseDeleting, "")
+	rig := startRig(t, probe, true, !tc.Input.Conflict && phase != llmsvc.PhaseDeleting, "")
 	u, err := llmsvc.FromPlan(p, "install", "seed")
 	if err != nil {
 		t.Fatal(err)
 	}
-	rev := tc.Revision
+	rev := tc.Input.Revision
 	if rev < 1 {
 		rev = 2
 	}
@@ -234,7 +243,7 @@ func runLLMLoop(t *testing.T, tc loopCase) {
 		t.Fatal(err)
 	}
 	u.SetGeneration(1)
-	if tc.Deleting {
+	if tc.Input.Deleting {
 		ts := metav1.Now()
 		u.SetDeletionTimestamp(&ts)
 	}
@@ -262,7 +271,7 @@ func runLLMLoop(t *testing.T, tc loopCase) {
 		return false, nil, nil
 	})
 	var gets atomic.Int32
-	if tc.Conflict {
+	if tc.Input.Conflict {
 		rig.dyn.PrependReactor("get", "llmservices", func(action k8stesting.Action) (bool, runtime.Object, error) {
 			n := int(gets.Add(1))
 			get := action.(k8stesting.GetAction)
@@ -287,15 +296,15 @@ func runLLMLoop(t *testing.T, tc loopCase) {
 	logs := captureLog(rig.s)
 	rig.s.autoscaleTick(t.Context())
 	gotGets := gets.Load()
-	if int(updates.Load()) != tc.WantApplies {
-		t.Fatalf("updates %d, want %d (gets %d) log=%s", updates.Load(), tc.WantApplies, gotGets, logs.String())
+	if int(updates.Load()) != tc.Expected.Applies {
+		t.Fatalf("updates %d, want %d (gets %d) log=%s", updates.Load(), tc.Expected.Applies, gotGets, logs.String())
 	}
 	got, err := rig.c.Get(t.Context(), ns, release)
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertLoopLog(t, logs, tc)
-	if tc.Conflict {
+	if tc.Input.Conflict {
 		// One more than the loop alone: applyLocked reads the LLMService
 		// once to refuse a release that is being deleted.
 		if gotGets != 8 {
@@ -306,7 +315,7 @@ func runLLMLoop(t *testing.T, tc loopCase) {
 		}
 		return
 	}
-	if tc.WantHold != "" {
+	if tc.Expected.Hold != "" {
 		if updates.Load() != 0 {
 			t.Fatal("held tick applied")
 		}
@@ -322,9 +331,9 @@ func runLLMLoop(t *testing.T, tc loopCase) {
 	if got.GetAnnotations()[llmsvc.AnnNote] != note {
 		t.Fatalf("note %q, want %q", got.GetAnnotations()[llmsvc.AnnNote], note)
 	}
-	assertLLMAutoscaleLayer(t, got, tc.Slices, *tc.WantTo)
-	if tc.WantPD != nil {
-		assertLLMAutoscaleRoles(t, got, *tc.WantPD)
+	assertLLMAutoscaleLayer(t, got, tc.Input.Slices, *tc.Expected.To)
+	if tc.Expected.PD != nil {
+		assertLLMAutoscaleRoles(t, got, *tc.Expected.PD)
 	}
 	assertLoopState(t, rig.s, tc)
 }
@@ -356,11 +365,11 @@ func assertAutoscaleYAML(t *testing.T, tc loopCase, raw string) {
 	if err := yaml.Unmarshal([]byte(raw), &got); err != nil {
 		t.Fatalf("autoscale.yaml: %v\n%s", err, raw)
 	}
-	want := map[string]any{"replicaCount": float64(*tc.WantTo)}
-	if tc.WantPD != nil {
+	want := map[string]any{"replicaCount": float64(*tc.Expected.To)}
+	if tc.Expected.PD != nil {
 		want["pd"] = map[string]any{
-			"prefill": map[string]any{"replicas": float64(tc.WantPD.Prefill)},
-			"decode":  map[string]any{"replicas": float64(tc.WantPD.Decode)},
+			"prefill": map[string]any{"replicas": float64(tc.Expected.PD.Prefill)},
+			"decode":  map[string]any{"replicas": float64(tc.Expected.PD.Decode)},
 		}
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -418,11 +427,11 @@ func captureLog(s *Server) *bytes.Buffer {
 func assertLoopLog(t *testing.T, logs *bytes.Buffer, tc loopCase) {
 	t.Helper()
 	text := logs.String()
-	if tc.ErrorContains != "" && !strings.Contains(text, tc.ErrorContains) {
-		t.Fatalf("log %q, want substring %q", text, tc.ErrorContains)
+	if tc.Expected.ErrorContains != "" && !strings.Contains(text, tc.Expected.ErrorContains) {
+		t.Fatalf("log %q, want substring %q", text, tc.Expected.ErrorContains)
 	}
-	if tc.WantHold != "" && !strings.Contains(text, tc.WantHold) {
-		t.Fatalf("log %q, want hold %q", text, tc.WantHold)
+	if tc.Expected.Hold != "" && !strings.Contains(text, tc.Expected.Hold) {
+		t.Fatalf("log %q, want hold %q", text, tc.Expected.Hold)
 	}
 }
 

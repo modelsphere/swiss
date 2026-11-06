@@ -1,15 +1,17 @@
 name: guard-helm-pending
 description: a pending helm release holds the tick
-live:
-  backend: helm
-  helmStatus: pending-upgrade
-  pd: true
-  planReplicaCount: 1
-decision:
-  ok: true
-  replicas: 2
-wantHold: helm pending
-wantScale: false
-wantCurrent: 1
-want: 0
-hasDecision: true
+input:
+  live:
+    backend: helm
+    helmStatus: pending-upgrade
+    pd: true
+    planReplicaCount: 1
+  decision:
+    ok: true
+    replicas: 2
+expected:
+  hold: helm pending
+  scale: false
+  current: 1
+  want: 0
+  hasDecision: true

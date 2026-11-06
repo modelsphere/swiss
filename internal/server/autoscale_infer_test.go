@@ -19,27 +19,35 @@ import (
 )
 
 type inferCase struct {
-	Name         string `json:"name"`
-	Description  string `json:"description,omitempty"`
-	Backend      string `json:"backend"`
-	PD           *bool  `json:"pd,omitempty"`
-	Colocate     *bool  `json:"colocate,omitempty"`
-	SLO          *bool  `json:"slo,omitempty"`
-	NoDecision   bool   `json:"noDecision,omitempty"`
-	WantQueries  int    `json:"wantQueries"`
-	WantApplies  int    `json:"wantApplies"`
-	WantReplicas *int   `json:"wantReplicas,omitempty"`
+	Name        string        `json:"name"`
+	Description string        `json:"description,omitempty"`
+	Input       inferInput    `json:"input"`
+	Expected    inferExpected `json:"expected"`
+}
+
+type inferInput struct {
+	Backend    string `json:"backend"`
+	PD         *bool  `json:"pd,omitempty"`
+	Colocate   *bool  `json:"colocate,omitempty"`
+	SLO        *bool  `json:"slo,omitempty"`
+	NoDecision bool   `json:"noDecision,omitempty"`
+}
+
+type inferExpected struct {
+	Queries  int  `json:"queries"`
+	Applies  int  `json:"applies"`
+	Replicas *int `json:"replicas,omitempty"`
 }
 
 func TestAutoscaleInfer(t *testing.T) {
 	cases.Run(t, "testdata/autoscale-infer", func(t *testing.T, tc inferCase) {
-		switch tc.Backend {
+		switch tc.Input.Backend {
 		case backendHelm:
 			runHelmInfer(t, tc)
 		case backendLLMSVC:
 			runLLMInfer(t, tc)
 		default:
-			t.Fatalf("backend %q", tc.Backend)
+			t.Fatalf("backend %q", tc.Input.Backend)
 		}
 	})
 }
@@ -47,8 +55,8 @@ func TestAutoscaleInfer(t *testing.T) {
 func runHelmInfer(t *testing.T, tc inferCase) {
 	t.Helper()
 	const ns, release = "models", "pd"
-	dec, hits := countingDecisions(t, ns, release, 2, tc.NoDecision)
-	_, seed := pdPlan(t, ns, release, release, 1, boolOr(tc.PD, false), boolOr(tc.Colocate, false), tc.SLO, "")
+	dec, hits := countingDecisions(t, ns, release, 2, tc.Input.NoDecision)
+	_, seed := pdPlan(t, ns, release, release, 1, boolOr(tc.Input.PD, false), boolOr(tc.Input.Colocate, false), tc.Input.SLO, "")
 
 	probe := fakeProbe()
 	setDecisionProfile(probe, dec.URL)
@@ -65,15 +73,15 @@ func runHelmInfer(t *testing.T, tc inferCase) {
 	s, w := newLoopServer(t, &probe, bin, bin)
 	s.autoscaleTick(t.Context())
 
-	if int(hits.Load()) != tc.WantQueries {
-		t.Fatalf("decision queries %d, want %d", hits.Load(), tc.WantQueries)
+	if int(hits.Load()) != tc.Expected.Queries {
+		t.Fatalf("decision queries %d, want %d", hits.Load(), tc.Expected.Queries)
 	}
 	applies := countLines(t, logPath)
-	if applies != tc.WantApplies {
-		t.Fatalf("helmfile calls %d, want %d", applies, tc.WantApplies)
+	if applies != tc.Expected.Applies {
+		t.Fatalf("helmfile calls %d, want %d", applies, tc.Expected.Applies)
 	}
 	written := w.written[planRef(ns, release)]
-	if tc.WantApplies == 0 {
+	if tc.Expected.Applies == 0 {
 		if written != nil || len(w.written) != 0 {
 			t.Fatalf("tick wrote %v", w.written)
 		}
@@ -82,7 +90,7 @@ func runHelmInfer(t *testing.T, tc inferCase) {
 	if written == nil {
 		t.Fatal("plan was not written")
 	}
-	if !strings.Contains(written["autoscale.yaml"], fmt.Sprintf("replicaCount: %d", *tc.WantReplicas)) {
+	if !strings.Contains(written["autoscale.yaml"], fmt.Sprintf("replicaCount: %d", *tc.Expected.Replicas)) {
 		t.Fatalf("autoscale.yaml:\n%s", written["autoscale.yaml"])
 	}
 	if seed["form.yaml"] != written["form.yaml"] {
@@ -93,8 +101,8 @@ func runHelmInfer(t *testing.T, tc inferCase) {
 func runLLMInfer(t *testing.T, tc inferCase) {
 	t.Helper()
 	const ns, release = "models", "pd"
-	dec, hits := countingDecisions(t, ns, release, 2, tc.NoDecision)
-	p, _ := pdPlan(t, ns, release, release, 1, boolOr(tc.PD, false), boolOr(tc.Colocate, false), tc.SLO, "v2")
+	dec, hits := countingDecisions(t, ns, release, 2, tc.Input.NoDecision)
+	p, _ := pdPlan(t, ns, release, release, 1, boolOr(tc.Input.PD, false), boolOr(tc.Input.Colocate, false), tc.Input.SLO, "v2")
 
 	probe := fakeProbe()
 	setDecisionProfile(probe, dec.URL)
@@ -103,7 +111,7 @@ func runLLMInfer(t *testing.T, tc inferCase) {
 	probe.Secrets = map[string]map[string]string{}
 	probe.SecretLabels = map[string]map[string]string{}
 
-	rig := startRig(t, probe, true, tc.WantApplies > 0, "")
+	rig := startRig(t, probe, true, tc.Expected.Applies > 0, "")
 	u, err := llmsvc.FromPlan(p, "install", "seed")
 	if err != nil {
 		t.Fatal(err)
@@ -128,17 +136,17 @@ func runLLMInfer(t *testing.T, tc inferCase) {
 	beforeW := len(rig.w.written)
 	rig.s.autoscaleTick(t.Context())
 
-	if int(hits.Load()) != tc.WantQueries {
-		t.Fatalf("decision queries %d, want %d", hits.Load(), tc.WantQueries)
+	if int(hits.Load()) != tc.Expected.Queries {
+		t.Fatalf("decision queries %d, want %d", hits.Load(), tc.Expected.Queries)
 	}
-	if int(updates.Load()) != tc.WantApplies {
-		t.Fatalf("updates %d, want %d", updates.Load(), tc.WantApplies)
+	if int(updates.Load()) != tc.Expected.Applies {
+		t.Fatalf("updates %d, want %d", updates.Load(), tc.Expected.Applies)
 	}
 	got, err := rig.c.Get(t.Context(), ns, release)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tc.WantApplies == 0 {
+	if tc.Expected.Applies == 0 {
 		if got.GetAnnotations()[llmsvc.AnnAction] == "autoscale" {
 			t.Fatalf("tick updated the object: %v", got.GetAnnotations())
 		}
@@ -150,7 +158,7 @@ func runLLMInfer(t *testing.T, tc inferCase) {
 	if got.GetAnnotations()[llmsvc.AnnAction] != "autoscale" {
 		t.Fatalf("action %q", got.GetAnnotations()[llmsvc.AnnAction])
 	}
-	assertLLMAutoscaleLayer(t, got, 1, *tc.WantReplicas)
+	assertLLMAutoscaleLayer(t, got, 1, *tc.Expected.Replicas)
 }
 
 func countingDecisions(t *testing.T, ns, serviceID string, active int, empty bool) (*httptest.Server, *atomic.Int32) {
