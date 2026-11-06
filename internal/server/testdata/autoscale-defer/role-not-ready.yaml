@@ -1,17 +1,21 @@
 name: role-not-ready
 description: with no pdScale.deferTimeoutSeconds, a scale-up deferred on a role that is not ready applies after the default 600s
-decision: 2
-slices: 1
-roleNotReady: true
+input:
+  decision: 2
+  slices: 1
+  roleNotReady: true
 ticks:
-  - wantOutcome: held
-    wantHold: role not ready
-    wantDeferredFor: 0s
-  - advance: 9m
-    wantOutcome: held
-    wantHold: role not ready
-    wantDeferredFor: 9m
-  - advance: 1m
-    wantOutcome: scaled-up
-    wantTimedOut: role not ready
-    wantDeferredFor: 10m
+- expected:
+    outcome: held
+    hold: role not ready
+    deferredFor: 0s
+- advance: 9m
+  expected:
+    outcome: held
+    hold: role not ready
+    deferredFor: 9m
+- advance: 1m
+  expected:
+    outcome: scaled-up
+    timedOut: role not ready
+    deferredFor: 10m

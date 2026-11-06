@@ -1,0 +1,9 @@
+name: pd-shape-missing-role
+description: shape.pd without decode.replicas is refused, not read as 0
+input:
+  namespace: models
+  serviceId: pd
+  status: 200
+  body: '{"apiVersion":"llmscaling.inference.x-k8s.io/v1alpha1","decisions":[{"namespace":"models","serviceId":"pd","replicas":{"active": 1},"shape":{"pd":{"prefill":{"replicas":2,"liveReplicas":2},"decode":{"liveReplicas":1},"slices":1}}}]}'
+expected:
+  errorContains: shape.pd.decode.replicas in body is required

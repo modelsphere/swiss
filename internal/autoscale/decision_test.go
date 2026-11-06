@@ -12,54 +12,64 @@ import (
 )
 
 type decisionCase struct {
-	Name           string            `json:"name"`
-	Description    string            `json:"description,omitempty"`
-	Namespace      string            `json:"namespace"`
-	ServiceID      string            `json:"serviceId"`
-	Status         int               `json:"status,omitempty"`
-	Body           string            `json:"body,omitempty"`
-	Transport      bool              `json:"transport,omitempty"`
-	Headers        map[string]string `json:"headers,omitempty"`
-	Want           *int              `json:"want,omitempty"`
-	ErrorContains  string            `json:"errorContains,omitempty"`
-	WantNoDecision bool              `json:"wantNoDecision,omitempty"`
-	WantHeader     string            `json:"wantHeader,omitempty"`
+	Name        string           `json:"name"`
+	Description string           `json:"description,omitempty"`
+	Input       decisionInput    `json:"input"`
+	Expected    decisionExpected `json:"expected"`
+}
+
+type decisionInput struct {
+	Namespace string            `json:"namespace"`
+	ServiceID string            `json:"serviceId"`
+	Status    int               `json:"status,omitempty"`
+	Body      string            `json:"body,omitempty"`
+	Transport bool              `json:"transport,omitempty"`
+	Headers   map[string]string `json:"headers,omitempty"`
+}
+
+type decisionExpected struct {
+	Replicas      *int     `json:"replicas,omitempty"`
+	PD            *Engines `json:"pd,omitempty"`
+	ErrorContains string   `json:"errorContains,omitempty"`
+	NoDecision    bool     `json:"noDecision,omitempty"`
+	Header        string   `json:"header,omitempty"`
 }
 
 func TestDecisions(t *testing.T) {
 	cases.Run(t, "testdata/decisions", func(t *testing.T, tc decisionCase) {
+		in, exp := tc.Input, tc.Expected
 		base := "http://127.0.0.1:1"
 		var client *http.Client
-		if !tc.Transport {
+		if !in.Transport {
 			var gotHeader, gotNS, gotID string
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				gotHeader = r.Header.Get("X-Test")
 				gotNS = r.URL.Query().Get("namespace")
 				gotID = r.URL.Query().Get("serviceId")
-				if tc.Status != 0 && tc.Status != http.StatusOK {
-					http.Error(w, tc.Body, tc.Status)
+				if in.Status != 0 && in.Status != http.StatusOK {
+					http.Error(w, in.Body, in.Status)
 					return
 				}
-				_, _ = io.WriteString(w, tc.Body)
+				_, _ = io.WriteString(w, in.Body)
 			}))
 			t.Cleanup(srv.Close)
 			base = srv.URL
 			client = srv.Client()
 			t.Cleanup(func() {
-				if gotNS != tc.Namespace || gotID != tc.ServiceID {
-					t.Errorf("query namespace=%q serviceId=%q, want %q %q", gotNS, gotID, tc.Namespace, tc.ServiceID)
+				if gotNS != in.Namespace || gotID != in.ServiceID {
+					t.Errorf("query namespace=%q serviceId=%q, want %q %q", gotNS, gotID, in.Namespace, in.ServiceID)
 				}
-				if tc.WantHeader != "" && gotHeader != tc.WantHeader {
-					t.Errorf("X-Test %q, want %q", gotHeader, tc.WantHeader)
+				if exp.Header != "" && gotHeader != exp.Header {
+					t.Errorf("X-Test %q, want %q", gotHeader, exp.Header)
 				}
 			})
 		}
-		got, err := Query(t.Context(), client, base, tc.Headers, tc.Namespace, tc.ServiceID)
-		if tc.ErrorContains != "" {
-			if err == nil || !strings.Contains(err.Error(), tc.ErrorContains) {
-				t.Fatalf("error %v, want substring %q", err, tc.ErrorContains)
+		got, err := Query(t.Context(), client, base, in.Headers, in.Namespace, in.ServiceID)
+		if exp.ErrorContains != "" {
+			if err == nil || !strings.Contains(err.Error(), exp.ErrorContains) {
+				t.Fatalf("error %v, want substring %q", err, exp.ErrorContains)
 			}
-			if tc.WantNoDecision && !errors.Is(err, ErrNoDecision) {
+			if exp.NoDecision && !errors.Is(err, ErrNoDecision) {
 				t.Fatalf("error %v, want ErrNoDecision", err)
 			}
 			return
@@ -67,11 +77,22 @@ func TestDecisions(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if tc.Want == nil {
-			t.Fatal("success case needs want")
+		if exp.Replicas == nil {
+			t.Fatal("success case needs expected.replicas")
 		}
-		if got != *tc.Want {
-			t.Fatalf("replicas %d, want %d", got, *tc.Want)
+		if !got.OK {
+			t.Fatal("decision not OK")
+		}
+		if got.Replicas != *exp.Replicas {
+			t.Fatalf("replicas %d, want %d", got.Replicas, *exp.Replicas)
+		}
+		switch {
+		case exp.PD == nil && got.PD != nil:
+			t.Fatalf("pd %+v, want none", *got.PD)
+		case exp.PD != nil && got.PD == nil:
+			t.Fatalf("pd none, want %+v", *exp.PD)
+		case exp.PD != nil && *got.PD != *exp.PD:
+			t.Fatalf("pd %+v, want %+v", *got.PD, *exp.PD)
 		}
 	})
 }

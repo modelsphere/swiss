@@ -1,7 +1,9 @@
 name: upgrade-slo-off
 description: an upgrade that turns sloRequirement off drops the autoscale layer
-kind: upgrade
-rule: true
-sloOff: true
-liveAutoscale: 2
-wantLayer: false
+input:
+  kind: upgrade
+  rule: true
+  sloOff: true
+  liveAutoscale: 2
+expected:
+  layer: false

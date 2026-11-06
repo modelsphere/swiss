@@ -1,7 +1,9 @@
 name: upgrade-disabled
 description: a previous plan that is not autoscaling drops the layer on upgrade
-kind: upgrade
-rule: false
-overrides: false
-liveAutoscale: 2
-wantLayer: false
+input:
+  kind: upgrade
+  rule: false
+  overrides: false
+  liveAutoscale: 2
+expected:
+  layer: false

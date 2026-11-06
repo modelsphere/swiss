@@ -1,7 +1,9 @@
 name: rollback-target-not-autoscaling
 description: rollback while autoscaling to a revision that is not PD with the SLO on applies the archive as stored
-kind: rollback
-rule: true
-liveAutoscale: 4
-archivedForm: 1
-wantLayer: false
+input:
+  kind: rollback
+  rule: true
+  liveAutoscale: 4
+  archivedForm: 1
+expected:
+  layer: false

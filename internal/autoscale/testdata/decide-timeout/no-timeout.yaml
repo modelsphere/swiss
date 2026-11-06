@@ -1,26 +1,28 @@
 name: no-timeout
 description: a zero timeout defers indefinitely
-live:
-  backend: helm
-  helmStatus: deployed
-  pd: true
-  dsGeneration: 1
-  dsObservedGeneration: 1
-  dsSlices: 1
-  planReplicaCount: 1
-  roles:
-  - replicas: 2
-    readyReplicas: 1
-    updatedReplicas: 2
-  routers:
-  - specReplicas: 1
-    readyReplicas: 1
-    generation: 1
-    observedGeneration: 1
-decision:
-  ok: true
-  replicas: 2
-deferredFor: 1000h
-wantHold: role not ready
-wantScale: false
-wantDeferredFor: 1000h
+input:
+  live:
+    backend: helm
+    helmStatus: deployed
+    pd: true
+    dsGeneration: 1
+    dsObservedGeneration: 1
+    dsSlices: 1
+    planReplicaCount: 1
+    roles:
+    - replicas: 2
+      readyReplicas: 1
+      updatedReplicas: 2
+    routers:
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
+  decision:
+    ok: true
+    replicas: 2
+  deferredFor: 1000h
+expected:
+  hold: role not ready
+  scale: false
+  deferredFor: 1000h

@@ -8,84 +8,125 @@ import (
 )
 
 type decideCase struct {
-	Name         string   `json:"name"`
-	Description  string   `json:"description,omitempty"`
-	Live         Live     `json:"live"`
-	Decision     Decision `json:"decision"`
-	TimedOut     bool     `json:"timedOut,omitempty"`
-	WantHold     string   `json:"wantHold"`
-	WantScale    bool     `json:"wantScale"`
-	WantCurrent  int      `json:"wantCurrent"`
-	Want         int      `json:"want"`
-	HasDecision  bool     `json:"hasDecision"`
-	WantTimedOut string   `json:"wantTimedOut,omitempty"`
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Input       decideInput    `json:"input"`
+	Expected    decideExpected `json:"expected"`
+}
+
+type decideInput struct {
+	Live     Live     `json:"live"`
+	Decision Decision `json:"decision"`
+	TimedOut bool     `json:"timedOut,omitempty"`
+}
+
+// decideExpected is the Result. WantPD and CurrentPD omitted are nil.
+type decideExpected struct {
+	Hold        string   `json:"hold"`
+	TimedOut    string   `json:"timedOut,omitempty"`
+	Scale       bool     `json:"scale"`
+	Current     int      `json:"current"`
+	Want        int      `json:"want"`
+	HasDecision bool     `json:"hasDecision"`
+	WantPD      *Engines `json:"wantPD,omitempty"`
+	CurrentPD   *Engines `json:"currentPD,omitempty"`
 }
 
 func TestDecide(t *testing.T) {
 	cases.Run(t, "testdata/decide", func(t *testing.T, tc decideCase) {
-		got := Decide(tc.Live, tc.Decision, tc.TimedOut)
-		if got.HoldReason != tc.WantHold {
-			t.Errorf("hold %q, want %q", got.HoldReason, tc.WantHold)
+		in, exp := tc.Input, tc.Expected
+		got := Decide(in.Live, in.Decision, in.TimedOut)
+		if got.HoldReason != exp.Hold {
+			t.Errorf("hold %q, want %q", got.HoldReason, exp.Hold)
 		}
-		if got.TimedOut != tc.WantTimedOut {
-			t.Errorf("timedOut %q, want %q", got.TimedOut, tc.WantTimedOut)
+		if got.TimedOut != exp.TimedOut {
+			t.Errorf("timedOut %q, want %q", got.TimedOut, exp.TimedOut)
 		}
-		if got.Scale != tc.WantScale {
-			t.Errorf("scale %v, want %v", got.Scale, tc.WantScale)
+		if got.Scale != exp.Scale {
+			t.Errorf("scale %v, want %v", got.Scale, exp.Scale)
 		}
-		if got.Current != tc.WantCurrent {
-			t.Errorf("current %d, want %d", got.Current, tc.WantCurrent)
+		if got.Current != exp.Current {
+			t.Errorf("current %d, want %d", got.Current, exp.Current)
 		}
-		if got.Want != tc.Want {
-			t.Errorf("want %d, want %d", got.Want, tc.Want)
+		if got.Want != exp.Want {
+			t.Errorf("want %d, want %d", got.Want, exp.Want)
 		}
-		if tc.HasDecision != (got.Decision != nil) {
-			t.Errorf("decision present %v, want %v", got.Decision != nil, tc.HasDecision)
+		if exp.HasDecision != (got.Decision != nil) {
+			t.Errorf("decision present %v, want %v", got.Decision != nil, exp.HasDecision)
 		}
-		if got.Decision != nil && tc.Decision.OK && *got.Decision != tc.Decision.Replicas {
-			t.Errorf("decision %d, want %d", *got.Decision, tc.Decision.Replicas)
+		if got.Decision != nil && in.Decision.OK && *got.Decision != in.Decision.Replicas {
+			t.Errorf("decision %d, want %d", *got.Decision, in.Decision.Replicas)
+		}
+		checkEngines(t, "wantPD", got.WantPD, exp.WantPD)
+		checkEngines(t, "currentPD", got.CurrentPD, exp.CurrentPD)
+		if in.Decision.OK && in.Decision.PD != nil {
+			checkEngines(t, "decisionPD", got.DecisionPD, in.Decision.PD)
+		} else if got.DecisionPD != nil {
+			t.Errorf("decisionPD %+v, want nil", *got.DecisionPD)
 		}
 	})
 }
 
+func checkEngines(t *testing.T, name string, got, want *Engines) {
+	t.Helper()
+	switch {
+	case got == nil && want == nil:
+	case got == nil:
+		t.Errorf("%s nil, want %+v", name, *want)
+	case want == nil:
+		t.Errorf("%s %+v, want nil", name, *got)
+	case *got != *want:
+		t.Errorf("%s %+v, want %+v", name, *got, *want)
+	}
+}
+
 type timeoutCase struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description,omitempty"`
-	Live        Live     `json:"live"`
-	Decision    Decision `json:"decision"`
-	Timeout     string   `json:"timeout,omitempty"`
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Input       timeoutInput    `json:"input"`
+	Expected    timeoutExpected `json:"expected"`
+}
+
+type timeoutInput struct {
+	Live     Live     `json:"live"`
+	Decision Decision `json:"decision"`
+	Timeout  string   `json:"timeout,omitempty"`
 	// DeferredFor is now minus deferredSince. Empty is a nil deferredSince.
-	DeferredFor  string `json:"deferredFor,omitempty"`
-	WantHold     string `json:"wantHold"`
-	WantTimedOut string `json:"wantTimedOut,omitempty"`
-	WantScale    bool   `json:"wantScale"`
-	// WantDeferredFor is now minus the returned clock. Empty is nil.
-	WantDeferredFor string `json:"wantDeferredFor,omitempty"`
+	DeferredFor string `json:"deferredFor,omitempty"`
+}
+
+type timeoutExpected struct {
+	Hold     string `json:"hold"`
+	TimedOut string `json:"timedOut,omitempty"`
+	Scale    bool   `json:"scale"`
+	// DeferredFor is now minus the returned clock. Empty is nil.
+	DeferredFor string `json:"deferredFor,omitempty"`
 }
 
 func TestDecideWithTimeout(t *testing.T) {
 	cases.Run(t, "testdata/decide-timeout", func(t *testing.T, tc timeoutCase) {
+		in, exp := tc.Input, tc.Expected
 		now := time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
 		var since *time.Time
-		if tc.DeferredFor != "" {
-			s := now.Add(-parseDuration(t, tc.DeferredFor))
+		if in.DeferredFor != "" {
+			s := now.Add(-parseDuration(t, in.DeferredFor))
 			since = &s
 		}
 		var timeout time.Duration
-		if tc.Timeout != "" {
-			timeout = parseDuration(t, tc.Timeout)
+		if in.Timeout != "" {
+			timeout = parseDuration(t, in.Timeout)
 		}
-		got, clock := DecideWithTimeout(tc.Live, tc.Decision, since, now, timeout)
-		if got.HoldReason != tc.WantHold || got.TimedOut != tc.WantTimedOut || got.Scale != tc.WantScale {
-			t.Errorf("hold %q timedOut %q scale %v, want %q %q %v", got.HoldReason, got.TimedOut, got.Scale, tc.WantHold, tc.WantTimedOut, tc.WantScale)
+		got, clock := DecideWithTimeout(in.Live, in.Decision, since, now, timeout)
+		if got.HoldReason != exp.Hold || got.TimedOut != exp.TimedOut || got.Scale != exp.Scale {
+			t.Errorf("hold %q timedOut %q scale %v, want %q %q %v", got.HoldReason, got.TimedOut, got.Scale, exp.Hold, exp.TimedOut, exp.Scale)
 		}
 		switch {
-		case tc.WantDeferredFor == "" && clock != nil:
+		case exp.DeferredFor == "" && clock != nil:
 			t.Errorf("deferred for %s, want nil", now.Sub(*clock))
-		case tc.WantDeferredFor != "" && clock == nil:
-			t.Errorf("deferredSince nil, want deferred for %s", tc.WantDeferredFor)
-		case tc.WantDeferredFor != "" && now.Sub(*clock) != parseDuration(t, tc.WantDeferredFor):
-			t.Errorf("deferred for %s, want %s", now.Sub(*clock), tc.WantDeferredFor)
+		case exp.DeferredFor != "" && clock == nil:
+			t.Errorf("deferredSince nil, want deferred for %s", exp.DeferredFor)
+		case exp.DeferredFor != "" && now.Sub(*clock) != parseDuration(t, exp.DeferredFor):
+			t.Errorf("deferred for %s, want %s", now.Sub(*clock), exp.DeferredFor)
 		}
 	})
 }

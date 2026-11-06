@@ -1,10 +1,12 @@
 name: no-decision
 description: decision-gen returning no row records no-decision
-noDecision: true
-slo: true
-pd: true
-wantOutcome: no-decision
-wantCurrent: 1
-wantEnabled: true
-wantList:
+input:
+  noDecision: true
+  slo: true
+  pd: true
+expected:
+  outcome: no-decision
+  current: 1
+  enabled: true
+  list:
   - pd

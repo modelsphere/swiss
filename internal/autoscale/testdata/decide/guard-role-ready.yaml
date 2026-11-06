@@ -1,22 +1,24 @@
 name: guard-role-ready
 description: a role that is not ready holds before the updated check
-live:
-  backend: helm
-  helmStatus: deployed
-  pd: true
-  dsGeneration: 1
-  dsObservedGeneration: 1
-  dsSlices: 1
-  planReplicaCount: 1
-  roles:
-  - replicas: 2
-    readyReplicas: 1
-    updatedReplicas: 0
-decision:
-  ok: true
-  replicas: 2
-wantHold: role not ready
-wantScale: false
-wantCurrent: 1
-want: 0
-hasDecision: true
+input:
+  live:
+    backend: helm
+    helmStatus: deployed
+    pd: true
+    dsGeneration: 1
+    dsObservedGeneration: 1
+    dsSlices: 1
+    planReplicaCount: 1
+    roles:
+    - replicas: 2
+      readyReplicas: 1
+      updatedReplicas: 0
+  decision:
+    ok: true
+    replicas: 2
+expected:
+  hold: role not ready
+  scale: false
+  current: 1
+  want: 0
+  hasDecision: true

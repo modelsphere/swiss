@@ -46,8 +46,8 @@ type Input struct {
 	// Schema is the catalog's SchemaVersion. Recorded on a v2 plan only, so a
 	// v1 plan stays byte for byte what it was.
 	Schema string
-	// Autoscale is the replicaCount layer carried while PD autoscaling is
-	// enabled. Empty is omitted, so a plan without it hashes as before.
+
+	// Autoscale is the PD autoscaling layer
 	Autoscale values.Tree
 	// GPUResource is the extended resource the variant's pods request on this
 	// cluster, resolved from inventory. Empty is the vendor's default in the

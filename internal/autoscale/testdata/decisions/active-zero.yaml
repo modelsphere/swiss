@@ -1,7 +1,9 @@
 name: active-zero
 description: active zero is a real count
-namespace: models
-serviceId: pd
-status: 200
-body: '{"apiVersion":"llmscaling.inference.x-k8s.io/v1alpha1","decisions":[{"namespace":"models","serviceId":"pd","replicas":{"active": 0}}]}'
-want: 0
+input:
+  namespace: models
+  serviceId: pd
+  status: 200
+  body: '{"apiVersion":"llmscaling.inference.x-k8s.io/v1alpha1","decisions":[{"namespace":"models","serviceId":"pd","replicas":{"active": 0}}]}'
+expected:
+  replicas: 0

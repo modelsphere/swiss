@@ -1,22 +1,24 @@
 name: guard-role-updated
 description: a ready role that is not updated holds the tick
-live:
-  backend: helm
-  helmStatus: deployed
-  pd: true
-  dsGeneration: 1
-  dsObservedGeneration: 1
-  dsSlices: 1
-  planReplicaCount: 1
-  roles:
-  - replicas: 2
-    readyReplicas: 2
-    updatedReplicas: 1
-decision:
-  ok: true
-  replicas: 2
-wantHold: role not updated
-wantScale: false
-wantCurrent: 1
-want: 0
-hasDecision: true
+input:
+  live:
+    backend: helm
+    helmStatus: deployed
+    pd: true
+    dsGeneration: 1
+    dsObservedGeneration: 1
+    dsSlices: 1
+    planReplicaCount: 1
+    roles:
+    - replicas: 2
+      readyReplicas: 2
+      updatedReplicas: 1
+  decision:
+    ok: true
+    replicas: 2
+expected:
+  hold: role not updated
+  scale: false
+  current: 1
+  want: 0
+  hasDecision: true

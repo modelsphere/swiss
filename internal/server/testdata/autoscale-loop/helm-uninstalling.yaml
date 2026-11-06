@@ -1,9 +1,11 @@
 name: helm-uninstalling
 description: a helm release whose plan is marked uninstalling holds and is not applied
-backend: helm
-decision: 3
-slices: 1
-revision: 2
-planPhase: uninstalling
-wantApplies: 0
-wantHold: uninstalling
+input:
+  backend: helm
+  decision: 3
+  slices: 1
+  revision: 2
+  planPhase: uninstalling
+expected:
+  applies: 0
+  hold: uninstalling

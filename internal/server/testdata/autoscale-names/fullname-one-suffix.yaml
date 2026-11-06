@@ -1,5 +1,6 @@
 name: fullname-one-suffix
 description: trimSuffix removes one trailing hyphen
-fn: fullname
-release: rel--
-want: rel-
+input:
+  fn: fullname
+  release: rel--
+expected: rel-

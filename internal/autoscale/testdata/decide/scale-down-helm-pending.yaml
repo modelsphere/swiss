@@ -1,35 +1,37 @@
 name: scale-down-helm-pending
 description: a scale-down still holds while helm is pending
-live:
-  backend: helm
-  helmStatus: pending-upgrade
-  pd: true
-  dsGeneration: 1
-  dsObservedGeneration: 1
-  dsSlices: 3
-  planReplicaCount: 3
-  roles:
-  - replicas: 1
-    readyReplicas: 1
-    updatedReplicas: 1
-  routers:
-  - specReplicas: 1
-    readyReplicas: 1
-    generation: 1
-    observedGeneration: 1
-  - specReplicas: 1
-    readyReplicas: 1
-    generation: 1
-    observedGeneration: 1
-  - specReplicas: 1
-    readyReplicas: 1
-    generation: 1
-    observedGeneration: 1
-decision:
-  ok: true
-  replicas: 1
-wantHold: helm pending
-wantScale: false
-wantCurrent: 3
-want: 0
-hasDecision: true
+input:
+  live:
+    backend: helm
+    helmStatus: pending-upgrade
+    pd: true
+    dsGeneration: 1
+    dsObservedGeneration: 1
+    dsSlices: 3
+    planReplicaCount: 3
+    roles:
+    - replicas: 1
+      readyReplicas: 1
+      updatedReplicas: 1
+    routers:
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
+  decision:
+    ok: true
+    replicas: 1
+expected:
+  hold: helm pending
+  scale: false
+  current: 3
+  want: 0
+  hasDecision: true

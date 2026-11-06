@@ -1,27 +1,29 @@
 name: guard-router-observed
 description: a router whose status lags its generation holds the tick
-live:
-  backend: helm
-  helmStatus: deployed
-  pd: true
-  dsGeneration: 1
-  dsObservedGeneration: 1
-  dsSlices: 1
-  planReplicaCount: 1
-  roles:
-  - replicas: 1
-    readyReplicas: 1
-    updatedReplicas: 1
-  routers:
-  - specReplicas: 1
-    readyReplicas: 1
-    generation: 4
-    observedGeneration: 3
-decision:
-  ok: true
-  replicas: 2
-wantHold: router not ready
-wantScale: false
-wantCurrent: 1
-want: 0
-hasDecision: true
+input:
+  live:
+    backend: helm
+    helmStatus: deployed
+    pd: true
+    dsGeneration: 1
+    dsObservedGeneration: 1
+    dsSlices: 1
+    planReplicaCount: 1
+    roles:
+    - replicas: 1
+      readyReplicas: 1
+      updatedReplicas: 1
+    routers:
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 4
+      observedGeneration: 3
+  decision:
+    ok: true
+    replicas: 2
+expected:
+  hold: router not ready
+  scale: false
+  current: 1
+  want: 0
+  hasDecision: true

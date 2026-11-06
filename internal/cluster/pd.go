@@ -66,6 +66,20 @@ func disaggregatedSetFrom(u *unstructured.Unstructured) *DisaggregatedSet {
 		if n, ok := asInt(spec["slices"]); ok && n >= 0 {
 			ds.Slices = &n
 		}
+		roles, _ := spec["roles"].([]any)
+		for _, raw := range roles {
+			m, _ := raw.(map[string]any)
+			name, _ := m["name"].(string)
+			rs, _ := m["spec"].(map[string]any)
+			n, ok := asInt(rs["replicas"])
+			if name == "" || !ok || n < 0 {
+				continue
+			}
+			if ds.RoleReplicas == nil {
+				ds.RoleReplicas = map[string]int{}
+			}
+			ds.RoleReplicas[name] = n
+		}
 	}
 	st, _ := u.Object["status"].(map[string]any)
 	if st == nil {

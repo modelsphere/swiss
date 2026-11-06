@@ -1,36 +1,38 @@
 name: scale-down-plan-applying
 description: a scale-down still holds while the plan phase is applying
-live:
-  backend: helm
-  helmStatus: deployed
-  planPhase: applying
-  pd: true
-  dsGeneration: 1
-  dsObservedGeneration: 1
-  dsSlices: 3
-  planReplicaCount: 3
-  roles:
-  - replicas: 1
-    readyReplicas: 1
-    updatedReplicas: 1
-  routers:
-  - specReplicas: 1
-    readyReplicas: 1
-    generation: 1
-    observedGeneration: 1
-  - specReplicas: 1
-    readyReplicas: 1
-    generation: 1
-    observedGeneration: 1
-  - specReplicas: 1
-    readyReplicas: 1
-    generation: 1
-    observedGeneration: 1
-decision:
-  ok: true
-  replicas: 1
-wantHold: plan applying
-wantScale: false
-wantCurrent: 3
-want: 0
-hasDecision: true
+input:
+  live:
+    backend: helm
+    helmStatus: deployed
+    planPhase: applying
+    pd: true
+    dsGeneration: 1
+    dsObservedGeneration: 1
+    dsSlices: 3
+    planReplicaCount: 3
+    roles:
+    - replicas: 1
+      readyReplicas: 1
+      updatedReplicas: 1
+    routers:
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
+  decision:
+    ok: true
+    replicas: 1
+expected:
+  hold: plan applying
+  scale: false
+  current: 3
+  want: 0
+  hasDecision: true

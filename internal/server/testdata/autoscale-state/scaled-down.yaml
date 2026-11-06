@@ -1,12 +1,14 @@
 name: scaled-down
 description: decision 1 from 3 slices scales down
-decision: 1
-slices: 3
-slo: true
-pd: true
-wantOutcome: scaled-down
-wantWant: 1
-wantCurrent: 3
-wantEnabled: true
-wantList:
+input:
+  decision: 1
+  slices: 3
+  slo: true
+  pd: true
+expected:
+  outcome: scaled-down
+  want: 1
+  current: 3
+  enabled: true
+  list:
   - pd

@@ -1,27 +1,29 @@
 name: noop-keeps
 description: a no-op while a workload hold matches keeps the clock
-live:
-  backend: helm
-  helmStatus: failed
-  pd: true
-  dsGeneration: 1
-  dsObservedGeneration: 1
-  dsSlices: 1
-  planReplicaCount: 1
-  roles:
-  - replicas: 1
-    readyReplicas: 1
-    updatedReplicas: 1
-  routers:
-  - specReplicas: 1
-    readyReplicas: 1
-    generation: 1
-    observedGeneration: 1
-decision:
-  ok: true
-  replicas: 1
-timeout: 10m
-deferredFor: 5m
-wantHold: release failed
-wantScale: false
-wantDeferredFor: 5m
+input:
+  live:
+    backend: helm
+    helmStatus: failed
+    pd: true
+    dsGeneration: 1
+    dsObservedGeneration: 1
+    dsSlices: 1
+    planReplicaCount: 1
+    roles:
+    - replicas: 1
+      readyReplicas: 1
+      updatedReplicas: 1
+    routers:
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
+  decision:
+    ok: true
+    replicas: 1
+  timeout: 10m
+  deferredFor: 5m
+expected:
+  hold: release failed
+  scale: false
+  deferredFor: 5m

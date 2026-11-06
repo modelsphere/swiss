@@ -1,0 +1,14 @@
+name: helm-pd-slices-and-roles
+description: a shape.pd decision that moves slices and roles together writes all three
+input:
+  backend: helm
+  decision: 2
+  slices: 1
+  revision: 2
+  decisionPD: {prefill: 1, decode: 2}
+  engines: {prefill: 1, decode: 1}
+expected:
+  applies: 1
+  pd: {prefill: 1, decode: 2}
+  from: 1
+  to: 2

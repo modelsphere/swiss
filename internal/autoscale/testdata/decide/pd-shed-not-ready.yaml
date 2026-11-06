@@ -1,0 +1,44 @@
+name: pd-shed-not-ready
+description: shedding both roles does not wait for readiness
+input:
+  live:
+    backend: helm
+    helmStatus: deployed
+    pd: true
+    dsGeneration: 1
+    dsObservedGeneration: 1
+    dsSlices: 1
+    planReplicaCount: 1
+    engines:
+      prefill: 2
+      decode: 2
+    roles:
+    - replicas: 2
+      readyReplicas: 1
+      updatedReplicas: 2
+    - replicas: 1
+      readyReplicas: 1
+      updatedReplicas: 1
+    routers:
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
+  decision:
+    ok: true
+    replicas: 1
+    pd:
+      prefill: 1
+      decode: 2
+expected:
+  hold: ''
+  scale: true
+  current: 1
+  want: 1
+  wantPD:
+    prefill: 1
+    decode: 2
+  currentPD:
+    prefill: 2
+    decode: 2
+  hasDecision: true

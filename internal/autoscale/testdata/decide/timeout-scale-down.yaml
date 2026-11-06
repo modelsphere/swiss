@@ -1,23 +1,25 @@
 name: timeout-scale-down
 description: a scale-down never waited on readiness, so a timeout reports nothing skipped
-live:
-  backend: helm
-  helmStatus: deployed
-  pd: true
-  dsGeneration: 1
-  dsObservedGeneration: 1
-  dsSlices: 2
-  planReplicaCount: 2
-  roles:
-  - replicas: 2
-    readyReplicas: 1
-    updatedReplicas: 1
-decision:
-  ok: true
-  replicas: 1
-timedOut: true
-wantHold: ""
-wantScale: true
-wantCurrent: 2
-want: 1
-hasDecision: true
+input:
+  live:
+    backend: helm
+    helmStatus: deployed
+    pd: true
+    dsGeneration: 1
+    dsObservedGeneration: 1
+    dsSlices: 2
+    planReplicaCount: 2
+    roles:
+    - replicas: 2
+      readyReplicas: 1
+      updatedReplicas: 1
+  decision:
+    ok: true
+    replicas: 1
+  timedOut: true
+expected:
+  hold: ""
+  scale: true
+  current: 2
+  want: 1
+  hasDecision: true

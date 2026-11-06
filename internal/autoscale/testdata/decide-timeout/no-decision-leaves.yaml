@@ -1,26 +1,28 @@
 name: no-decision-leaves
 description: no decision leaves the clock as it was
-live:
-  backend: helm
-  helmStatus: deployed
-  pd: true
-  dsGeneration: 1
-  dsObservedGeneration: 1
-  dsSlices: 1
-  planReplicaCount: 1
-  roles:
-  - replicas: 2
-    readyReplicas: 1
-    updatedReplicas: 2
-  routers:
-  - specReplicas: 1
-    readyReplicas: 1
-    generation: 1
-    observedGeneration: 1
-decision:
-  ok: false
-timeout: 10m
-deferredFor: 30m
-wantHold: no decision
-wantScale: false
-wantDeferredFor: 30m
+input:
+  live:
+    backend: helm
+    helmStatus: deployed
+    pd: true
+    dsGeneration: 1
+    dsObservedGeneration: 1
+    dsSlices: 1
+    planReplicaCount: 1
+    roles:
+    - replicas: 2
+      readyReplicas: 1
+      updatedReplicas: 2
+    routers:
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
+  decision:
+    ok: false
+  timeout: 10m
+  deferredFor: 30m
+expected:
+  hold: no decision
+  scale: false
+  deferredFor: 30m

@@ -1,16 +1,18 @@
 name: guard-ds-missing
 description: a missing DisaggregatedSet holds the tick
-live:
-  backend: helm
-  helmStatus: deployed
-  pd: true
-  dsMissing: true
-  planReplicaCount: 1
-decision:
-  ok: true
-  replicas: 2
-wantHold: disaggregatedset missing
-wantScale: false
-wantCurrent: 1
-want: 0
-hasDecision: true
+input:
+  live:
+    backend: helm
+    helmStatus: deployed
+    pd: true
+    dsMissing: true
+    planReplicaCount: 1
+  decision:
+    ok: true
+    replicas: 2
+expected:
+  hold: disaggregatedset missing
+  scale: false
+  current: 1
+  want: 0
+  hasDecision: true

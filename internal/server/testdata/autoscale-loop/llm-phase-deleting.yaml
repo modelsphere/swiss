@@ -1,9 +1,11 @@
 name: llm-phase-deleting
 description: status.phase Deleting holds and is not updated
-backend: llmsvc
-decision: 3
-slices: 1
-revision: 2
-llmPhase: Deleting
-wantApplies: 0
-wantHold: uninstalling
+input:
+  backend: llmsvc
+  decision: 3
+  slices: 1
+  revision: 2
+  llmPhase: Deleting
+expected:
+  applies: 0
+  hold: uninstalling

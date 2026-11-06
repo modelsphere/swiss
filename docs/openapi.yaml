@@ -1955,7 +1955,7 @@ components:
             derived: { type: object }
             form: { type: object }
             edit: { type: object }
-            autoscale: { type: object, description: "Only `replicaCount`. swissd writes it when the plan is disaggregated (`pd.enabled` true, `pd.colocate` not true) and the form layer has `sloRequirement.enabled` true, clamping the decision into [1, 64]." }
+            autoscale: { type: object, description: "`replicaCount`, plus `pd.prefill.replicas` and `pd.decode.replicas` when decision-gen's row carries `shape.pd`. swissd writes it when the plan is disaggregated (`pd.enabled` true, `pd.colocate` not true) and the form layer has `sloRequirement.enabled` true, with the decision's values as given: `shape.pd.slices` as `replicaCount` on such a row, else `replicas.active`." }
             canary-system: { type: object, description: "Final values imposed by the Canary controller, preserved when reading a live LLMService plan and when reusing its source." }
         createNamespace: { type: boolean, default: false, deprecated: true, description: "Use `applyFlags.createNamespace`." }
         helmfile: { type: string, description: "The helmfile these values are applied through. Not hashed." }
@@ -2343,8 +2343,8 @@ components:
         release: { type: string }
         enabled: { type: boolean, description: "True when the plan is disaggregated and the form SLO is on." }
         current: { type: integer, description: "Replicas the loop saw. A cold read is the plan's replicaCount." }
-        want: { type: integer, description: "The count Decide would apply. Omitted on a hold, or before a pass." }
-        decision: { type: integer, description: "decision-gen's count, before the safety clamp." }
+        want: { type: integer, description: "The count Decide would apply, the decision's. Omitted on a hold, or before a pass." }
+        decision: { type: integer, description: "decision-gen's slice count: `shape.pd.slices` when the row has it, else `replicas.active`." }
         noDecision: { type: boolean, description: "decision-gen returned no row for this service." }
         outcome:
           type: string
@@ -2356,6 +2356,20 @@ components:
         lastScaled: { type: string, format: date-time, description: "When this process applied a scale. Kept across later passes." }
         deferredSince: { type: string, format: date-time, description: "When a hold that times out first deferred a scale, as the LLMScaler's status.deferredSince. Kept across hold changes, no-ops and timed-out applies; cleared on a pass where no such hold matches. In memory, so a restart starts it over." }
         timedOut: { type: string, description: "The hold this pass applied past, because deferredSince is older than pdScale.deferTimeoutSeconds." }
+        pd:
+          type: object
+          description: "Prefill and decode engines per slice, when decision-gen's row carries `shape.pd`. current, want and decision above stay slice counts."
+          properties:
+            current: { $ref: "#/components/schemas/AutoscaleEngines", description: "The DisaggregatedSet's spec.roles, else the plan's pd.<role>.replicas." }
+            want: { $ref: "#/components/schemas/AutoscaleEngines", description: "What Decide would apply, the decision's. Omitted on a hold." }
+            decision: { $ref: "#/components/schemas/AutoscaleEngines" }
+
+    AutoscaleEngines:
+      type: object
+      required: [prefill, decode]
+      properties:
+        prefill: { type: integer }
+        decode: { type: integer }
 
     AutoscaleStateList:
       type: object

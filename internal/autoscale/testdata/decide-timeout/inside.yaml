@@ -1,27 +1,29 @@
 name: inside
 description: inside the timeout the hold stands and the clock is kept
-live:
-  backend: helm
-  helmStatus: deployed
-  pd: true
-  dsGeneration: 1
-  dsObservedGeneration: 1
-  dsSlices: 1
-  planReplicaCount: 1
-  roles:
-  - replicas: 2
-    readyReplicas: 1
-    updatedReplicas: 2
-  routers:
-  - specReplicas: 1
-    readyReplicas: 1
-    generation: 1
-    observedGeneration: 1
-decision:
-  ok: true
-  replicas: 2
-timeout: 10m
-deferredFor: 9m
-wantHold: role not ready
-wantScale: false
-wantDeferredFor: 9m
+input:
+  live:
+    backend: helm
+    helmStatus: deployed
+    pd: true
+    dsGeneration: 1
+    dsObservedGeneration: 1
+    dsSlices: 1
+    planReplicaCount: 1
+    roles:
+    - replicas: 2
+      readyReplicas: 1
+      updatedReplicas: 2
+    routers:
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
+  decision:
+    ok: true
+    replicas: 2
+  timeout: 10m
+  deferredFor: 9m
+expected:
+  hold: role not ready
+  scale: false
+  deferredFor: 9m

@@ -1,27 +1,29 @@
 name: fixed-leaves
 description: a fixed hold neither starts, times out, nor clears the clock
-live:
-  backend: helm
-  helmStatus: pending-upgrade
-  pd: true
-  dsGeneration: 1
-  dsObservedGeneration: 1
-  dsSlices: 1
-  planReplicaCount: 1
-  roles:
-  - replicas: 2
-    readyReplicas: 1
-    updatedReplicas: 2
-  routers:
-  - specReplicas: 1
-    readyReplicas: 1
-    generation: 1
-    observedGeneration: 1
-decision:
-  ok: true
-  replicas: 2
-timeout: 10m
-deferredFor: 30m
-wantHold: helm pending
-wantScale: false
-wantDeferredFor: 30m
+input:
+  live:
+    backend: helm
+    helmStatus: pending-upgrade
+    pd: true
+    dsGeneration: 1
+    dsObservedGeneration: 1
+    dsSlices: 1
+    planReplicaCount: 1
+    roles:
+    - replicas: 2
+      readyReplicas: 1
+      updatedReplicas: 2
+    routers:
+    - specReplicas: 1
+      readyReplicas: 1
+      generation: 1
+      observedGeneration: 1
+  decision:
+    ok: true
+    replicas: 2
+  timeout: 10m
+  deferredFor: 30m
+expected:
+  hold: helm pending
+  scale: false
+  deferredFor: 30m

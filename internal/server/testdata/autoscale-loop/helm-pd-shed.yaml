@@ -1,0 +1,14 @@
+name: helm-pd-shed
+description: a shape.pd shed of one role is a scale-down of that role alone
+input:
+  backend: helm
+  decision: 1
+  slices: 1
+  revision: 2
+  decisionPD: {prefill: 2, decode: 1}
+  engines: {prefill: 2, decode: 2}
+expected:
+  applies: 1
+  pd: {prefill: 2, decode: 1}
+  from: 1
+  to: 1

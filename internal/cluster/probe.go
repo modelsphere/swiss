@@ -179,7 +179,10 @@ type DisaggregatedSet struct {
 	ObservedGeneration int64
 	// Slices is nil when spec.slices is unset. Negative is ignored by the caller.
 	Slices *int
-	Roles  []RoleStatus
+	// RoleReplicas is spec.roles[].spec.replicas by role name: engines per
+	// slice. A role with no replicas is absent.
+	RoleReplicas map[string]int
+	Roles        []RoleStatus
 }
 
 // RoleStatus is one status.roleStatuses entry.

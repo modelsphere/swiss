@@ -1,6 +1,8 @@
 name: transport-error
 description: a transport failure is a hold
-namespace: models
-serviceId: pd
-transport: true
-errorContains: failed to query decision server
+input:
+  namespace: models
+  serviceId: pd
+  transport: true
+expected:
+  errorContains: failed to query decision server

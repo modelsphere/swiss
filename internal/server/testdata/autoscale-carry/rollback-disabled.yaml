@@ -1,9 +1,11 @@
 name: rollback-disabled
 description: rollback while the live plan is not autoscaling reapplies the archived plan as stored
-kind: rollback
-rule: false
-liveAutoscale: 4
-archivedAutoscale: 2
-archivedForm: 1
-wantLayer: true
-wantReplicaCount: 2
+input:
+  kind: rollback
+  rule: false
+  liveAutoscale: 4
+  archivedAutoscale: 2
+  archivedForm: 1
+expected:
+  layer: true
+  replicaCount: 2

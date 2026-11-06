@@ -1,17 +1,19 @@
 name: timeout-guard-ds-missing
 description: a timeout does not skip a fixed hold; a missing DisaggregatedSet holds the tick
-live:
-  backend: helm
-  helmStatus: deployed
-  pd: true
-  dsMissing: true
-  planReplicaCount: 1
-timedOut: true
-decision:
-  ok: true
-  replicas: 2
-wantHold: disaggregatedset missing
-wantScale: false
-wantCurrent: 1
-want: 0
-hasDecision: true
+input:
+  live:
+    backend: helm
+    helmStatus: deployed
+    pd: true
+    dsMissing: true
+    planReplicaCount: 1
+  timedOut: true
+  decision:
+    ok: true
+    replicas: 2
+expected:
+  hold: disaggregatedset missing
+  scale: false
+  current: 1
+  want: 0
+  hasDecision: true

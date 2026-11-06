@@ -1,9 +1,11 @@
 name: rollback-enabled
 description: rollback while the live plan is autoscaling overlays the live autoscale layer
-kind: rollback
-rule: true
-liveAutoscale: 4
-archivedForm: 1
-wantLayer: true
-wantReplicaCount: 4
-archivedRule: true
+input:
+  kind: rollback
+  rule: true
+  liveAutoscale: 4
+  archivedForm: 1
+  archivedRule: true
+expected:
+  layer: true
+  replicaCount: 4

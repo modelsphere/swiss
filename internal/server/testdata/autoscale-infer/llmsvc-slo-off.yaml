@@ -1,8 +1,10 @@
 name: llmsvc-slo-off
 description: a PD llmsvc release whose form SLO is off is not queried
-backend: llmsvc
-pd: true
-colocate: false
-slo: false
-wantQueries: 0
-wantApplies: 0
+input:
+  backend: llmsvc
+  pd: true
+  colocate: false
+  slo: false
+expected:
+  queries: 0
+  applies: 0
