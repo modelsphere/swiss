@@ -16,7 +16,7 @@ func ownedArm() *unstructured.Unstructured {
 	controller := true
 	u.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "canary.modelsphere.dev/v1alpha1", Kind: "LLMCanary", Name: "demo", UID: "parent-uid", Controller: &controller}})
 	u.SetLabels(map[string]string{llmsvc.CanaryPrefix + "canary-name": "demo", llmsvc.CanaryPrefix + "canary-namespace": "models", llmsvc.CanaryPrefix + "canary-uid": "parent-uid"})
-	u.Object["status"] = map[string]any{"phase": "Applied", "helm": map[string]any{"revision": int64(1), "status": "deployed"}}
+	u.Object["status"] = map[string]any{"observedGeneration": int64(1), "phase": "Applied", "helm": map[string]any{"revision": int64(1), "status": "deployed"}}
 	return u
 }
 
