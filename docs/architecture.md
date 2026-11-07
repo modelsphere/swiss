@@ -195,3 +195,17 @@ form / flags  ─┘             (hash)     ↓
 | `GET /api/nodes` | the GPU inventory: type, allocatable, in use, and what holds it |
 | `GET /api/profile` | the site profile as parsed, after defaults |
 | `GET /api/autoscaling`, `GET /api/releases/{ns}/{release}/autoscaling` | the autoscale loop's last pass per PD release with the form SLO on; in memory only, lost on restart |
+
+### Complete user configuration
+
+`userValues` on plan and dry-run compose requests represents one complete user document; see [the API design](design/user-values.md).
+
+| Boundary | Behavior |
+|---|---|
+| Capability | `/api/cluster` advertises `capabilities.userValues` |
+| User layers | Replace retained form/edit settings; preserve release identity and explicitly supplied request metadata |
+| Clearing | `{}` removes previous user settings and inherits the target baseline |
+| System layers | Upgrade composition carries autoscale and canary-system; their precedence remains authoritative |
+| Autoscale opt-in | Read the explicit form/edit SLO choice together; catalog/site defaults alone do not opt a release in |
+| Validation | Refuse ambiguous legacy inputs, service identity changes and a fixed replica count alongside an enabled scaler |
+| Compatibility | Requests omitting `userValues` keep the legacy merge behavior |

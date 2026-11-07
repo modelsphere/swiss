@@ -12,16 +12,19 @@ import (
 )
 
 // autoscaleOn is the whole gate. A release scales when its plan is
-// disaggregated and the form layer turned the SLO requirement on.
+// disaggregated and the user configuration turned the SLO requirement on.
 func autoscaleOn(p *plan.Plan) bool {
-	return disaggregated(p) && formSLO(p)
+	return disaggregated(p) && userSLO(p)
 }
 
-func formSLO(p *plan.Plan) bool {
+func userSLO(p *plan.Plan) bool {
 	if p == nil {
 		return false
 	}
-	on, ok := formBool(p.Layers[values.LayerForm], "sloRequirement.enabled")
+	user := values.Tree{}
+	values.Merge(user, p.Layers[values.LayerForm], values.LayerForm, nil)
+	values.Merge(user, p.Layers[values.LayerEdit], values.LayerEdit, nil)
+	on, ok := formBool(user, "sloRequirement.enabled")
 	return ok && on
 }
 

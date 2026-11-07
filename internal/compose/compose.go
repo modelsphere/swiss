@@ -48,7 +48,8 @@ type Input struct {
 	Schema string
 
 	// Autoscale is the PD autoscaling layer
-	Autoscale values.Tree
+	Autoscale    values.Tree
+	CanarySystem values.Tree
 	// GPUResource is the extended resource the variant's pods request on this
 	// cluster, resolved from inventory. Empty is the vendor's default in the
 	// profile's GPU table.
@@ -142,6 +143,9 @@ func Compose(in Input) (*plan.Plan, error) {
 	}
 	if len(in.Autoscale) > 0 {
 		layers[values.LayerAutoscale] = in.Autoscale
+	}
+	if len(in.CanarySystem) > 0 {
+		layers[values.LayerCanarySystem] = in.CanarySystem
 	}
 
 	p := &plan.Plan{

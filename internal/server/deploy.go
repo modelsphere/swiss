@@ -26,126 +26,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-type planRequest struct {
-	// FromRelease recomposes a deployed release: its stored plan supplies the
-	// form layer, the model and the variant, and only the catalog layer moves.
-	FromRelease string `json:"fromRelease,omitempty"`
-	ReuseSource bool   `json:"reuseSource,omitempty"`
-	// Catalog names the configured catalog to compose from. Required when the
-	// site lists several. An upgrade naming none stays on the one its release
-	// came from; naming another moves the release there, same model id.
-	Catalog   string `json:"catalog,omitempty"`
-	Model     string `json:"model"`
-	Version   string `json:"version,omitempty"`
-	Variant   string `json:"variant,omitempty"`
-	Release   string `json:"release,omitempty"`
-	Namespace string `json:"namespace,omitempty"`
-	// ServiceID is the identity modelRoute, sloRequirement and the scaler all
-	// key off, and LocalPath overrides the site's path template. Both are form
-	// values; they are named here rather than left to Overrides because a
-	// deploy form should not have to know the key path.
-	ServiceID string `json:"serviceId,omitempty"`
-	LocalPath string `json:"localPath,omitempty"`
-	// GPUProducts narrows the deploy to these accelerator products, any one of
-	// which will do. Named here rather than left to Overrides because the node
-	// label they match on depends on the variant's vendor, which is the
-	// catalog's business and not the form's.
-	GPUProducts []string `json:"gpuProducts,omitempty"`
-	// ForceGPUProducts accepts gpuProducts the variant's catalog entry does not
-	// list, provided each one is on this cluster under the resource the variant's
-	// own products resolve to.
-	// The variant's GPU count, image and values are used unchanged.
-	ForceGPUProducts bool `json:"forceGpuProducts,omitempty"`
-	// GPUResource picks the extended resource to request among those the site
-	// profile's nodes.gpus lists for the variant's vendor, in place of the one
-	// its products' nodes report or the vendor's default. An upgrade sending
-	// no form keeps the resource the release runs on.
-	GPUResource string      `json:"gpuResource,omitempty"`
-	Overrides   values.Tree `json:"overrides,omitempty"`
-	// OverridesYAML is the advanced section: a values fragment typed by hand.
-	// Parsed here rather than in the browser so there is one parser, and the
-	// ownership check still decides what it may contain.
-	OverridesYAML string `json:"overridesYAML,omitempty"`
-	// EditsYAML is the plan editor: applied after every layer, exempt from
-	// ownership, and labelled "edit" wherever the plan is shown.
-	EditsYAML string `json:"editsYAML,omitempty"`
-	// CreateNamespace composes helmfile's createNamespace into the plan, on top
-	// of the site profile's own setting. helm is what creates the namespace;
-	// this is where the plan says so.
-	//
-	// Deprecated: applyFlags.createNamespace on the install.
-	CreateNamespace bool `json:"createNamespace,omitempty"`
-	// ChartVersion must fall in the variant's chart.version. Empty resolves as
-	// chart.Resolve does.
-	ChartVersion string `json:"chartVersion,omitempty"`
-
-	// Set by carryForward, never by the caller.
-	runningChart plan.ChartRef
-	movedFrom    *plan.Plan
-	// autoscale is the live replicaCount layer, copied while the previous plan
-	// is autoscaling and the new form keeps the rule. Unexported so a request
-	// body cannot set it.
-	autoscale values.Tree
-}
-
-type applyRequest struct {
-	PlanHash string `json:"planHash"`
-	// ExpectRevision is the live helm revision the diff was computed against.
-	// It is the whole of the optimistic lock: the revision is helm's, held in
-	// the cluster, so two operators who diffed the same release cannot both
-	// apply. A version column in swissd's own database would have been a lock
-	// on a copy rather than on the thing being changed.
-	//
-	// Zero -- absent -- asserts nothing, which is what an apply that skipped the
-	// diff sends. The diff is optional, so the lock it carries is optional with
-	// it; the caller is giving up the concurrency check, not evading one.
-	ExpectRevision int `json:"expectRevision,omitempty"`
-	// Note is why this is being applied, in the operator's own words. Optional,
-	// recorded in the audit log and beside the release, and read by nothing --
-	// a diff says what changed, and only a person can say why.
-	Note string `json:"note,omitempty"`
-	// ForceConflicts lets the upgrade take fields another manager owns, which
-	// is what a hand `kubectl edit` leaves behind. Per apply, never stored in
-	// the plan -- see exec.ApplyOptions.
-	//
-	// Deprecated: applyFlags.forceConflicts, which wins when sent.
-	ForceConflicts bool       `json:"forceConflicts,omitempty"`
-	ApplyFlags     applyFlags `json:"applyFlags,omitempty"`
-	// ApplyWith is a new install's backend, helm or llmsvc; empty is the site
-	// profile's. An existing release keeps its own.
-	ApplyWith string `json:"applyWith,omitempty"`
-}
-
-// applyFlags are per-request options for diff, install and apply, never stored
-// in the plan. Each endpoint takes the ones that apply to it and ignores the rest.
-type applyFlags struct {
-	SkipSchemaValidation bool `json:"skipSchemaValidation,omitempty"`
-	// A pointer so that a false sent here overrides the deprecated top-level
-	// forceConflicts.
-	ForceConflicts  *bool `json:"forceConflicts,omitempty"`
-	CreateNamespace bool  `json:"createNamespace,omitempty"`
-}
-
-// opts is what an install (or, without createNamespace, an upgrade) takes from
-// the request.
-func (req applyRequest) opts(mode exec.Mode) applyOpts {
-	o := applyOpts{
-		ExpectRevision:       req.ExpectRevision,
-		Action:               actionName(mode),
-		Note:                 req.Note,
-		ForceConflicts:       req.ForceConflicts,
-		SkipSchemaValidation: req.ApplyFlags.SkipSchemaValidation,
-	}
-	if f := req.ApplyFlags.ForceConflicts; f != nil {
-		o.ForceConflicts = *f
-	}
-	// An upgrade's namespace exists already.
-	if mode == exec.Install {
-		o.CreateNamespace = req.ApplyFlags.CreateNamespace
-	}
-	return o
-}
-
 func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := contextWithTimeout(r, 30*time.Second)
 	defer cancel()
@@ -174,6 +54,10 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, error) {
+	var err error
+	if req, err = normalizeUserValues(req); err != nil {
+		return nil, err
+	}
 	if req.ReuseSource {
 		return s.composeLive(ctx, req)
 	}
@@ -221,6 +105,9 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 	}
 	if release == "" {
 		release = resolved.Model
+	}
+	if err := validateUserIdentity(req, release); err != nil {
+		return nil, err
 	}
 
 	overrides := values.Tree{}
@@ -313,6 +200,7 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 		Edits:                edits,
 		CreateNamespace:      req.CreateNamespace,
 		Autoscale:            req.autoscale,
+		CanarySystem:         req.canarySystem,
 		GPUResource:          gpuRes,
 		GPUNodeSelectorTerms: catalogTerms,
 	})
@@ -331,130 +219,6 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 	}
 	p.Warnings = warnings
 	return p, nil
-}
-
-// carryForward fills a request from a release's last plan, so an upgrade keeps
-// the deploy inputs and moves only the model version. It needs no database: the
-// whole plan sits beside the release.
-func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest, error) {
-	prev, err := s.currentPlan(ctx, req.Namespace, req.FromRelease)
-	if err != nil {
-		return req, err
-	}
-	// Release and namespace come from the previous plan and are not overridable.
-	// They identify the release being upgraded; changing them does not rename
-	// anything, it installs a second release beside the first.
-	// Naming no catalog stays on the release's own; naming another moves it
-	// there, gated in compose by checkMove once the target entry is known.
-	own, ownErr := s.ReleaseCatalog(ctx, prev.Source.CatalogName, prev.Source.Catalog)
-	catalogName := req.Catalog
-	var movedFrom *plan.Plan
-	switch {
-	case catalogName == "":
-		if ownErr != nil {
-			return req, fmt.Errorf("cannot upgrade %s: %w", prev.Release.Name, ownErr)
-		}
-		catalogName = own.Name
-	case ownErr != nil || own.Name != catalogName:
-		movedFrom = prev
-	}
-	out := planRequest{
-		Catalog:      catalogName,
-		Model:        prev.Source.Model,
-		Version:      req.Version,
-		Variant:      prev.Source.Variant,
-		Release:      prev.Release.Name,
-		Namespace:    prev.Release.Namespace,
-		Overrides:    prev.Layers[values.LayerForm],
-		ChartVersion: req.ChartVersion,
-		runningChart: prev.Chart,
-		movedFrom:    movedFrom,
-		GPUResource:  req.GPUResource,
-	}
-	if req.Variant != "" {
-		out.Variant = req.Variant
-	}
-
-	// A request carrying the form carries all of it. `swiss upgrade` and the
-	// version picker send no overrides and mean "move the catalog, keep every
-	// setting"; the upgrade form sends the whole form and is authoritative.
-	//
-	// The overrides merge rather than replace, so a value no form field covers
-	// -- set once from a flag or the advanced box -- survives an upgrade instead
-	// of being dropped by a form that never knew about it. Edits do replace:
-	// the form shows them, so an empty box means the operator emptied it.
-	if len(req.Overrides) == 0 {
-		if edits := prev.Layers[values.LayerEdit]; len(edits) > 0 {
-			out.EditsYAML = mustYAML(edits)
-		}
-		if out.GPUResource == "" {
-			res, _ := values.Get(prev.Layers[values.LayerDerived], "model.gpuResource")
-			out.GPUResource, _ = res.(string)
-		}
-		return s.withAutoscale(prev, out), nil
-	}
-	// A plan composed with no form values has no form layer to merge into.
-	if out.Overrides == nil {
-		out.Overrides = values.Tree{}
-	}
-	values.Merge(out.Overrides, req.Overrides, values.LayerForm, nil)
-	out.EditsYAML = req.EditsYAML
-	// serviceId is identity, not a setting: the route, the scaler and the SLO
-	// are all named after it. Changing it on an upgrade renames none of them --
-	// helm renders a new set under the new name and orphans the old ones, on a
-	// release that keeps its name either way. Refused rather than ignored, so a
-	// caller that meant it learns that a new service is a new deploy.
-	if req.ServiceID != "" && req.ServiceID != serviceIDOf(prev) {
-		return req, fmt.Errorf(
-			"serviceId cannot change on an upgrade: %s is deployed as %q, not %q -- deploy a new release to run a second service",
-			prev.Release.Name, serviceIDOf(prev), req.ServiceID)
-	}
-	if req.LocalPath != "" {
-		out.LocalPath = req.LocalPath
-	}
-	if len(req.GPUProducts) > 0 {
-		out.GPUProducts = req.GPUProducts
-		out.ForceGPUProducts = req.ForceGPUProducts
-	}
-	return s.withAutoscale(prev, out), nil
-}
-
-// withAutoscale copies the live autoscale layer onto an upgrade while the
-// previous plan is autoscaling. Compose drops it again when the plan it builds
-// is not autoscaling, so replicaCount falls back to form and edit.
-func (s *Server) withAutoscale(prev *plan.Plan, out planRequest) planRequest {
-	if prev == nil || !autoscaleOn(prev) {
-		return out
-	}
-	layer := prev.Layers[values.LayerAutoscale]
-	if len(layer) == 0 {
-		return out
-	}
-	out.autoscale = cloneTree(layer)
-	return out
-}
-
-// checkMove refuses a cross-catalog upgrade that would put another model, or the
-// same one on another engine, behind the release's existing serviceId and route.
-// Model ids are only unique within a catalog; HF is the identity across them.
-func (s *Server) checkMove(ctx context.Context, prev *plan.Plan, to string, r catalog.Resolved) error {
-	refuse := func(format string, args ...any) error {
-		return fmt.Errorf("cannot move %s to catalog %q: %s -- deploy a new release instead", prev.Release.Name, to, fmt.Sprintf(format, args...))
-	}
-	hf := prev.Source.HF
-	if hf == "" {
-		var err error
-		if hf, err = s.recordedHF(ctx, prev); err != nil {
-			return refuse("its plan predates recording the model's HF repo, and its own catalog could not supply it (%v)", err)
-		}
-	}
-	if r.Source.HF != hf {
-		return refuse("%s there is %s, not %s, so it is a different model", r.Model, r.Source.HF, hf)
-	}
-	if r.Variant.Engine != prev.Engine {
-		return refuse("variant %s runs on %s there, not %s", r.Variant.ID, r.Variant.Engine, prev.Engine)
-	}
-	return nil
 }
 
 // gpuInventoryError is a forced GPU product that could not be checked because
@@ -1232,12 +996,4 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, run)
-}
-
-func mustYAML(t values.Tree) string {
-	b, err := yaml.Marshal(t)
-	if err != nil {
-		return ""
-	}
-	return string(b)
 }
