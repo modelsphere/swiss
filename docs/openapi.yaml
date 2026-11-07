@@ -1602,6 +1602,10 @@ components:
           items: { $ref: "#/components/schemas/CatalogInfo" }
         version: { type: string, description: "swissd's version." }
         allowDeploy: { type: boolean }
+        capabilities:
+          type: object
+          properties:
+            userValues: { type: boolean, description: "Accepts complete user documents in PlanRequest.userValues." }
         sites:
           type: array
           items: { $ref: "#/components/schemas/Site" }
@@ -1954,6 +1958,14 @@ components:
         forceGpuProducts: { type: boolean, default: false, description: "Accept products the variant does not list, if this cluster has them." }
         gpuResource: { type: string, description: "The resource to request, one the site profile's nodes.gpus lists for the variant's vendor. Empty picks it from the products' nodes, else the vendor's default. An upgrade sending no form keeps the resource the release runs on." }
         overrides: { type: object, description: "Form-layer values. On an upgrade, merged over the release's form layer." }
+        userValues:
+          type: object
+          description: |
+            Complete user configuration, stored in the edit layer. On an upgrade,
+            replaces retained user form/edit values while keeping release identity
+            and later system layers. An empty mapping clears user settings.
+            Cannot be combined with overrides, overridesYAML, editsYAML or reuseSource.
+            Requires capabilities.userValues from GET /api/cluster.
         overridesYAML: { type: string, description: "Form-layer values as YAML text." }
         editsYAML: { type: string, description: "The edit layer, exempt from ownership. The autoscale layer is applied after it." }
         createNamespace: { type: boolean, default: false, deprecated: true, description: "Use `applyFlags.createNamespace`." }

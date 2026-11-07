@@ -80,11 +80,12 @@ type clusterInfo struct {
 	CatalogFrom string `json:"catalogFrom,omitempty"`
 	CatalogRef  string `json:"catalogRef,omitempty"`
 	// Catalogs is every catalog a page may select, in the profile's order.
-	Catalogs    []catalogInfo `json:"catalogs,omitempty"`
-	Version     string        `json:"version"`
-	AllowDeploy bool          `json:"allowDeploy"`
-	Sites       []site.Site   `json:"sites,omitempty"`
-	Warnings    []string      `json:"warnings,omitempty"`
+	Catalogs     []catalogInfo   `json:"catalogs,omitempty"`
+	Version      string          `json:"version"`
+	AllowDeploy  bool            `json:"allowDeploy"`
+	Capabilities map[string]bool `json:"capabilities"`
+	Sites        []site.Site     `json:"sites,omitempty"`
+	Warnings     []string        `json:"warnings,omitempty"`
 	// LLMService is whether new installs can use the operator, and which
 	// backend they will use.
 	LLMService *llmClusterInfo `json:"llmservice,omitempty"`
@@ -134,10 +135,11 @@ func (s *Server) handleCluster(w http.ResponseWriter, r *http.Request) {
 
 	repos, from := s.Catalogs(ctx)
 	info := clusterInfo{
-		Profile:     s.cfg.Cluster.Profile.Ref(),
-		CatalogFrom: from,
-		Version:     s.version,
-		AllowDeploy: s.cfg.Server.AllowDeploy,
+		Profile:      s.cfg.Cluster.Profile.Ref(),
+		CatalogFrom:  from,
+		Version:      s.version,
+		AllowDeploy:  s.cfg.Server.AllowDeploy,
+		Capabilities: map[string]bool{"userValues": true},
 	}
 	if p, err := s.Profile(ctx); err == nil {
 		// One instance, one profile. Its name is the cluster name.
