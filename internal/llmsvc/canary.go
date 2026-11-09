@@ -91,15 +91,13 @@ func CanaryAssigned(u *unstructured.Unstructured) *CanaryAssignment {
 
 	validRole := a.Role == "production" || a.Role == "arm"
 	validArm := (a.Role == "arm" && a.Arm != "") || (a.Role == "production" && a.Arm == "")
-	sameNS := a.Role == "production" || u.GetNamespace() == "" || a.Namespace == u.GetNamespace()
 	a.Verified = a.APIVersion == CanaryPrefix+"v1alpha1" &&
 		a.Kind == "LLMCanary" &&
 		a.Namespace != "" &&
 		a.Name != "" &&
 		a.UID != "" &&
 		validRole &&
-		validArm &&
-		sameNS
+		validArm
 	if a.APIVersion == "" {
 		a.APIVersion = CanaryPrefix + "v1alpha1"
 	}

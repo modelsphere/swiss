@@ -78,7 +78,7 @@ func TestCanaryAssignedReportsArmAndMalformedMetadata(t *testing.T) {
 		{"arm without arm name", `{"apiVersion":"canary.modelsphere.dev/v1alpha1","kind":"LLMCanary","namespace":"canary","name":"demo","uid":"parent-uid","role":"arm"}`, true, false},
 		{"production with arm name", `{"apiVersion":"canary.modelsphere.dev/v1alpha1","kind":"LLMCanary","namespace":"canary","name":"demo","uid":"parent-uid","role":"production","arm":"baseline"}`, true, false},
 		{"cross namespace production", `{"apiVersion":"canary.modelsphere.dev/v1alpha1","kind":"LLMCanary","namespace":"other","name":"demo","uid":"parent-uid","role":"production"}`, true, true},
-		{"cross namespace", `{"apiVersion":"canary.modelsphere.dev/v1alpha1","kind":"LLMCanary","namespace":"other","name":"demo","uid":"parent-uid","role":"arm","arm":"baseline"}`, true, false},
+		{"cross namespace arm", `{"apiVersion":"canary.modelsphere.dev/v1alpha1","kind":"LLMCanary","namespace":"other","name":"demo","uid":"parent-uid","role":"arm","arm":"baseline"}`, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			u := &unstructured.Unstructured{}
