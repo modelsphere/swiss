@@ -119,6 +119,9 @@ func Compose(in Input) (*plan.Plan, error) {
 	if err := applyDefaults(siteVals, derivedVals, base, in); err != nil {
 		return nil, err
 	}
+	if err := applyInputs(derivedVals, base, in); err != nil {
+		return nil, err
+	}
 	if res, ok := values.Get(derivedVals, "model.gpuResource"); ok {
 		if err := checkGPUResourceChart(in.Resolved.Variant.Chart.Name, chartVersion, res.(string)); err != nil {
 			return nil, err
@@ -168,6 +171,9 @@ func Compose(in Input) (*plan.Plan, error) {
 		Profile:         in.Profile.Name,
 		CreateNamespace: in.CreateNamespace,
 		Layers:          layers,
+	}
+	if err := checkInputs(in.Resolved.Variant.Requires.Inputs, p.Values()); err != nil {
+		return nil, err
 	}
 	if err := p.ComputeHash(); err != nil {
 		return nil, err
@@ -377,6 +383,50 @@ func applyDefaults(site, derived, base values.Tree, in Input) error {
 		}
 	}
 	return nil
+}
+
+// applyInputs puts the site's answers in the derived layer, under the form's overrides.
+func applyInputs(derived, base values.Tree, in Input) error {
+	for _, input := range in.Resolved.Variant.Requires.Inputs {
+		answer, ok, err := in.Profile.InputAnswer(input.Path, in.Resolved.Source.HF, in.Resolved.Model)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			continue
+		}
+		if _, set := values.Get(base, input.Path); set {
+			continue
+		}
+		if err := values.Set(derived, input.Path, answer); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkInputs reads the composed values, so an answer from any layer counts. "" is no
+// answer: it is what variants wrote before they could declare an input.
+func checkInputs(inputs []catalog.Input, composed values.Tree) error {
+	var missing []string
+	for _, input := range inputs {
+		v, ok := values.Get(composed, input.Path)
+		if !ok || v == nil || v == "" {
+			missing = append(missing, fmt.Sprintf("%s (%s)", input.Path, input.Title))
+			continue
+		}
+		if err := input.Check(v); err != nil {
+			return fmt.Errorf("input %s (%s): %w", input.Path, input.Title, err)
+		}
+	}
+	switch len(missing) {
+	case 0:
+		return nil
+	case 1:
+		return fmt.Errorf("input %s is not set: set it in the deploy's overrides, or in the site profile's features.inputs", missing[0])
+	default:
+		return fmt.Errorf("inputs %s are not set: set them in the deploy's overrides, or in the site profile's features.inputs", strings.Join(missing, ", "))
+	}
 }
 
 func checkGPUResourceChart(name, version, res string) error {

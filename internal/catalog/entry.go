@@ -85,6 +85,8 @@ type Requires struct {
 	GPUProduct      []string `yaml:"gpuProduct,omitempty" json:"gpuProduct,omitempty"`
 	MinGPUMemoryGiB float64  `yaml:"minGpuMemoryGiB,omitempty" json:"minGpuMemoryGiB,omitempty"`
 	RDMA            bool     `yaml:"rdma,omitempty" json:"rdma,omitempty"`
+	// Inputs are chart values the variant leaves to the deploy.
+	Inputs []Input `yaml:"inputs,omitempty" json:"inputs,omitempty"`
 }
 
 const VendorNvidia = "nvidia"

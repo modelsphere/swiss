@@ -7,7 +7,9 @@ package site
 
 import (
 	"fmt"
+	"maps"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -75,6 +77,9 @@ type Profile struct {
 	// variant overrides them. Every other section is a fact about this cluster
 	// and composes above the catalog.
 	Defaults Defaults `yaml:"defaults,omitempty" json:"defaults"`
+
+	// Features answers a variant's requires. Unrelated to Defaults.Features.
+	Features Features `yaml:"features,omitempty" json:"features"`
 
 	// Sites are the other clusters' swissd instances, for the nav switcher.
 	//
@@ -200,6 +205,52 @@ func (f FeatureDefaults) Resolve() map[string]bool {
 		"sloRequirement": on(f.SLORequirement),
 		"scaler":         on(f.Scaler),
 	}
+}
+
+type Features struct {
+	// Inputs answer requires.inputs by chart path, only for a variant that
+	// declares the path -- unlike extra. Strings take pathTemplate's placeholders.
+	Inputs map[string]any `yaml:"inputs,omitempty" json:"inputs,omitempty"`
+}
+
+// check refuses an answer that could never be used, or a second answer from extra.
+func (f Features) check(extra values.Tree) error {
+	for _, path := range slices.Sorted(maps.Keys(f.Inputs)) {
+		where := fmt.Sprintf("features.inputs[%q]", path)
+		if !catalog.ValidInputPath(path) {
+			return fmt.Errorf("%s: not a dotted chart path", where)
+		}
+		switch v := f.Inputs[path].(type) {
+		case string:
+			if _, err := fill(v, "org/name", "model"); err != nil {
+				return fmt.Errorf("%s: %w", where, err)
+			}
+		case bool, int, int64, uint64, float64:
+		default:
+			return fmt.Errorf("%s: an answer is a string, integer or boolean, not %T", where, v)
+		}
+		if _, set := values.Get(extra, path); set {
+			return fmt.Errorf("%s: extra sets the same path; give the one answer here", where)
+		}
+	}
+	return nil
+}
+
+// InputAnswer is the site's answer to an input, placeholders filled for this model.
+func (p Profile) InputAnswer(path, hf, model string) (answer any, ok bool, err error) {
+	v, ok := p.Features.Inputs[path]
+	if !ok {
+		return nil, false, nil
+	}
+	s, isString := v.(string)
+	if !isString {
+		return v, true, nil
+	}
+	out, err := fill(s, hf, model)
+	if err != nil {
+		return nil, true, fmt.Errorf("features.inputs[%q]: %w", path, err)
+	}
+	return out, true, nil
 }
 
 // DefaultSLOAddress is the in-cluster SLO API when the profile names none.
@@ -507,6 +558,9 @@ func Parse(raw []byte, origin string) (*Profile, error) {
 	if err := p.Nodes.checkGPUs(); err != nil {
 		return nil, fmt.Errorf("%s: %w", origin, err)
 	}
+	if err := p.Features.check(p.Extra); err != nil {
+		return nil, fmt.Errorf("%s: %w", origin, err)
+	}
 	return &p, nil
 }
 
@@ -587,14 +641,29 @@ func (p Profile) LocalPath(hf, model string) (string, error) {
 	if v, ok := p.Model.Overrides[model]; ok {
 		return v, nil
 	}
-	org, name, ok := strings.Cut(hf, "/")
-	if !ok {
+	if _, _, ok := strings.Cut(hf, "/"); !ok {
 		return "", fmt.Errorf("source.hf %q is not org/name", hf)
 	}
-	r := strings.NewReplacer("{{hf}}", hf, "{{org}}", org, "{{name}}", name, "{{model}}", model)
-	out := r.Replace(p.Model.PathTemplate)
+	out, err := fill(p.Model.PathTemplate, hf, model)
+	if err != nil {
+		return "", fmt.Errorf("model.pathTemplate %w", err)
+	}
+	return out, nil
+}
+
+// fill replaces {{hf}} (the repo id), {{org}} and {{name}} (its halves) and {{model}} (the entry name).
+func fill(tmpl, hf, model string) (string, error) {
+	if hf == "" {
+		for _, ph := range []string{"{{hf}}", "{{org}}", "{{name}}"} {
+			if strings.Contains(tmpl, ph) {
+				return "", fmt.Errorf("%q uses %s, and the model has no source.hf", tmpl, ph)
+			}
+		}
+	}
+	org, name, _ := strings.Cut(hf, "/")
+	out := strings.NewReplacer("{{hf}}", hf, "{{org}}", org, "{{name}}", name, "{{model}}", model).Replace(tmpl)
 	if strings.Contains(out, "{{") {
-		return "", fmt.Errorf("model.pathTemplate %q has an unknown placeholder", p.Model.PathTemplate)
+		return "", fmt.Errorf("%q has an unknown placeholder", tmpl)
 	}
 	return out, nil
 }
