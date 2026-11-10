@@ -73,7 +73,7 @@ func TestCanaryAssignedArmReadMetadata(t *testing.T) {
 	rig := startRig(t, llmProbe(), true, false, backendLLMSVC)
 	u := llmObject("models", "demo-existing-arm", map[string]string{
 		llmsvc.AnnProfile:    "prod",
-		llmsvc.AssignmentKey: `{"apiVersion":"canary.modelsphere.dev/v1alpha1","kind":"LLMCanary","namespace":"models","name":"demo","uid":"parent-uid","role":"arm","arm":"candidate","configDigest":"sha256:abc","configVersion":"3"}`,
+		llmsvc.AssignmentKey: `{"apiVersion":"canary.modelsphere.dev/v1alpha1","kind":"LLMCanary","namespace":"experiments","name":"demo","uid":"parent-uid","role":"arm","arm":"candidate","configDigest":"sha256:abc","configVersion":"3"}`,
 	})
 	u.SetUID("arm-uid")
 	u.SetResourceVersion("19")
@@ -93,7 +93,7 @@ func TestCanaryAssignedArmReadMetadata(t *testing.T) {
 			t.Fatalf("missing service UID: %v", body)
 		}
 		assigned, _ := body["assignedTo"].(map[string]any)
-		if assigned["name"] != "demo" || assigned["uid"] != "parent-uid" || assigned["role"] != "arm" || assigned["arm"] != "candidate" || assigned["verified"] != true {
+		if assigned["namespace"] != "experiments" || assigned["name"] != "demo" || assigned["uid"] != "parent-uid" || assigned["role"] != "arm" || assigned["arm"] != "candidate" || assigned["verified"] != true {
 			t.Fatalf("unexpected assignedTo: %v", body)
 		}
 	}

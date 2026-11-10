@@ -2125,7 +2125,7 @@ components:
       properties:
         apiVersion: { type: string, examples: [canary.modelsphere.dev/v1alpha1] }
         kind: { type: string, examples: [LLMCanary] }
-        namespace: { type: string, description: "The assigned experiment's namespace." }
+        namespace: { type: string, description: "The assigned experiment's namespace; it may differ from the service namespace for both production and arm assignments." }
         name: { type: string, description: "The assigned experiment's name." }
         uid: { type: string, description: "The assigned experiment's UID." }
         role: { type: string, description: "production or arm for a verified assignment; omitted when empty.", examples: [production, arm] }
