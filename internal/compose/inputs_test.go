@@ -106,6 +106,56 @@ func TestTheVariantsDefaultIsTheLowestAnswer(t *testing.T) {
 	}
 }
 
+// A value the variant's values give the key stands when nobody answers, and
+// any answer overrides it.
+func TestTheVariantsValueIsTheBaseAnAnswerOverrides(t *testing.T) {
+	for name, c := range map[string]struct {
+		site  map[string]any
+		def   any
+		want  string
+		layer string
+	}{
+		"nobody answers":      {want: "mooncake-master.example:50051", layer: values.LayerCatalog},
+		"the site answers":    {site: map[string]any{masterKey: "site.svc:50051"}, want: "site.svc:50051", layer: values.LayerDerived},
+		"the default answers": {def: "tuned.svc:50051", want: "tuned.svc:50051", layer: values.LayerDerived},
+	} {
+		in := inputsInput()
+		in.Resolved.Variant.Values["storageKVOffload"].(map[string]any)["mooncake"].(map[string]any)["master"] = "mooncake-master.example:50051"
+		in.Resolved.Variant.Inputs[0].Default = c.def
+		in.Profile.Inputs = c.site
+		p, err := Compose(in)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got, _ := values.Get(p.Values(), masterKey); got != c.want || p.LayerOf(masterKey) != c.layer {
+			t.Errorf("%s: %s = %v from %s, want %s from %s", name, masterKey, got, p.LayerOf(masterKey), c.want, c.layer)
+		}
+	}
+}
+
+// extra sets the key too: extra wins, and the input answer does nothing.
+func TestExtraOverridesTheSitesInputAnswer(t *testing.T) {
+	in := inputsInput()
+	in.Profile.Inputs = map[string]any{masterKey: "site.svc:50051"}
+	in.Profile.Extra = values.Tree{"storageKVOffload": map[string]any{"mooncake": map[string]any{"master": "extra.svc:50051"}}}
+	p, err := Compose(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := values.Get(p.Values(), masterKey); got != "extra.svc:50051" || p.LayerOf(masterKey) != values.LayerSite {
+		t.Errorf("%s = %v from %s, want extra's", masterKey, got, p.LayerOf(masterKey))
+	}
+}
+
+// The profile takes inputs as written; compose refuses one it cannot fill.
+func TestASiteAnswerWithAnUnknownPlaceholderRefusesThePlan(t *testing.T) {
+	in := inputsInput()
+	in.Profile.Inputs = map[string]any{masterKey: "{{release}}.svc:50051"}
+	if _, err := Compose(in); err == nil || !strings.Contains(err.Error(), "unknown placeholder") {
+		t.Fatalf("want a refusal naming the placeholder, got %v", err)
+	}
+}
+
 func TestAnAnswerTheInputDoesNotTakeRefusesThePlan(t *testing.T) {
 	in := inputsInput()
 	in.Profile.Inputs = map[string]any{masterKey: "no-port"}

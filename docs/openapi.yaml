@@ -1798,8 +1798,8 @@ components:
             Answers to variants' `inputs`, by each input's key. Unlike `extra`, an
             answer reaches only a variant that declares the key, in the `derived`
             layer. A string may use `model.pathTemplate`'s placeholders
-            (`{{hf}}`, `{{org}}`, `{{name}}`, `{{model}}`). A key `extra` also sets is
-            refused.
+            (`{{hf}}`, `{{org}}`, `{{name}}`, `{{model}}`). Where `extra` sets the
+            same key, `extra` wins.
           additionalProperties: { type: [string, number, boolean] }
           examples:
             - storageKVOffload.mooncake.master: mooncake-master.svc:50051

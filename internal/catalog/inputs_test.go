@@ -38,14 +38,20 @@ func TestAnInputsDefaultAndExampleAreAnswers(t *testing.T) {
 			t.Errorf("default %v: %v", in.Default, err)
 		}
 	}
+	// values may set an input's key: it is the base an answer overrides.
+	for _, base := range []any{"mooncake-master.example:50051", ""} {
+		ok := inputVariant([]Input{mooncakeMaster}, values.Tree{"storageKVOffload": map[string]any{"mooncake": map[string]any{"master": base}}})
+		if err := ok.validate(); err != nil {
+			t.Errorf("values base %q: %v", base, err)
+		}
+	}
 	one := func(in Input) []Input { return []Input{in} }
 	at := func(in Input, edit func(*Input)) Input { edit(&in); return in }
 	for name, c := range map[string]struct {
 		v    Variant
 		want string
 	}{
-		"values sets it":      {inputVariant(one(mooncakeMaster), values.Tree{"storageKVOffload": map[string]any{"mooncake": map[string]any{"master": "mc.svc:50051"}}}), "values.storageKVOffload.mooncake.master sets it; give the value as the input's default"},
-		"a non-map above it":  {inputVariant(one(mooncakeMaster), values.Tree{"storageKVOffload": map[string]any{"mooncake": "off"}}), "values.storageKVOffload.mooncake sets it"},
+		"a non-map above it":  {inputVariant(one(mooncakeMaster), values.Tree{"storageKVOffload": map[string]any{"mooncake": "off"}}), "values.storageKVOffload.mooncake is not a map"},
 		"default off pattern": {inputVariant(one(at(mooncakeMaster, func(i *Input) { i.Default = "no-port" })), nil), `default "no-port" does not match`},
 		"a blank default":     {inputVariant(one(at(mooncakeMaster, func(i *Input) { i.Default = "" })), nil), `default "" does not match`},
 		"default of a type":   {inputVariant(one(Input{Key: "a.b", Title: "t", Type: InputInteger, Example: 1, Default: "8"}), nil), "default 8 is not an integer"},

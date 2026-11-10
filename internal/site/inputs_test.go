@@ -43,17 +43,3 @@ func TestATemplateNamingTheRepoNeedsASource(t *testing.T) {
 		t.Errorf("{{model}} needs no source: %v, %v", got, err)
 	}
 }
-
-func TestAnAnswerThatCouldNeverBeUsedIsRefused(t *testing.T) {
-	for name, c := range map[string]struct{ yaml, want string }{
-		"unknown placeholder": {"inputs:\n  a.b: /x/{{release}}\n", "unknown placeholder"},
-		"not a scalar":        {"inputs:\n  a.b: {host: h}\n", "string, integer or boolean"},
-		"no value":            {"inputs:\n  a.b:\n", "string, integer or boolean"},
-		"not a key":           {"inputs:\n  a..b: x\n", "not a dotted chart key"},
-		"extra answers too":   {"extra:\n  a:\n    b: y\ninputs:\n  a.b: x\n", "extra sets the same key"},
-	} {
-		if _, err := Parse([]byte(inputsHead+c.yaml), "test"); err == nil || !strings.Contains(err.Error(), c.want) {
-			t.Errorf("%s: want an error containing %q, got %v", name, c.want, err)
-		}
-	}
-}

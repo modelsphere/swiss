@@ -7,9 +7,7 @@ package site
 
 import (
 	"fmt"
-	"maps"
 	"os"
-	"slices"
 	"strings"
 	"time"
 
@@ -206,29 +204,6 @@ func (f FeatureDefaults) Resolve() map[string]bool {
 		"sloRequirement": on(f.SLORequirement),
 		"scaler":         on(f.Scaler),
 	}
-}
-
-// checkInputs refuses an answer that could never be used, or a second answer from extra.
-func checkInputs(inputs map[string]any, extra values.Tree) error {
-	for _, key := range slices.Sorted(maps.Keys(inputs)) {
-		where := fmt.Sprintf("inputs[%q]", key)
-		if !catalog.ValidInputKey(key) {
-			return fmt.Errorf("%s: not a dotted chart key", where)
-		}
-		switch v := inputs[key].(type) {
-		case string:
-			if _, err := fill(v, "org/name", "model"); err != nil {
-				return fmt.Errorf("%s: %w", where, err)
-			}
-		case bool, int, int64, uint64, float64:
-		default:
-			return fmt.Errorf("%s: an answer is a string, integer or boolean, not %T", where, v)
-		}
-		if _, set := values.Get(extra, key); set {
-			return fmt.Errorf("%s: extra sets the same key; give the one answer here", where)
-		}
-	}
-	return nil
 }
 
 // InputAnswer is the site's answer to an input, placeholders filled for this model.
@@ -551,9 +526,6 @@ func Parse(raw []byte, origin string) (*Profile, error) {
 		}
 	}
 	if err := p.Nodes.checkGPUs(); err != nil {
-		return nil, fmt.Errorf("%s: %w", origin, err)
-	}
-	if err := checkInputs(p.Inputs, p.Extra); err != nil {
 		return nil, fmt.Errorf("%s: %w", origin, err)
 	}
 	return &p, nil
