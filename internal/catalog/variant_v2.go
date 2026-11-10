@@ -23,6 +23,7 @@ type VariantV2 struct {
 	Chart       Chart       `yaml:"chart" json:"chart"`
 	Image       *Image      `yaml:"image,omitempty" json:"image,omitempty"`
 	Requires    Requires    `yaml:"requires" json:"requires"`
+	Inputs      []Input     `yaml:"inputs,omitempty" json:"inputs,omitempty"`
 	Values      values.Tree `yaml:"values,omitempty" json:"values,omitempty"`
 	// Deprecated comes before deleting a file; a string is the reason.
 	Deprecated any `yaml:"deprecated,omitempty" json:"deprecated,omitempty"`
@@ -57,6 +58,6 @@ func ParseVariantV2(raw []byte) (*VariantV2, error) {
 func (d *VariantV2) variant(isDefault bool) Variant {
 	return Variant{
 		ID: d.ID, Description: d.Description, Link: d.Link, Default: isDefault,
-		Engine: d.Engine, Chart: d.Chart, Image: d.Image, Requires: d.Requires, Values: d.Values,
+		Engine: d.Engine, Chart: d.Chart, Image: d.Image, Requires: d.Requires, Inputs: d.Inputs, Values: d.Values,
 	}
 }

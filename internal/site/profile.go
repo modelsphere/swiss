@@ -78,8 +78,9 @@ type Profile struct {
 	// and composes above the catalog.
 	Defaults Defaults `yaml:"defaults,omitempty" json:"defaults"`
 
-	// Features answers a variant's requires. Unrelated to Defaults.Features.
-	Features Features `yaml:"features,omitempty" json:"features"`
+	// Inputs answer a variant's inputs by chart path, only for a variant that
+	// declares the path -- unlike extra. Strings take pathTemplate's placeholders.
+	Inputs map[string]any `yaml:"inputs,omitempty" json:"inputs,omitempty"`
 
 	// Sites are the other clusters' swissd instances, for the nav switcher.
 	//
@@ -207,20 +208,14 @@ func (f FeatureDefaults) Resolve() map[string]bool {
 	}
 }
 
-type Features struct {
-	// Inputs answer requires.inputs by chart path, only for a variant that
-	// declares the path -- unlike extra. Strings take pathTemplate's placeholders.
-	Inputs map[string]any `yaml:"inputs,omitempty" json:"inputs,omitempty"`
-}
-
-// check refuses an answer that could never be used, or a second answer from extra.
-func (f Features) check(extra values.Tree) error {
-	for _, path := range slices.Sorted(maps.Keys(f.Inputs)) {
-		where := fmt.Sprintf("features.inputs[%q]", path)
+// checkInputs refuses an answer that could never be used, or a second answer from extra.
+func checkInputs(inputs map[string]any, extra values.Tree) error {
+	for _, path := range slices.Sorted(maps.Keys(inputs)) {
+		where := fmt.Sprintf("inputs[%q]", path)
 		if !catalog.ValidInputPath(path) {
 			return fmt.Errorf("%s: not a dotted chart path", where)
 		}
-		switch v := f.Inputs[path].(type) {
+		switch v := inputs[path].(type) {
 		case string:
 			if _, err := fill(v, "org/name", "model"); err != nil {
 				return fmt.Errorf("%s: %w", where, err)
@@ -238,7 +233,7 @@ func (f Features) check(extra values.Tree) error {
 
 // InputAnswer is the site's answer to an input, placeholders filled for this model.
 func (p Profile) InputAnswer(path, hf, model string) (answer any, ok bool, err error) {
-	v, ok := p.Features.Inputs[path]
+	v, ok := p.Inputs[path]
 	if !ok {
 		return nil, false, nil
 	}
@@ -248,7 +243,7 @@ func (p Profile) InputAnswer(path, hf, model string) (answer any, ok bool, err e
 	}
 	out, err := fill(s, hf, model)
 	if err != nil {
-		return nil, true, fmt.Errorf("features.inputs[%q]: %w", path, err)
+		return nil, true, fmt.Errorf("inputs[%q]: %w", path, err)
 	}
 	return out, true, nil
 }
@@ -558,7 +553,7 @@ func Parse(raw []byte, origin string) (*Profile, error) {
 	if err := p.Nodes.checkGPUs(); err != nil {
 		return nil, fmt.Errorf("%s: %w", origin, err)
 	}
-	if err := p.Features.check(p.Extra); err != nil {
+	if err := checkInputs(p.Inputs, p.Extra); err != nil {
 		return nil, fmt.Errorf("%s: %w", origin, err)
 	}
 	return &p, nil

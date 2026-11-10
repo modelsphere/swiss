@@ -21,7 +21,8 @@ func inputVariant(inputs []Input, vals values.Tree) Variant {
 		ID:       "a",
 		Engine:   "sglang",
 		Chart:    Chart{Name: "sglang", Version: "0.9.32"},
-		Requires: Requires{GPUs: 8, Inputs: inputs},
+		Requires: Requires{GPUs: 8},
+		Inputs:   inputs,
 		Values:   vals,
 	}
 }
@@ -78,13 +79,13 @@ func TestAnIntegerInputTakesAWholeNumberOfAnyKind(t *testing.T) {
 	}
 }
 
-// requires.inputs is a known key in both places a v2 variant is read strictly:
-// its file, and its entry in the index.
-func TestV2InputsAreReadFromTheFileAndTheIndex(t *testing.T) {
+// inputs is a known key of a v2 variant file, read strictly. The index carries
+// no inputs: nothing lists or picks a variant by them.
+func TestV2InputsAreReadFromTheFile(t *testing.T) {
 	raw := []byte("apiVersion: catalog.swiss/v2\nkind: Variant\nmodel: m\nid: a\nversion: 1.0.0\nengine: sglang\nchart: {name: sglang, version: \"0.9.32\"}\n" +
-		"requires:\n  gpus: 1\n  inputs:\n    - {path: storageKVOffload.mooncake.master, title: Mooncake master, example: \"h:1\", default: \"d:1\"}\n")
+		"requires:\n  gpus: 1\ninputs:\n  - {path: storageKVOffload.mooncake.master, title: Mooncake master, example: \"h:1\", default: \"d:1\"}\n")
 	f := memFetcher{"models/m/a.yaml": raw}
-	f["index-v2.json"] = []byte(fmt.Sprintf(`{"apiVersion":"catalog.swiss/v2","count":1,"models":[{"name":"m","source":{"hf":"org/m"},"variants":[{"id":"a","version":"1.0.0","path":"models/m/a.yaml","digest":%q,"engine":"sglang","chart":{"name":"sglang","version":"0.9.32"},"requires":{"gpus":1,"inputs":[{"path":"storageKVOffload.mooncake.master","title":"Mooncake master","example":"h:1","default":"d:1"}]}}]}]}`, contentRef(raw)))
+	f["index-v2.json"] = []byte(fmt.Sprintf(`{"apiVersion":"catalog.swiss/v2","count":1,"models":[{"name":"m","source":{"hf":"org/m"},"variants":[{"id":"a","version":"1.0.0","path":"models/m/a.yaml","digest":%q,"engine":"sglang","chart":{"name":"sglang","version":"0.9.32"},"requires":{"gpus":1}}]}]}`, contentRef(raw)))
 	c, err := OpenFetcher(context.Background(), f)
 	if err != nil {
 		t.Fatal(err)
@@ -93,7 +94,7 @@ func TestV2InputsAreReadFromTheFileAndTheIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if in := r.Variant.Requires.Inputs; len(in) != 1 || in[0].Path != "storageKVOffload.mooncake.master" || in[0].Example != "h:1" || in[0].Default != "d:1" {
+	if in := r.Variant.Inputs; len(in) != 1 || in[0].Path != "storageKVOffload.mooncake.master" || in[0].Example != "h:1" || in[0].Default != "d:1" {
 		t.Errorf("inputs = %+v", in)
 	}
 }

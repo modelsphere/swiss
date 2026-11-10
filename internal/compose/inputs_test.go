@@ -12,7 +12,7 @@ const masterPath = "storageKVOffload.mooncake.master"
 
 func inputsInput() Input {
 	in := testInput()
-	in.Resolved.Variant.Requires.Inputs = []catalog.Input{{
+	in.Resolved.Variant.Inputs = []catalog.Input{{
 		Path:    masterPath,
 		Title:   "Mooncake master",
 		Pattern: `[^\s:/]+:[0-9]+`,
@@ -26,7 +26,7 @@ func inputsInput() Input {
 // values under the same section.
 func TestTheSiteAnswersAnInputInTheDerivedLayer(t *testing.T) {
 	in := inputsInput()
-	in.Profile.Features.Inputs = map[string]any{masterPath: "mc-{{model}}.svc:50051"}
+	in.Profile.Inputs = map[string]any{masterPath: "mc-{{model}}.svc:50051"}
 	p, err := Compose(in)
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +49,7 @@ func TestTheDeployOverridesTheSitesAnswer(t *testing.T) {
 		"with no site answer":    nil,
 	} {
 		in := inputsInput()
-		in.Profile.Features.Inputs = site
+		in.Profile.Inputs = site
 		in.Overrides = values.Tree{"storageKVOffload": map[string]any{"mooncake": map[string]any{"master": "mine.svc:50051"}}}
 		p, err := Compose(in)
 		if err != nil {
@@ -75,7 +75,7 @@ func TestAnUnansweredInputRefusesThePlan(t *testing.T) {
 }
 
 func withDefault(in Input, def any) Input {
-	in.Resolved.Variant.Requires.Inputs[0].Default = def
+	in.Resolved.Variant.Inputs[0].Default = def
 	return in
 }
 
@@ -92,7 +92,7 @@ func TestTheVariantsDefaultIsTheLowestAnswer(t *testing.T) {
 		"the deploy over the two": {site: map[string]any{masterPath: "site.svc:50051"}, form: map[string]any{"master": "mine.svc:50051"}, want: "mine.svc:50051", layer: values.LayerForm},
 	} {
 		in := withDefault(inputsInput(), "tuned.svc:50051")
-		in.Profile.Features.Inputs = c.site
+		in.Profile.Inputs = c.site
 		if c.form != nil {
 			in.Overrides = values.Tree{"storageKVOffload": map[string]any{"mooncake": c.form}}
 		}
@@ -108,7 +108,7 @@ func TestTheVariantsDefaultIsTheLowestAnswer(t *testing.T) {
 
 func TestAnAnswerTheInputDoesNotTakeRefusesThePlan(t *testing.T) {
 	in := inputsInput()
-	in.Profile.Features.Inputs = map[string]any{masterPath: "no-port"}
+	in.Profile.Inputs = map[string]any{masterPath: "no-port"}
 	if _, err := Compose(in); err == nil || !strings.Contains(err.Error(), `"no-port" does not match`) {
 		t.Fatalf("want a refusal quoting the answer, got %v", err)
 	}
@@ -118,7 +118,7 @@ func TestAnAnswerTheInputDoesNotTakeRefusesThePlan(t *testing.T) {
 // site answer never lands in a deploy that did not ask.
 func TestASiteAnswerReachesOnlyAVariantThatDeclaresIt(t *testing.T) {
 	in := testInput()
-	in.Profile.Features.Inputs = map[string]any{masterPath: "site.svc:50051"}
+	in.Profile.Inputs = map[string]any{masterPath: "site.svc:50051"}
 	p, err := Compose(in)
 	if err != nil {
 		t.Fatal(err)

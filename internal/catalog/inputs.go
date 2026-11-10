@@ -9,7 +9,7 @@ import (
 	"github.com/modelsphere/swiss/internal/values"
 )
 
-// Input is one requires.inputs entry. Its rules repeat the catalog's
+// Input is one inputs entry. Its rules repeat the catalog's
 // hack/lib/inputs.js: the catalog is untrusted where it is used.
 type Input struct {
 	// Path is the chart value, dotted: storageKVOffload.mooncake.master.
@@ -98,10 +98,10 @@ func isInteger(v any) bool {
 func checkInputs(inputs []Input, vals values.Tree) error {
 	declared := map[string]bool{}
 	for _, in := range inputs {
-		where := "requires.inputs " + in.Path
+		where := "inputs " + in.Path
 		switch {
 		case !ValidInputPath(in.Path):
-			return fmt.Errorf("requires.inputs: path %q is not a dotted chart path", in.Path)
+			return fmt.Errorf("inputs: path %q is not a dotted chart path", in.Path)
 		case in.Path == "model.localPath":
 			return fmt.Errorf("%s: swiss answers it from the site's model.pathTemplate, so it is never an input", where)
 		case declared[in.Path]:

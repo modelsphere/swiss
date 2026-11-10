@@ -5,15 +5,14 @@ import (
 	"testing"
 )
 
-const featuresHead = "name: prod\nmodel:\n  pathTemplate: /models/{{name}}\nnodes:\n  gpus: []\n"
+const inputsHead = "name: prod\nmodel:\n  pathTemplate: /models/{{name}}\nnodes:\n  gpus: []\n"
 
 func TestInputAnswersFillTheModelPlaceholders(t *testing.T) {
-	p, err := Parse([]byte(featuresHead+`features:
-  inputs:
-    storageKVOffload.mooncake.master: mooncake-master.svc:50051
-    engineCache.hostPath: /data/cache/{{model}}/{{org}}
-    service.port: 8050
-    shm.enabled: true
+	p, err := Parse([]byte(inputsHead+`inputs:
+  storageKVOffload.mooncake.master: mooncake-master.svc:50051
+  engineCache.hostPath: /data/cache/{{model}}/{{org}}
+  service.port: 8050
+  shm.enabled: true
 `), "test")
 	if err != nil {
 		t.Fatal(err)
@@ -36,7 +35,7 @@ func TestInputAnswersFillTheModelPlaceholders(t *testing.T) {
 
 // A model with no weights has no repo id for a template to name.
 func TestATemplateNamingTheRepoNeedsASource(t *testing.T) {
-	p := Profile{Features: Features{Inputs: map[string]any{"a.b": "/data/{{name}}", "c.d": "/data/{{model}}"}}}
+	p := Profile{Inputs: map[string]any{"a.b": "/data/{{name}}", "c.d": "/data/{{model}}"}}
 	if _, _, err := p.InputAnswer("a.b", "", "mock"); err == nil || !strings.Contains(err.Error(), "no source.hf") {
 		t.Errorf("want a refusal naming source.hf, got %v", err)
 	}
@@ -47,13 +46,13 @@ func TestATemplateNamingTheRepoNeedsASource(t *testing.T) {
 
 func TestAnAnswerThatCouldNeverBeUsedIsRefused(t *testing.T) {
 	for name, c := range map[string]struct{ yaml, want string }{
-		"unknown placeholder": {"features:\n  inputs:\n    a.b: /x/{{release}}\n", "unknown placeholder"},
-		"not a scalar":        {"features:\n  inputs:\n    a.b: {host: h}\n", "string, integer or boolean"},
-		"no value":            {"features:\n  inputs:\n    a.b:\n", "string, integer or boolean"},
-		"not a path":          {"features:\n  inputs:\n    a..b: x\n", "not a dotted chart path"},
-		"extra answers too":   {"extra:\n  a:\n    b: y\nfeatures:\n  inputs:\n    a.b: x\n", "extra sets the same path"},
+		"unknown placeholder": {"inputs:\n  a.b: /x/{{release}}\n", "unknown placeholder"},
+		"not a scalar":        {"inputs:\n  a.b: {host: h}\n", "string, integer or boolean"},
+		"no value":            {"inputs:\n  a.b:\n", "string, integer or boolean"},
+		"not a path":          {"inputs:\n  a..b: x\n", "not a dotted chart path"},
+		"extra answers too":   {"extra:\n  a:\n    b: y\ninputs:\n  a.b: x\n", "extra sets the same path"},
 	} {
-		if _, err := Parse([]byte(featuresHead+c.yaml), "test"); err == nil || !strings.Contains(err.Error(), c.want) {
+		if _, err := Parse([]byte(inputsHead+c.yaml), "test"); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: want an error containing %q, got %v", name, c.want, err)
 		}
 	}

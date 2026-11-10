@@ -172,7 +172,7 @@ func Compose(in Input) (*plan.Plan, error) {
 		CreateNamespace: in.CreateNamespace,
 		Layers:          layers,
 	}
-	if err := checkInputs(in.Resolved.Variant.Requires.Inputs, p.Values()); err != nil {
+	if err := checkInputs(in.Resolved.Variant.Inputs, p.Values()); err != nil {
 		return nil, err
 	}
 	if err := p.ComputeHash(); err != nil {
@@ -388,7 +388,7 @@ func applyDefaults(site, derived, base values.Tree, in Input) error {
 // applyInputs puts each input's answer in the derived layer, under the form's
 // overrides: the site's, else the input's default.
 func applyInputs(derived, site values.Tree, in Input) error {
-	for _, input := range in.Resolved.Variant.Requires.Inputs {
+	for _, input := range in.Resolved.Variant.Inputs {
 		answer, ok, err := in.Profile.InputAnswer(input.Path, in.Resolved.Source.HF, in.Resolved.Model)
 		if err != nil {
 			return err
@@ -426,9 +426,9 @@ func checkInputs(inputs []catalog.Input, composed values.Tree) error {
 	case 0:
 		return nil
 	case 1:
-		return fmt.Errorf("input %s is not set: set it in the deploy's overrides, or in the site profile's features.inputs", missing[0])
+		return fmt.Errorf("input %s is not set: set it in the deploy's overrides, or in the site profile's inputs", missing[0])
 	default:
-		return fmt.Errorf("inputs %s are not set: set them in the deploy's overrides, or in the site profile's features.inputs", strings.Join(missing, ", "))
+		return fmt.Errorf("inputs %s are not set: set them in the deploy's overrides, or in the site profile's inputs", strings.Join(missing, ", "))
 	}
 }
 

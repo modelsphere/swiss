@@ -352,7 +352,7 @@ func (v Variant) validate() error {
 			return fmt.Errorf("%s: values.lws.size (%v) != requires.nodes (%d)", where, size, v.Requires.NodesOrDefault())
 		}
 	}
-	if err := checkInputs(v.Requires.Inputs, v.Values); err != nil {
+	if err := checkInputs(v.Inputs, v.Values); err != nil {
 		return fmt.Errorf("%s: %w", where, err)
 	}
 	return nil
