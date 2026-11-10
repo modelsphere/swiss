@@ -80,6 +80,10 @@ type Profile struct {
 	// the key -- unlike extra. Strings take pathTemplate's placeholders.
 	Inputs map[string]any `yaml:"inputs,omitempty" json:"inputs,omitempty"`
 
+	// Presets are named values a deploy may pick one of. The console merges the
+	// picked one into the form layer; swissd composes nothing from them.
+	Presets map[string]Preset `yaml:"presets,omitempty" json:"presets,omitempty"`
+
 	// Sites are the other clusters' swissd instances, for the nav switcher.
 	//
 	// In the profile rather than swissd's config because it is a fact about the
@@ -92,6 +96,11 @@ type Profile struct {
 	Sites []Site `yaml:"sites,omitempty" json:"sites,omitempty"`
 
 	Extra values.Tree `yaml:"extra,omitempty" json:"extra,omitempty"`
+}
+
+type Preset struct {
+	Description string      `yaml:"description,omitempty" json:"description,omitempty"`
+	Values      values.Tree `yaml:"values,omitempty" json:"values,omitempty"`
 }
 
 // Site is one other swissd, by name and address. The URL is where a browser
