@@ -75,19 +75,19 @@ func TestAnUnansweredInputRefusesThePlan(t *testing.T) {
 }
 
 func withDefault(in Input, def any) Input {
-	in.Resolved.Variant.Values["storageKVOffload"].(map[string]any)["mooncake"].(map[string]any)["master"] = def
+	in.Resolved.Variant.Requires.Inputs[0].Default = def
 	return in
 }
 
-// A variant's default answers an input nobody else does; the site's answer
-// beats it, and the deploy's beats both.
+// The input's default answers it in the derived layer when the site does not;
+// the deploy's answer beats both.
 func TestTheVariantsDefaultIsTheLowestAnswer(t *testing.T) {
 	for name, c := range map[string]struct {
 		site, form map[string]any
 		want       string
 		layer      string
 	}{
-		"the default alone":       {want: "tuned.svc:50051", layer: values.LayerCatalog},
+		"the default alone":       {want: "tuned.svc:50051", layer: values.LayerDerived},
 		"the site over it":        {site: map[string]any{masterPath: "site.svc:50051"}, want: "site.svc:50051", layer: values.LayerDerived},
 		"the deploy over the two": {site: map[string]any{masterPath: "site.svc:50051"}, form: map[string]any{"master": "mine.svc:50051"}, want: "mine.svc:50051", layer: values.LayerForm},
 	} {

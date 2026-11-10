@@ -22,6 +22,8 @@ type Input struct {
 	Pattern string `yaml:"pattern,omitempty" json:"pattern,omitempty"`
 	// Example is the form's placeholder and what catalog CI renders with; never deployed.
 	Example any `yaml:"example" json:"example"`
+	// Default answers the input when the site profile does not.
+	Default any `yaml:"default,omitempty" json:"default,omitempty"`
 }
 
 const (
@@ -92,7 +94,7 @@ func isInteger(v any) bool {
 	return false
 }
 
-// checkInputs: a value values gives an input is its default, so it must answer it.
+// checkInputs: values leaves every input to compose, which answers it in the derived layer.
 func checkInputs(inputs []Input, vals values.Tree) error {
 	declared := map[string]bool{}
 	for _, in := range inputs {
@@ -110,6 +112,9 @@ func checkInputs(inputs []Input, vals values.Tree) error {
 			return fmt.Errorf("%s: pattern is only for a string input, and this one is %s", where, in.TypeOrDefault())
 		}
 		declared[in.Path] = true
+		if at := setAt(vals, strings.Split(in.Path, ".")); at != "" {
+			return fmt.Errorf("%s: values.%s sets it; give the value as the input's default", where, at)
+		}
 		if in.Pattern != "" {
 			if _, err := in.pattern(); err != nil {
 				return fmt.Errorf("%s: %w", where, err)
@@ -121,12 +126,8 @@ func checkInputs(inputs []Input, vals values.Tree) error {
 		if err := in.Check(in.Example); err != nil {
 			return fmt.Errorf("%s: example %w", where, err)
 		}
-		def, ok, blocked := valueAt(vals, strings.Split(in.Path, "."))
-		if blocked != "" {
-			return fmt.Errorf("%s: values.%s is not a map, so it cannot hold this input", where, blocked)
-		}
-		if ok {
-			if err := in.Check(def); err != nil {
+		if in.Default != nil {
+			if err := in.Check(in.Default); err != nil {
 				return fmt.Errorf("%s: default %w", where, err)
 			}
 		}
@@ -134,16 +135,16 @@ func checkInputs(inputs []Input, vals values.Tree) error {
 	return nil
 }
 
-// valueAt is what vals holds at keys, or the prefix where a non-map is in the way.
-func valueAt(vals values.Tree, keys []string) (v any, ok bool, blocked string) {
+// setAt is where vals already says something about keys: the value, under it, or a scalar above it.
+func setAt(vals values.Tree, keys []string) string {
 	node := map[string]any(vals)
 	for i, k := range keys {
 		next, ok := node[k]
 		if !ok {
-			return nil, false, ""
+			return ""
 		}
 		if i == len(keys)-1 {
-			return next, true, ""
+			return strings.Join(keys, ".")
 		}
 		switch m := next.(type) {
 		case map[string]any:
@@ -151,8 +152,8 @@ func valueAt(vals values.Tree, keys []string) (v any, ok bool, blocked string) {
 		case values.Tree:
 			node = m
 		default:
-			return nil, false, strings.Join(keys[:i+1], ".")
+			return strings.Join(keys[:i+1], ".")
 		}
 	}
-	return nil, false, ""
+	return ""
 }

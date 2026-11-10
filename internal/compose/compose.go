@@ -385,13 +385,16 @@ func applyDefaults(site, derived, base values.Tree, in Input) error {
 	return nil
 }
 
-// applyInputs puts the site's answers in the derived layer: over the variant's
-// defaults, unlike the other derived values, and under the form's overrides.
+// applyInputs puts each input's answer in the derived layer, under the form's
+// overrides: the site's, else the input's default.
 func applyInputs(derived, site values.Tree, in Input) error {
 	for _, input := range in.Resolved.Variant.Requires.Inputs {
 		answer, ok, err := in.Profile.InputAnswer(input.Path, in.Resolved.Source.HF, in.Resolved.Model)
 		if err != nil {
 			return err
+		}
+		if !ok {
+			answer, ok = input.Default, input.Default != nil
 		}
 		if !ok {
 			continue
@@ -406,8 +409,7 @@ func applyInputs(derived, site values.Tree, in Input) error {
 	return nil
 }
 
-// checkInputs reads the composed values, so an answer from any layer counts, the
-// variant's default among them.
+// checkInputs reads the composed values, so an answer from any layer counts.
 func checkInputs(inputs []catalog.Input, composed values.Tree) error {
 	var missing []string
 	for _, input := range inputs {
