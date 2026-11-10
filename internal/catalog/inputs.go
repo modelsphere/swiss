@@ -92,9 +92,6 @@ func isInteger(v any) bool {
 	return false
 }
 
-// Unanswered is "" as well as nil: "" is what variants wrote for a value they could not know.
-func Unanswered(v any) bool { return v == nil || v == "" }
-
 // checkInputs: a value values gives an input is its default, so it must answer it.
 func checkInputs(inputs []Input, vals values.Tree) error {
 	declared := map[string]bool{}
@@ -124,11 +121,11 @@ func checkInputs(inputs []Input, vals values.Tree) error {
 		if err := in.Check(in.Example); err != nil {
 			return fmt.Errorf("%s: example %w", where, err)
 		}
-		def, blocked := valueAt(vals, strings.Split(in.Path, "."))
+		def, ok, blocked := valueAt(vals, strings.Split(in.Path, "."))
 		if blocked != "" {
 			return fmt.Errorf("%s: values.%s is not a map, so it cannot hold this input", where, blocked)
 		}
-		if !Unanswered(def) {
+		if ok {
 			if err := in.Check(def); err != nil {
 				return fmt.Errorf("%s: default %w", where, err)
 			}
@@ -138,15 +135,15 @@ func checkInputs(inputs []Input, vals values.Tree) error {
 }
 
 // valueAt is what vals holds at keys, or the prefix where a non-map is in the way.
-func valueAt(vals values.Tree, keys []string) (any, string) {
+func valueAt(vals values.Tree, keys []string) (v any, ok bool, blocked string) {
 	node := map[string]any(vals)
 	for i, k := range keys {
 		next, ok := node[k]
 		if !ok {
-			return nil, ""
+			return nil, false, ""
 		}
 		if i == len(keys)-1 {
-			return next, ""
+			return next, true, ""
 		}
 		switch m := next.(type) {
 		case map[string]any:
@@ -154,8 +151,8 @@ func valueAt(vals values.Tree, keys []string) (any, string) {
 		case values.Tree:
 			node = m
 		default:
-			return nil, strings.Join(keys[:i+1], ".")
+			return nil, false, strings.Join(keys[:i+1], ".")
 		}
 	}
-	return nil, ""
+	return nil, false, ""
 }

@@ -412,7 +412,7 @@ func checkInputs(inputs []catalog.Input, composed values.Tree) error {
 	var missing []string
 	for _, input := range inputs {
 		v, ok := values.Get(composed, input.Path)
-		if !ok || catalog.Unanswered(v) {
+		if !ok || v == nil {
 			missing = append(missing, fmt.Sprintf("%s (%s)", input.Path, input.Title))
 			continue
 		}

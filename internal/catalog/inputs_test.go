@@ -29,14 +29,13 @@ func inputVariant(inputs []Input, vals values.Tree) Variant {
 // The same rules as the catalog's validator (hack/lib/inputs.js), because the
 // catalog is untrusted where it is used.
 func TestAnInputsDefaultAndExampleAreAnswers(t *testing.T) {
-	for _, def := range []any{nil, "", "mc.svc:50051"} {
-		mooncake := map[string]any{"protocol": "rdma"}
-		if def != nil {
-			mooncake["master"] = def
-		}
+	for name, mooncake := range map[string]map[string]any{
+		"no default":   {"protocol": "rdma"},
+		"with default": {"protocol": "rdma", "master": "mc.svc:50051"},
+	} {
 		ok := inputVariant([]Input{mooncakeMaster}, values.Tree{"storageKVOffload": map[string]any{"enabled": true, "mooncake": mooncake}})
 		if err := ok.validate(); err != nil {
-			t.Errorf("default %q: %v", def, err)
+			t.Errorf("%s: %v", name, err)
 		}
 	}
 	one := func(in Input) []Input { return []Input{in} }
@@ -46,6 +45,8 @@ func TestAnInputsDefaultAndExampleAreAnswers(t *testing.T) {
 		want string
 	}{
 		"default off pattern": {inputVariant(one(mooncakeMaster), values.Tree{"storageKVOffload": map[string]any{"mooncake": map[string]any{"master": "no-port"}}}), `default "no-port" does not match`},
+		"a blank default":     {inputVariant(one(mooncakeMaster), values.Tree{"storageKVOffload": map[string]any{"mooncake": map[string]any{"master": ""}}}), `default "" does not match`},
+		"a null default":      {inputVariant(one(mooncakeMaster), values.Tree{"storageKVOffload": map[string]any{"mooncake": map[string]any{"master": nil}}}), "default <nil> is not a string"},
 		"default of a type":   {inputVariant(one(Input{Path: "a.b", Title: "t", Type: InputInteger, Example: 1}), values.Tree{"a": map[string]any{"b": "8"}}), "default 8 is not an integer"},
 		"a non-map above it":  {inputVariant(one(mooncakeMaster), values.Tree{"storageKVOffload": map[string]any{"mooncake": "off"}}), "values.storageKVOffload.mooncake is not a map"},
 		"declared twice":      {inputVariant([]Input{mooncakeMaster, mooncakeMaster}, nil), "declared twice"},

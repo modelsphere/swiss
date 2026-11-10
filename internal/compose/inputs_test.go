@@ -67,14 +67,10 @@ func TestAnUnansweredInputRefusesThePlan(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "input storageKVOffload.mooncake.master (Mooncake master) is not set") {
 		t.Fatalf("want a refusal naming the input, got %v", err)
 	}
-	// "" is no answer, from the deploy or as the variant's default.
+	// "" is checked like any answer, and fails the pattern.
 	in.Overrides = values.Tree{"storageKVOffload": map[string]any{"mooncake": map[string]any{"master": ""}}}
-	if _, err := Compose(in); err == nil || !strings.Contains(err.Error(), "is not set") {
+	if _, err := Compose(in); err == nil || !strings.Contains(err.Error(), `"" does not match`) {
 		t.Fatalf("an empty answer was taken: %v", err)
-	}
-	in = withDefault(inputsInput(), "")
-	if _, err := Compose(in); err == nil || !strings.Contains(err.Error(), "is not set") {
-		t.Fatalf("an empty default was taken: %v", err)
 	}
 }
 
