@@ -92,7 +92,10 @@ func isInteger(v any) bool {
 	return false
 }
 
-// checkInputs: values leaves every input unset, since an input with a default is not one.
+// Unanswered is "" as well as nil: "" is what variants wrote for a value they could not know.
+func Unanswered(v any) bool { return v == nil || v == "" }
+
+// checkInputs: a value values gives an input is its default, so it must answer it.
 func checkInputs(inputs []Input, vals values.Tree) error {
 	declared := map[string]bool{}
 	for _, in := range inputs {
@@ -110,9 +113,6 @@ func checkInputs(inputs []Input, vals values.Tree) error {
 			return fmt.Errorf("%s: pattern is only for a string input, and this one is %s", where, in.TypeOrDefault())
 		}
 		declared[in.Path] = true
-		if at := setAt(vals, strings.Split(in.Path, ".")); at != "" {
-			return fmt.Errorf("%s: values.%s sets it; values leaves an input unset, for the deploy to answer", where, at)
-		}
 		if in.Pattern != "" {
 			if _, err := in.pattern(); err != nil {
 				return fmt.Errorf("%s: %w", where, err)
@@ -124,20 +124,29 @@ func checkInputs(inputs []Input, vals values.Tree) error {
 		if err := in.Check(in.Example); err != nil {
 			return fmt.Errorf("%s: example %w", where, err)
 		}
+		def, blocked := valueAt(vals, strings.Split(in.Path, "."))
+		if blocked != "" {
+			return fmt.Errorf("%s: values.%s is not a map, so it cannot hold this input", where, blocked)
+		}
+		if !Unanswered(def) {
+			if err := in.Check(def); err != nil {
+				return fmt.Errorf("%s: default %w", where, err)
+			}
+		}
 	}
 	return nil
 }
 
-// setAt is where vals already says something about keys: the value, under it, or a scalar above it.
-func setAt(vals values.Tree, keys []string) string {
+// valueAt is what vals holds at keys, or the prefix where a non-map is in the way.
+func valueAt(vals values.Tree, keys []string) (any, string) {
 	node := map[string]any(vals)
 	for i, k := range keys {
 		next, ok := node[k]
 		if !ok {
-			return ""
+			return nil, ""
 		}
 		if i == len(keys)-1 {
-			return strings.Join(keys, ".")
+			return next, ""
 		}
 		switch m := next.(type) {
 		case map[string]any:
@@ -145,8 +154,8 @@ func setAt(vals values.Tree, keys []string) string {
 		case values.Tree:
 			node = m
 		default:
-			return strings.Join(keys[:i+1], ".")
+			return nil, strings.Join(keys[:i+1], ".")
 		}
 	}
-	return ""
+	return nil, ""
 }

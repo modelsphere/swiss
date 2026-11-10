@@ -67,10 +67,46 @@ func TestAnUnansweredInputRefusesThePlan(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "input storageKVOffload.mooncake.master (Mooncake master) is not set") {
 		t.Fatalf("want a refusal naming the input, got %v", err)
 	}
-	// The empty string a variant wrote before it could declare an input is no answer either.
+	// "" is no answer, from the deploy or as the variant's default.
 	in.Overrides = values.Tree{"storageKVOffload": map[string]any{"mooncake": map[string]any{"master": ""}}}
 	if _, err := Compose(in); err == nil || !strings.Contains(err.Error(), "is not set") {
 		t.Fatalf("an empty answer was taken: %v", err)
+	}
+	in = withDefault(inputsInput(), "")
+	if _, err := Compose(in); err == nil || !strings.Contains(err.Error(), "is not set") {
+		t.Fatalf("an empty default was taken: %v", err)
+	}
+}
+
+func withDefault(in Input, def any) Input {
+	in.Resolved.Variant.Values["storageKVOffload"].(map[string]any)["mooncake"].(map[string]any)["master"] = def
+	return in
+}
+
+// A variant's default answers an input nobody else does; the site's answer
+// beats it, and the deploy's beats both.
+func TestTheVariantsDefaultIsTheLowestAnswer(t *testing.T) {
+	for name, c := range map[string]struct {
+		site, form map[string]any
+		want       string
+		layer      string
+	}{
+		"the default alone":       {want: "tuned.svc:50051", layer: values.LayerCatalog},
+		"the site over it":        {site: map[string]any{masterPath: "site.svc:50051"}, want: "site.svc:50051", layer: values.LayerDerived},
+		"the deploy over the two": {site: map[string]any{masterPath: "site.svc:50051"}, form: map[string]any{"master": "mine.svc:50051"}, want: "mine.svc:50051", layer: values.LayerForm},
+	} {
+		in := withDefault(inputsInput(), "tuned.svc:50051")
+		in.Profile.Features.Inputs = c.site
+		if c.form != nil {
+			in.Overrides = values.Tree{"storageKVOffload": map[string]any{"mooncake": c.form}}
+		}
+		p, err := Compose(in)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got, _ := values.Get(p.Values(), masterPath); got != c.want || p.LayerOf(masterPath) != c.layer {
+			t.Errorf("%s: %s = %v from %s, want %s from %s", name, masterPath, got, p.LayerOf(masterPath), c.want, c.layer)
+		}
 	}
 }
 

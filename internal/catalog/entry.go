@@ -85,7 +85,7 @@ type Requires struct {
 	GPUProduct      []string `yaml:"gpuProduct,omitempty" json:"gpuProduct,omitempty"`
 	MinGPUMemoryGiB float64  `yaml:"minGpuMemoryGiB,omitempty" json:"minGpuMemoryGiB,omitempty"`
 	RDMA            bool     `yaml:"rdma,omitempty" json:"rdma,omitempty"`
-	// Inputs are chart values the variant leaves to the deploy.
+	// Inputs are chart values the deploy is asked for. values may give one a default.
 	Inputs []Input `yaml:"inputs,omitempty" json:"inputs,omitempty"`
 }
 

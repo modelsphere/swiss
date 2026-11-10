@@ -28,10 +28,16 @@ func inputVariant(inputs []Input, vals values.Tree) Variant {
 
 // The same rules as the catalog's validator (hack/lib/inputs.js), because the
 // catalog is untrusted where it is used.
-func TestAnInputIsLeftToTheDeploy(t *testing.T) {
-	ok := inputVariant([]Input{mooncakeMaster}, values.Tree{"storageKVOffload": map[string]any{"enabled": true, "mooncake": map[string]any{"protocol": "rdma"}}})
-	if err := ok.validate(); err != nil {
-		t.Fatal(err)
+func TestAnInputsDefaultAndExampleAreAnswers(t *testing.T) {
+	for _, def := range []any{nil, "", "mc.svc:50051"} {
+		mooncake := map[string]any{"protocol": "rdma"}
+		if def != nil {
+			mooncake["master"] = def
+		}
+		ok := inputVariant([]Input{mooncakeMaster}, values.Tree{"storageKVOffload": map[string]any{"enabled": true, "mooncake": mooncake}})
+		if err := ok.validate(); err != nil {
+			t.Errorf("default %q: %v", def, err)
+		}
 	}
 	one := func(in Input) []Input { return []Input{in} }
 	at := func(in Input, edit func(*Input)) Input { edit(&in); return in }
@@ -39,8 +45,9 @@ func TestAnInputIsLeftToTheDeploy(t *testing.T) {
 		v    Variant
 		want string
 	}{
-		"values sets it":      {inputVariant(one(mooncakeMaster), values.Tree{"storageKVOffload": map[string]any{"mooncake": map[string]any{"master": ""}}}), "values.storageKVOffload.mooncake.master sets it"},
-		"a non-map above it":  {inputVariant(one(mooncakeMaster), values.Tree{"storageKVOffload": map[string]any{"mooncake": "off"}}), "values.storageKVOffload.mooncake sets it"},
+		"default off pattern": {inputVariant(one(mooncakeMaster), values.Tree{"storageKVOffload": map[string]any{"mooncake": map[string]any{"master": "no-port"}}}), `default "no-port" does not match`},
+		"default of a type":   {inputVariant(one(Input{Path: "a.b", Title: "t", Type: InputInteger, Example: 1}), values.Tree{"a": map[string]any{"b": "8"}}), "default 8 is not an integer"},
+		"a non-map above it":  {inputVariant(one(mooncakeMaster), values.Tree{"storageKVOffload": map[string]any{"mooncake": "off"}}), "values.storageKVOffload.mooncake is not a map"},
 		"declared twice":      {inputVariant([]Input{mooncakeMaster, mooncakeMaster}, nil), "declared twice"},
 		"the model path":      {inputVariant(one(Input{Path: "model.localPath", Title: "p", Example: "/m"}), nil), "never an input"},
 		"not a path":          {inputVariant(one(at(mooncakeMaster, func(i *Input) { i.Path = "a..b" })), nil), "not a dotted chart path"},

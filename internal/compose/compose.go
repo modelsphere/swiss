@@ -119,7 +119,7 @@ func Compose(in Input) (*plan.Plan, error) {
 	if err := applyDefaults(siteVals, derivedVals, base, in); err != nil {
 		return nil, err
 	}
-	if err := applyInputs(derivedVals, base, in); err != nil {
+	if err := applyInputs(derivedVals, siteVals, in); err != nil {
 		return nil, err
 	}
 	if res, ok := values.Get(derivedVals, "model.gpuResource"); ok {
@@ -385,8 +385,9 @@ func applyDefaults(site, derived, base values.Tree, in Input) error {
 	return nil
 }
 
-// applyInputs puts the site's answers in the derived layer, under the form's overrides.
-func applyInputs(derived, base values.Tree, in Input) error {
+// applyInputs puts the site's answers in the derived layer: over the variant's
+// defaults, unlike the other derived values, and under the form's overrides.
+func applyInputs(derived, site values.Tree, in Input) error {
 	for _, input := range in.Resolved.Variant.Requires.Inputs {
 		answer, ok, err := in.Profile.InputAnswer(input.Path, in.Resolved.Source.HF, in.Resolved.Model)
 		if err != nil {
@@ -395,7 +396,7 @@ func applyInputs(derived, base values.Tree, in Input) error {
 		if !ok {
 			continue
 		}
-		if _, set := values.Get(base, input.Path); set {
+		if _, set := values.Get(site, input.Path); set {
 			continue
 		}
 		if err := values.Set(derived, input.Path, answer); err != nil {
@@ -405,13 +406,13 @@ func applyInputs(derived, base values.Tree, in Input) error {
 	return nil
 }
 
-// checkInputs reads the composed values, so an answer from any layer counts. "" is no
-// answer: it is what variants wrote before they could declare an input.
+// checkInputs reads the composed values, so an answer from any layer counts, the
+// variant's default among them.
 func checkInputs(inputs []catalog.Input, composed values.Tree) error {
 	var missing []string
 	for _, input := range inputs {
 		v, ok := values.Get(composed, input.Path)
-		if !ok || v == nil || v == "" {
+		if !ok || catalog.Unanswered(v) {
 			missing = append(missing, fmt.Sprintf("%s (%s)", input.Path, input.Title))
 			continue
 		}
