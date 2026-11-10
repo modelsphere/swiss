@@ -748,6 +748,10 @@ paths:
         the form layer, model and variant, and only what the request names moves.
         With `reuseSource: true`, it instead reads the live LLMService plan and
         merges arbitrary form overrides and optional edit values, without resolving a catalog.
+
+        Each of the variant's `inputs` is answered in the `derived` layer by the
+        site profile's `inputs`, else the input's `default`; `overrides` go over
+        it. A plan that leaves one without a valid answer is 400.
       operationId: composePlan
       requestBody:
         required: true
@@ -1788,6 +1792,17 @@ components:
         extra:
           type: object
           description: Values every release on this site gets, as the site layer.
+        inputs:
+          type: object
+          description: |
+            Answers to variants' `inputs`, by each input's key. Unlike `extra`, an
+            answer reaches only a variant that declares the key, in the `derived`
+            layer. A string may use `model.pathTemplate`'s placeholders
+            (`{{hf}}`, `{{org}}`, `{{name}}`, `{{model}}`). A key `extra` also sets is
+            refused.
+          additionalProperties: { type: [string, number, boolean] }
+          examples:
+            - storageKVOffload.mooncake.master: mooncake-master.svc:50051
 
     Secrets:
       type: object
@@ -1824,6 +1839,19 @@ components:
         gpuProduct: { type: array, items: { type: string } }
         minGpuMemoryGiB: { type: number }
         rdma: { type: boolean }
+
+    Input:
+      type: object
+      description: A chart value every deploy must answer. Answered in the `derived` layer by the site profile's `inputs`, else `default`; a deploy's overrides go over it.
+      required: [key, title, example]
+      properties:
+        key: { type: string, description: "The chart value's dotted key.", examples: [storageKVOffload.mooncake.master] }
+        title: { type: string }
+        description: { type: string }
+        type: { type: string, enum: [string, integer, boolean], default: string }
+        pattern: { type: string, description: "A string answer matches it, whole." }
+        example: { type: [string, integer, boolean], description: "The form's placeholder; never deployed." }
+        default: { type: [string, integer, boolean], description: "The answer when the site profile has none." }
 
     ModelVariant:
       type: object
@@ -1907,6 +1935,7 @@ components:
             tag: { type: string }
             digest: { type: string }
         requires: { $ref: "#/components/schemas/Requires" }
+        inputs: { type: array, items: { $ref: "#/components/schemas/Input" } }
         values: { type: object, description: "The catalog layer's chart values." }
         version: { type: string }
         digest: { type: string, description: "sha256 of the file this version pins." }

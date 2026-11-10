@@ -49,15 +49,17 @@ type Source struct {
 // together, which is why they are one object rather than independent form
 // fields: nothing should be able to select --tp-size=8 and a 2-GPU node.
 type Variant struct {
-	ID          string      `yaml:"id" json:"id"`
-	Description string      `yaml:"description,omitempty" json:"description,omitempty"`
-	Link        string      `yaml:"link,omitempty" json:"link,omitempty"`
-	Default     bool        `yaml:"default,omitempty" json:"default,omitempty"`
-	Engine      string      `yaml:"engine" json:"engine"`
-	Chart       Chart       `yaml:"chart" json:"chart"`
-	Image       *Image      `yaml:"image,omitempty" json:"image,omitempty"`
-	Requires    Requires    `yaml:"requires" json:"requires"`
-	Values      values.Tree `yaml:"values,omitempty" json:"values,omitempty"`
+	ID          string   `yaml:"id" json:"id"`
+	Description string   `yaml:"description,omitempty" json:"description,omitempty"`
+	Link        string   `yaml:"link,omitempty" json:"link,omitempty"`
+	Default     bool     `yaml:"default,omitempty" json:"default,omitempty"`
+	Engine      string   `yaml:"engine" json:"engine"`
+	Chart       Chart    `yaml:"chart" json:"chart"`
+	Image       *Image   `yaml:"image,omitempty" json:"image,omitempty"`
+	Requires    Requires `yaml:"requires" json:"requires"`
+	// Inputs are chart values every deploy must answer.
+	Inputs []Input     `yaml:"inputs,omitempty" json:"inputs,omitempty"`
+	Values values.Tree `yaml:"values,omitempty" json:"values,omitempty"`
 }
 
 // Chart carries a name and a version, never a repository: a public catalog
