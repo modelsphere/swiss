@@ -1,6 +1,7 @@
 package compose
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -636,11 +637,12 @@ func TestComposeGPUResource(t *testing.T) {
 }
 
 // Product affinity is derived, so the catalog's or the site's own required
-// node affinity stands, and the form still overrides it.
+// node affinity stands; the form's own terms carry it instead.
 func TestComposeGPUNodeSelectorTerms(t *testing.T) {
 	const path = "affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms"
-	terms := []any{values.Tree{"matchExpressions": []any{values.Tree{"key": "k", "operator": "In", "values": []any{"p"}}}}}
-	theirs := []any{"theirs"}
+	pin := values.Tree{"key": "k", "operator": "In", "values": []any{"p"}}
+	terms := []any{values.Tree{"matchExpressions": []any{pin}}}
+	theirs := values.Tree{"key": "storage", "operator": "In", "values": []any{"true"}}
 
 	in := testInput()
 	in.GPUNodeSelectorTerms = terms
@@ -656,7 +658,7 @@ func TestComposeGPUNodeSelectorTerms(t *testing.T) {
 		in := testInput()
 		in.GPUNodeSelectorTerms = terms
 		tree := values.Tree{}
-		if err := values.Set(tree, path, theirs); err != nil {
+		if err := values.Set(tree, path, []any{values.Tree{"matchExpressions": []any{theirs}}}); err != nil {
 			t.Fatal(err)
 		}
 		if layer == "catalog" {
@@ -671,10 +673,42 @@ func TestComposeGPUNodeSelectorTerms(t *testing.T) {
 		if got := p.LayerOf(path); got != layer {
 			t.Errorf("%s set terms, but they are %q's", layer, got)
 		}
-		if _, ok := p.Layers[values.LayerDerived]; ok && layer == "catalog" {
-			if _, set := values.Get(p.Layers[values.LayerDerived], path); set {
-				t.Error("derived must yield to the catalog's own terms")
-			}
+		if _, set := values.Get(p.Layers[values.LayerDerived], path); set {
+			t.Errorf("%s set terms, but derived set them too", layer)
 		}
+		got, _ := values.Get(p.Values(), path)
+		want := []any{values.Tree{"matchExpressions": []any{theirs}}}
+		if layer == "form" {
+			want = []any{values.Tree{"matchExpressions": []any{theirs, pin}}}
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s set terms: got %v, want %v", layer, got, want)
+		}
+	}
+}
+
+func TestAndTerms(t *testing.T) {
+	expr := func(key, op string, v ...any) values.Tree {
+		return values.Tree{"key": key, "operator": op, "values": v}
+	}
+	term := func(e ...any) values.Tree { return values.Tree{"matchExpressions": e} }
+	pin := []any{term(expr("gpu", "In", "H800"))}
+
+	if got := AndTerms(nil, pin); !reflect.DeepEqual(got, pin) {
+		t.Errorf("no terms: got %v, want the pin", got)
+	}
+	terms := []any{
+		term(expr("storage", "In", "true")),
+		term(expr("gpu", "In", "H100"), expr("gpu", "NotIn", "H800-bad")),
+	}
+	want := []any{
+		term(expr("storage", "In", "true"), expr("gpu", "In", "H800")),
+		term(expr("gpu", "In", "H800"), expr("gpu", "NotIn", "H800-bad")),
+	}
+	if got := AndTerms(terms, pin); !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+	if n := len(terms[0].(values.Tree)["matchExpressions"].([]any)); n != 1 {
+		t.Errorf("the terms passed in were changed: %v", terms)
 	}
 }

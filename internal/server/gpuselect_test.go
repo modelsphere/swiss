@@ -62,6 +62,34 @@ func TestGPUProductsKeepAPreferredAffinityRule(t *testing.T) {
 	}
 }
 
+// The form's own required term, a preset's say, holds beside the products:
+// terms are ORed, so the product expression goes into it rather than beside it.
+func TestGPUProductsAreANDedIntoTheFormsTerms(t *testing.T) {
+	srv, _ := deployServer(t, true)
+	storage := map[string]any{"key": "storage", "operator": "In", "values": []any{"true"}}
+	code, p := post(t, srv, "/api/plans", map[string]any{
+		"model": "qwen3.6-35b-a3b", "serviceId": "r",
+		"gpuProducts": []string{"NVIDIA-H800"},
+		"overrides": map[string]any{
+			"affinity": map[string]any{"nodeAffinity": map[string]any{"requiredDuringSchedulingIgnoredDuringExecution": map[string]any{
+				"nodeSelectorTerms": []any{map[string]any{"matchExpressions": []any{storage}}},
+			}}},
+		},
+	})
+	if code != 200 {
+		t.Fatalf("status %d: %v", code, p)
+	}
+	na := planValues(p)["affinity"].(map[string]any)["nodeAffinity"].(map[string]any)
+	terms := na["requiredDuringSchedulingIgnoredDuringExecution"].(map[string]any)["nodeSelectorTerms"].([]any)
+	want := []any{map[string]any{"matchExpressions": []any{
+		storage,
+		map[string]any{"key": "nvidia.com/gpu.product", "operator": "In", "values": []any{"NVIDIA-H800"}},
+	}}}
+	if !reflect.DeepEqual(terms, want) {
+		t.Fatalf("got %v, want %v", terms, want)
+	}
+}
+
 func matchExpr(t *testing.T, p map[string]any) map[string]any {
 	t.Helper()
 	na := planValues(p)["affinity"].(map[string]any)["nodeAffinity"].(map[string]any)

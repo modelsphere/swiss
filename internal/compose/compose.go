@@ -9,6 +9,8 @@ package compose
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
@@ -377,12 +379,77 @@ func applyDefaults(site, derived, base values.Tree, in Input) error {
 	}
 	if len(in.GPUNodeSelectorTerms) > 0 {
 		if _, set := values.Get(base, requiredNodeTerms); !set {
-			if err := values.Set(derived, requiredNodeTerms, in.GPUNodeSelectorTerms); err != nil {
+			// The form's own terms replace a derived list, so they carry the pin instead.
+			layer, terms := derived, in.GPUNodeSelectorTerms
+			if have, _ := values.Get(in.Overrides, requiredNodeTerms); len(asList(have)) > 0 {
+				layer, terms = in.Overrides, AndTerms(asList(have), terms)
+			}
+			if err := values.Set(layer, requiredNodeTerms, terms); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+// AndTerms is the nodeSelectorTerms that require both lists: terms are ORed
+// and a term's matchExpressions ANDed, so each pair of terms becomes one. An
+// In expression of pin replaces the same key's In in a term. A term that is
+// not a map is kept as is.
+func AndTerms(terms, pin []any) []any {
+	if len(terms) == 0 {
+		return pin
+	}
+	var out []any
+	for _, t := range terms {
+		tm, ok := asTree(t)
+		if !ok {
+			out = append(out, t)
+			continue
+		}
+		for _, p := range pin {
+			pm, ok := asTree(p)
+			if !ok {
+				continue
+			}
+			exprs := slices.Clone(asList(tm["matchExpressions"]))
+			for _, e := range asList(pm["matchExpressions"]) {
+				exprs = putExpr(exprs, e)
+			}
+			term := maps.Clone(tm)
+			term["matchExpressions"] = exprs
+			out = append(out, term)
+		}
+	}
+	return out
+}
+
+func putExpr(exprs []any, e any) []any {
+	em, ok := asTree(e)
+	if ok && em["operator"] == "In" {
+		for i, x := range exprs {
+			if xm, ok := asTree(x); ok && xm["key"] == em["key"] && xm["operator"] == "In" {
+				exprs[i] = e
+				return exprs
+			}
+		}
+	}
+	return append(exprs, e)
+}
+
+func asList(v any) []any {
+	l, _ := v.([]any)
+	return l
+}
+
+func asTree(v any) (values.Tree, bool) {
+	switch m := v.(type) {
+	case values.Tree:
+		return m, true
+	case map[string]any:
+		return m, true
+	}
+	return nil, false
 }
 
 // applyInputs puts each input's answer in the derived layer, over the variant's
