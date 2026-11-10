@@ -34,8 +34,7 @@ const (
 
 var inputKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*(\.[A-Za-z_][A-Za-z0-9_-]*)*$`)
 
-// ValidInputKey is shared with the site profile, which keys its answers the same way.
-func ValidInputKey(k string) bool { return inputKey.MatchString(k) }
+func validInputKey(k string) bool { return inputKey.MatchString(k) }
 
 func (i Input) TypeOrDefault() string {
 	if i.Type == "" {
@@ -94,13 +93,13 @@ func isInteger(v any) bool {
 	return false
 }
 
-// checkInputs: values leaves every input to compose, which answers it in the derived layer.
+// checkInputs: a value values gives an input's key is the base compose's answer overrides.
 func checkInputs(inputs []Input, vals values.Tree) error {
 	declared := map[string]bool{}
 	for _, in := range inputs {
 		where := "inputs " + in.Key
 		switch {
-		case !ValidInputKey(in.Key):
+		case !validInputKey(in.Key):
 			return fmt.Errorf("inputs: key %q is not a dotted chart key", in.Key)
 		case in.Key == "model.localPath":
 			return fmt.Errorf("%s: swiss answers it from the site's model.pathTemplate, so it is never an input", where)
@@ -112,8 +111,8 @@ func checkInputs(inputs []Input, vals values.Tree) error {
 			return fmt.Errorf("%s: pattern is only for a string input, and this one is %s", where, in.TypeOrDefault())
 		}
 		declared[in.Key] = true
-		if at := setAt(vals, strings.Split(in.Key, ".")); at != "" {
-			return fmt.Errorf("%s: values.%s sets it; give the value as the input's default", where, at)
+		if at := setAt(vals, strings.Split(in.Key, ".")); at != "" && at != in.Key {
+			return fmt.Errorf("%s: values.%s is not a map, so the answer has no place to go", where, at)
 		}
 		if in.Pattern != "" {
 			if _, err := in.pattern(); err != nil {

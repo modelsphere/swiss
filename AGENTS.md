@@ -4,6 +4,13 @@
 
 swiss is the backend server and cli client, changelog are made from that perspective, UI things left to console, not here.
 
+## Before calling a change done
+
+- **New feature:** what real problem does it solve that the current code can't? If you can't name one, don't add it.
+- **Scope:** is it over-designed, or guarding edge cases nobody asked about? Prefer the simplest change, and let an existing layer or check handle the rest.
+- **API:** is every API-level change (endpoint, request or response field, site profile key) synced in `docs/openapi.yaml`?
+- **Compatibility:** could it break an older console or an older catalog? swissd runs against both across versions.
+
 ## Comments
 
 - Minimal. Only where the *why* cannot be read off the code.

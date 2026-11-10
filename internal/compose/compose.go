@@ -385,8 +385,8 @@ func applyDefaults(site, derived, base values.Tree, in Input) error {
 	return nil
 }
 
-// applyInputs puts each input's answer in the derived layer, under the form's
-// overrides: the site's, else the input's default.
+// applyInputs puts each input's answer in the derived layer, over the variant's
+// values and under the form's overrides: the site's, else the input's default.
 func applyInputs(derived, site values.Tree, in Input) error {
 	for _, input := range in.Resolved.Variant.Inputs {
 		answer, ok, err := in.Profile.InputAnswer(input.Key, in.Resolved.Source.HF, in.Resolved.Model)
@@ -400,7 +400,7 @@ func applyInputs(derived, site values.Tree, in Input) error {
 			continue
 		}
 		if _, set := values.Get(site, input.Key); set {
-			continue
+			continue // extra wins over an input answer
 		}
 		if err := values.Set(derived, input.Key, answer); err != nil {
 			return err
