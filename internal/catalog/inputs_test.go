@@ -10,7 +10,7 @@ import (
 )
 
 var mooncakeMaster = Input{
-	Path:    "storageKVOffload.mooncake.master",
+	Key:     "storageKVOffload.mooncake.master",
 	Title:   "Mooncake master",
 	Pattern: `[^\s:/]+:[0-9]+`,
 	Example: "mooncake-master.example:50051",
@@ -48,17 +48,17 @@ func TestAnInputsDefaultAndExampleAreAnswers(t *testing.T) {
 		"a non-map above it":  {inputVariant(one(mooncakeMaster), values.Tree{"storageKVOffload": map[string]any{"mooncake": "off"}}), "values.storageKVOffload.mooncake sets it"},
 		"default off pattern": {inputVariant(one(at(mooncakeMaster, func(i *Input) { i.Default = "no-port" })), nil), `default "no-port" does not match`},
 		"a blank default":     {inputVariant(one(at(mooncakeMaster, func(i *Input) { i.Default = "" })), nil), `default "" does not match`},
-		"default of a type":   {inputVariant(one(Input{Path: "a.b", Title: "t", Type: InputInteger, Example: 1, Default: "8"}), nil), "default 8 is not an integer"},
+		"default of a type":   {inputVariant(one(Input{Key: "a.b", Title: "t", Type: InputInteger, Example: 1, Default: "8"}), nil), "default 8 is not an integer"},
 		"declared twice":      {inputVariant([]Input{mooncakeMaster, mooncakeMaster}, nil), "declared twice"},
-		"the model path":      {inputVariant(one(Input{Path: "model.localPath", Title: "p", Example: "/m"}), nil), "never an input"},
-		"not a path":          {inputVariant(one(at(mooncakeMaster, func(i *Input) { i.Path = "a..b" })), nil), "not a dotted chart path"},
+		"the model path":      {inputVariant(one(Input{Key: "model.localPath", Title: "p", Example: "/m"}), nil), "never an input"},
+		"not a key":           {inputVariant(one(at(mooncakeMaster, func(i *Input) { i.Key = "a..b" })), nil), "not a dotted chart key"},
 		"no title":            {inputVariant(one(at(mooncakeMaster, func(i *Input) { i.Title = " " })), nil), "title is required"},
 		"no example":          {inputVariant(one(at(mooncakeMaster, func(i *Input) { i.Example = nil })), nil), "example is required"},
 		"example off pattern": {inputVariant(one(at(mooncakeMaster, func(i *Input) { i.Example = "no-port" })), nil), `example "no-port" does not match`},
 		"pattern compiles":    {inputVariant(one(at(mooncakeMaster, func(i *Input) { i.Pattern = "(" })), nil), "does not compile"},
-		"pattern on integer":  {inputVariant(one(Input{Path: "a.b", Title: "t", Type: InputInteger, Pattern: "[0-9]+", Example: 1}), nil), "only for a string input"},
-		"example of a type":   {inputVariant(one(Input{Path: "a.b", Title: "t", Type: InputInteger, Example: "8"}), nil), "8 is not an integer"},
-		"unknown type":        {inputVariant(one(Input{Path: "a.b", Title: "t", Type: "list", Example: "x"}), nil), `type "list" is not`},
+		"pattern on integer":  {inputVariant(one(Input{Key: "a.b", Title: "t", Type: InputInteger, Pattern: "[0-9]+", Example: 1}), nil), "only for a string input"},
+		"example of a type":   {inputVariant(one(Input{Key: "a.b", Title: "t", Type: InputInteger, Example: "8"}), nil), "8 is not an integer"},
+		"unknown type":        {inputVariant(one(Input{Key: "a.b", Title: "t", Type: "list", Example: "x"}), nil), `type "list" is not`},
 	} {
 		if err := c.v.validate(); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: want an error containing %q, got %v", name, c.want, err)
@@ -68,7 +68,7 @@ func TestAnInputsDefaultAndExampleAreAnswers(t *testing.T) {
 
 // A number read from JSON is a float64: a whole one answers an integer input.
 func TestAnIntegerInputTakesAWholeNumberOfAnyKind(t *testing.T) {
-	port := Input{Path: "a.port", Title: "Port", Type: InputInteger, Example: 1}
+	port := Input{Key: "a.port", Title: "Port", Type: InputInteger, Example: 1}
 	for _, v := range []any{8080, int64(8080), float64(8080)} {
 		if err := port.Check(v); err != nil {
 			t.Errorf("%T %v: %v", v, v, err)
@@ -83,7 +83,7 @@ func TestAnIntegerInputTakesAWholeNumberOfAnyKind(t *testing.T) {
 // no inputs: nothing lists or picks a variant by them.
 func TestV2InputsAreReadFromTheFile(t *testing.T) {
 	raw := []byte("apiVersion: catalog.swiss/v2\nkind: Variant\nmodel: m\nid: a\nversion: 1.0.0\nengine: sglang\nchart: {name: sglang, version: \"0.9.32\"}\n" +
-		"requires:\n  gpus: 1\ninputs:\n  - {path: storageKVOffload.mooncake.master, title: Mooncake master, example: \"h:1\", default: \"d:1\"}\n")
+		"requires:\n  gpus: 1\ninputs:\n  - {key: storageKVOffload.mooncake.master, title: Mooncake master, example: \"h:1\", default: \"d:1\"}\n")
 	f := memFetcher{"models/m/a.yaml": raw}
 	f["index-v2.json"] = []byte(fmt.Sprintf(`{"apiVersion":"catalog.swiss/v2","count":1,"models":[{"name":"m","source":{"hf":"org/m"},"variants":[{"id":"a","version":"1.0.0","path":"models/m/a.yaml","digest":%q,"engine":"sglang","chart":{"name":"sglang","version":"0.9.32"},"requires":{"gpus":1}}]}]}`, contentRef(raw)))
 	c, err := OpenFetcher(context.Background(), f)
@@ -94,7 +94,7 @@ func TestV2InputsAreReadFromTheFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if in := r.Variant.Inputs; len(in) != 1 || in[0].Path != "storageKVOffload.mooncake.master" || in[0].Example != "h:1" || in[0].Default != "d:1" {
+	if in := r.Variant.Inputs; len(in) != 1 || in[0].Key != "storageKVOffload.mooncake.master" || in[0].Example != "h:1" || in[0].Default != "d:1" {
 		t.Errorf("inputs = %+v", in)
 	}
 }

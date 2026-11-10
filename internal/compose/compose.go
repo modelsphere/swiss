@@ -389,7 +389,7 @@ func applyDefaults(site, derived, base values.Tree, in Input) error {
 // overrides: the site's, else the input's default.
 func applyInputs(derived, site values.Tree, in Input) error {
 	for _, input := range in.Resolved.Variant.Inputs {
-		answer, ok, err := in.Profile.InputAnswer(input.Path, in.Resolved.Source.HF, in.Resolved.Model)
+		answer, ok, err := in.Profile.InputAnswer(input.Key, in.Resolved.Source.HF, in.Resolved.Model)
 		if err != nil {
 			return err
 		}
@@ -399,10 +399,10 @@ func applyInputs(derived, site values.Tree, in Input) error {
 		if !ok {
 			continue
 		}
-		if _, set := values.Get(site, input.Path); set {
+		if _, set := values.Get(site, input.Key); set {
 			continue
 		}
-		if err := values.Set(derived, input.Path, answer); err != nil {
+		if err := values.Set(derived, input.Key, answer); err != nil {
 			return err
 		}
 	}
@@ -413,13 +413,13 @@ func applyInputs(derived, site values.Tree, in Input) error {
 func checkInputs(inputs []catalog.Input, composed values.Tree) error {
 	var missing []string
 	for _, input := range inputs {
-		v, ok := values.Get(composed, input.Path)
+		v, ok := values.Get(composed, input.Key)
 		if !ok || v == nil {
-			missing = append(missing, fmt.Sprintf("%s (%s)", input.Path, input.Title))
+			missing = append(missing, fmt.Sprintf("%s (%s)", input.Key, input.Title))
 			continue
 		}
 		if err := input.Check(v); err != nil {
-			return fmt.Errorf("input %s (%s): %w", input.Path, input.Title, err)
+			return fmt.Errorf("input %s (%s): %w", input.Key, input.Title, err)
 		}
 	}
 	switch len(missing) {

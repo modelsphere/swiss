@@ -12,8 +12,8 @@ import (
 // Input is one inputs entry. Its rules repeat the catalog's
 // hack/lib/inputs.js: the catalog is untrusted where it is used.
 type Input struct {
-	// Path is the chart value, dotted: storageKVOffload.mooncake.master.
-	Path        string `yaml:"path" json:"path"`
+	// Key is the chart value's dotted key, as helm --set takes it: storageKVOffload.mooncake.master.
+	Key         string `yaml:"key" json:"key"`
 	Title       string `yaml:"title" json:"title"`
 	Description string `yaml:"description,omitempty" json:"description,omitempty"`
 	// Type is string, integer or boolean. Empty is string.
@@ -32,10 +32,10 @@ const (
 	InputBoolean = "boolean"
 )
 
-var inputPath = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*(\.[A-Za-z_][A-Za-z0-9_-]*)*$`)
+var inputKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*(\.[A-Za-z_][A-Za-z0-9_-]*)*$`)
 
-// ValidInputPath is shared with the site profile, which keys its answers by these paths.
-func ValidInputPath(p string) bool { return inputPath.MatchString(p) }
+// ValidInputKey is shared with the site profile, which keys its answers the same way.
+func ValidInputKey(k string) bool { return inputKey.MatchString(k) }
 
 func (i Input) TypeOrDefault() string {
 	if i.Type == "" {
@@ -98,21 +98,21 @@ func isInteger(v any) bool {
 func checkInputs(inputs []Input, vals values.Tree) error {
 	declared := map[string]bool{}
 	for _, in := range inputs {
-		where := "inputs " + in.Path
+		where := "inputs " + in.Key
 		switch {
-		case !ValidInputPath(in.Path):
-			return fmt.Errorf("inputs: path %q is not a dotted chart path", in.Path)
-		case in.Path == "model.localPath":
+		case !ValidInputKey(in.Key):
+			return fmt.Errorf("inputs: key %q is not a dotted chart key", in.Key)
+		case in.Key == "model.localPath":
 			return fmt.Errorf("%s: swiss answers it from the site's model.pathTemplate, so it is never an input", where)
-		case declared[in.Path]:
+		case declared[in.Key]:
 			return fmt.Errorf("%s: declared twice", where)
 		case strings.TrimSpace(in.Title) == "":
 			return fmt.Errorf("%s: title is required", where)
 		case in.Pattern != "" && in.TypeOrDefault() != InputString:
 			return fmt.Errorf("%s: pattern is only for a string input, and this one is %s", where, in.TypeOrDefault())
 		}
-		declared[in.Path] = true
-		if at := setAt(vals, strings.Split(in.Path, ".")); at != "" {
+		declared[in.Key] = true
+		if at := setAt(vals, strings.Split(in.Key, ".")); at != "" {
 			return fmt.Errorf("%s: values.%s sets it; give the value as the input's default", where, at)
 		}
 		if in.Pattern != "" {

@@ -8,12 +8,12 @@ import (
 	"github.com/modelsphere/swiss/internal/values"
 )
 
-const masterPath = "storageKVOffload.mooncake.master"
+const masterKey = "storageKVOffload.mooncake.master"
 
 func inputsInput() Input {
 	in := testInput()
 	in.Resolved.Variant.Inputs = []catalog.Input{{
-		Path:    masterPath,
+		Key:     masterKey,
 		Title:   "Mooncake master",
 		Pattern: `[^\s:/]+:[0-9]+`,
 		Example: "mooncake-master.example:50051",
@@ -26,15 +26,15 @@ func inputsInput() Input {
 // values under the same section.
 func TestTheSiteAnswersAnInputInTheDerivedLayer(t *testing.T) {
 	in := inputsInput()
-	in.Profile.Inputs = map[string]any{masterPath: "mc-{{model}}.svc:50051"}
+	in.Profile.Inputs = map[string]any{masterKey: "mc-{{model}}.svc:50051"}
 	p, err := Compose(in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := values.Get(p.Values(), masterPath); got != "mc-glm-5.3.svc:50051" {
-		t.Errorf("%s = %v", masterPath, got)
+	if got, _ := values.Get(p.Values(), masterKey); got != "mc-glm-5.3.svc:50051" {
+		t.Errorf("%s = %v", masterKey, got)
 	}
-	if got := p.LayerOf(masterPath); got != values.LayerDerived {
+	if got := p.LayerOf(masterKey); got != values.LayerDerived {
 		t.Errorf("answered by %s, want derived", got)
 	}
 	if got, _ := values.Get(p.Values(), "storageKVOffload.mooncake.protocol"); got != "rdma" {
@@ -45,7 +45,7 @@ func TestTheSiteAnswersAnInputInTheDerivedLayer(t *testing.T) {
 // Level two: the deployer overrides any answer, and needs no site answer to.
 func TestTheDeployOverridesTheSitesAnswer(t *testing.T) {
 	for name, site := range map[string]map[string]any{
-		"over the site's answer": {masterPath: "site.svc:50051"},
+		"over the site's answer": {masterKey: "site.svc:50051"},
 		"with no site answer":    nil,
 	} {
 		in := inputsInput()
@@ -55,8 +55,8 @@ func TestTheDeployOverridesTheSitesAnswer(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if got, _ := values.Get(p.Values(), masterPath); got != "mine.svc:50051" || p.LayerOf(masterPath) != values.LayerForm {
-			t.Errorf("%s: %s = %v from %s, want the deploy's", name, masterPath, got, p.LayerOf(masterPath))
+		if got, _ := values.Get(p.Values(), masterKey); got != "mine.svc:50051" || p.LayerOf(masterKey) != values.LayerForm {
+			t.Errorf("%s: %s = %v from %s, want the deploy's", name, masterKey, got, p.LayerOf(masterKey))
 		}
 	}
 }
@@ -88,8 +88,8 @@ func TestTheVariantsDefaultIsTheLowestAnswer(t *testing.T) {
 		layer      string
 	}{
 		"the default alone":       {want: "tuned.svc:50051", layer: values.LayerDerived},
-		"the site over it":        {site: map[string]any{masterPath: "site.svc:50051"}, want: "site.svc:50051", layer: values.LayerDerived},
-		"the deploy over the two": {site: map[string]any{masterPath: "site.svc:50051"}, form: map[string]any{"master": "mine.svc:50051"}, want: "mine.svc:50051", layer: values.LayerForm},
+		"the site over it":        {site: map[string]any{masterKey: "site.svc:50051"}, want: "site.svc:50051", layer: values.LayerDerived},
+		"the deploy over the two": {site: map[string]any{masterKey: "site.svc:50051"}, form: map[string]any{"master": "mine.svc:50051"}, want: "mine.svc:50051", layer: values.LayerForm},
 	} {
 		in := withDefault(inputsInput(), "tuned.svc:50051")
 		in.Profile.Inputs = c.site
@@ -100,30 +100,30 @@ func TestTheVariantsDefaultIsTheLowestAnswer(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if got, _ := values.Get(p.Values(), masterPath); got != c.want || p.LayerOf(masterPath) != c.layer {
-			t.Errorf("%s: %s = %v from %s, want %s from %s", name, masterPath, got, p.LayerOf(masterPath), c.want, c.layer)
+		if got, _ := values.Get(p.Values(), masterKey); got != c.want || p.LayerOf(masterKey) != c.layer {
+			t.Errorf("%s: %s = %v from %s, want %s from %s", name, masterKey, got, p.LayerOf(masterKey), c.want, c.layer)
 		}
 	}
 }
 
 func TestAnAnswerTheInputDoesNotTakeRefusesThePlan(t *testing.T) {
 	in := inputsInput()
-	in.Profile.Inputs = map[string]any{masterPath: "no-port"}
+	in.Profile.Inputs = map[string]any{masterKey: "no-port"}
 	if _, err := Compose(in); err == nil || !strings.Contains(err.Error(), `"no-port" does not match`) {
 		t.Fatalf("want a refusal quoting the answer, got %v", err)
 	}
 }
 
-// An answer reaches only a variant that declares its path: unlike extra, a
+// An answer reaches only a variant that declares its key: unlike extra, a
 // site answer never lands in a deploy that did not ask.
 func TestASiteAnswerReachesOnlyAVariantThatDeclaresIt(t *testing.T) {
 	in := testInput()
-	in.Profile.Inputs = map[string]any{masterPath: "site.svc:50051"}
+	in.Profile.Inputs = map[string]any{masterKey: "site.svc:50051"}
 	p, err := Compose(in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := values.Get(p.Values(), masterPath); ok {
+	if _, ok := values.Get(p.Values(), masterKey); ok {
 		t.Error("a site answer landed in a variant that declares no input")
 	}
 }

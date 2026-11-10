@@ -17,19 +17,19 @@ func TestInputAnswersFillTheModelPlaceholders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for path, want := range map[string]any{
+	for key, want := range map[string]any{
 		"storageKVOffload.mooncake.master": "mooncake-master.svc:50051",
 		"engineCache.hostPath":             "/data/cache/glm-5.3/zai-org",
 		"service.port":                     8050,
 		"shm.enabled":                      true,
 	} {
-		got, ok, err := p.InputAnswer(path, "zai-org/GLM-5.3", "glm-5.3")
+		got, ok, err := p.InputAnswer(key, "zai-org/GLM-5.3", "glm-5.3")
 		if err != nil || !ok || got != want {
-			t.Errorf("%s = %v (ok %v, err %v), want %v", path, got, ok, err, want)
+			t.Errorf("%s = %v (ok %v, err %v), want %v", key, got, ok, err, want)
 		}
 	}
 	if _, ok, _ := p.InputAnswer("not.answered", "zai-org/GLM-5.3", "glm-5.3"); ok {
-		t.Error("an unanswered path has an answer")
+		t.Error("an unanswered key has an answer")
 	}
 }
 
@@ -49,8 +49,8 @@ func TestAnAnswerThatCouldNeverBeUsedIsRefused(t *testing.T) {
 		"unknown placeholder": {"inputs:\n  a.b: /x/{{release}}\n", "unknown placeholder"},
 		"not a scalar":        {"inputs:\n  a.b: {host: h}\n", "string, integer or boolean"},
 		"no value":            {"inputs:\n  a.b:\n", "string, integer or boolean"},
-		"not a path":          {"inputs:\n  a..b: x\n", "not a dotted chart path"},
-		"extra answers too":   {"extra:\n  a:\n    b: y\ninputs:\n  a.b: x\n", "extra sets the same path"},
+		"not a key":           {"inputs:\n  a..b: x\n", "not a dotted chart key"},
+		"extra answers too":   {"extra:\n  a:\n    b: y\ninputs:\n  a.b: x\n", "extra sets the same key"},
 	} {
 		if _, err := Parse([]byte(inputsHead+c.yaml), "test"); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: want an error containing %q, got %v", name, c.want, err)

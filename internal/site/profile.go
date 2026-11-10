@@ -78,8 +78,8 @@ type Profile struct {
 	// and composes above the catalog.
 	Defaults Defaults `yaml:"defaults,omitempty" json:"defaults"`
 
-	// Inputs answer a variant's inputs by chart path, only for a variant that
-	// declares the path -- unlike extra. Strings take pathTemplate's placeholders.
+	// Inputs answer a variant's inputs by key, only for a variant that declares
+	// the key -- unlike extra. Strings take pathTemplate's placeholders.
 	Inputs map[string]any `yaml:"inputs,omitempty" json:"inputs,omitempty"`
 
 	// Sites are the other clusters' swissd instances, for the nav switcher.
@@ -210,12 +210,12 @@ func (f FeatureDefaults) Resolve() map[string]bool {
 
 // checkInputs refuses an answer that could never be used, or a second answer from extra.
 func checkInputs(inputs map[string]any, extra values.Tree) error {
-	for _, path := range slices.Sorted(maps.Keys(inputs)) {
-		where := fmt.Sprintf("inputs[%q]", path)
-		if !catalog.ValidInputPath(path) {
-			return fmt.Errorf("%s: not a dotted chart path", where)
+	for _, key := range slices.Sorted(maps.Keys(inputs)) {
+		where := fmt.Sprintf("inputs[%q]", key)
+		if !catalog.ValidInputKey(key) {
+			return fmt.Errorf("%s: not a dotted chart key", where)
 		}
-		switch v := inputs[path].(type) {
+		switch v := inputs[key].(type) {
 		case string:
 			if _, err := fill(v, "org/name", "model"); err != nil {
 				return fmt.Errorf("%s: %w", where, err)
@@ -224,16 +224,16 @@ func checkInputs(inputs map[string]any, extra values.Tree) error {
 		default:
 			return fmt.Errorf("%s: an answer is a string, integer or boolean, not %T", where, v)
 		}
-		if _, set := values.Get(extra, path); set {
-			return fmt.Errorf("%s: extra sets the same path; give the one answer here", where)
+		if _, set := values.Get(extra, key); set {
+			return fmt.Errorf("%s: extra sets the same key; give the one answer here", where)
 		}
 	}
 	return nil
 }
 
 // InputAnswer is the site's answer to an input, placeholders filled for this model.
-func (p Profile) InputAnswer(path, hf, model string) (answer any, ok bool, err error) {
-	v, ok := p.Inputs[path]
+func (p Profile) InputAnswer(key, hf, model string) (answer any, ok bool, err error) {
+	v, ok := p.Inputs[key]
 	if !ok {
 		return nil, false, nil
 	}
@@ -243,7 +243,7 @@ func (p Profile) InputAnswer(path, hf, model string) (answer any, ok bool, err e
 	}
 	out, err := fill(s, hf, model)
 	if err != nil {
-		return nil, true, fmt.Errorf("inputs[%q]: %w", path, err)
+		return nil, true, fmt.Errorf("inputs[%q]: %w", key, err)
 	}
 	return out, true, nil
 }
