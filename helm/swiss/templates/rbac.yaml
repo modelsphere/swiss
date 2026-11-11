@@ -219,6 +219,46 @@ subjects:
 {{- if not .Values.rbac.namespaces }}
 {{- fail "rbac.scope is namespaced but rbac.namespaces is empty: swissd would see no releases at all. List the namespaces holding model releases, or set rbac.scope: cluster knowing it grants cluster-wide secret reads." }}
 {{- end }}
+{{- /* Secrets a chart lookups at render time, by name: get is the one verb RBAC
+       can scope to resourceNames, and it is all lookup needs. */}}
+{{- $byNS := dict }}
+{{- range .Values.rbac.lookupSecrets }}
+{{- if not (and .namespace .name) }}
+{{- fail "rbac.lookupSecrets entries need namespace and name" }}
+{{- end }}
+{{- $_ := set $byNS .namespace (append (get $byNS .namespace | default list) .name) }}
+{{- end }}
+{{- range $ns := keys $byNS | sortAlpha }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fullName }}-lookup
+  namespace: {{ $ns }}
+  labels:
+    {{- include "swiss.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: {{ get $byNS $ns | uniq | toJson }}
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fullName }}-lookup
+  namespace: {{ $ns }}
+  labels:
+    {{- include "swiss.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $fullName }}-lookup
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sa }}
+    namespace: {{ $.Release.Namespace }}
+---
+{{- end }}
 {{- range $ns := .Values.rbac.namespaces }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
