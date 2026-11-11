@@ -382,7 +382,8 @@ func (s *Server) handleProbe(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusPreconditionFailed, err.Error())
 		return
 	}
-	url := ep.url("/v1/models")
+	video := p.Engine == catalog.EngineVideo
+	url := ep.url(probePath(p))
 
 	res := probeResult{
 		URL:         url,
@@ -399,11 +400,29 @@ func (s *Server) handleProbe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res.OK = code == http.StatusOK
+	if video {
+		if !res.OK {
+			res.Body = snippet(body)
+		}
+		writeJSON(w, http.StatusOK, res)
+		return
+	}
 	res.Models = modelIDs(body)
 	if !res.OK || len(res.Models) == 0 {
 		res.Body = snippet(body)
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// probePath is what the probe asks the entrypoint for. A video service has no
+// model list; its readiness check is the one call that crosses the whole path,
+// since the router hands /readyz to a job server, which answers 503 while its
+// database is down.
+func probePath(p *plan.Plan) string {
+	if p.Engine == catalog.EngineVideo {
+		return "/readyz"
+	}
+	return "/v1/models"
 }
 
 type chatRequest struct {
@@ -770,22 +789,7 @@ func servedName(p *plan.Plan) string {
 // always there to read: without this check a release with routing off still
 // reported a route, and the status page advertised a URL nothing serves.
 func routeOf(p *plan.Plan) string {
-	if v, ok := values.Get(p.Values(), "modelRoute.enabled"); ok {
-		if on, _ := v.(bool); !on {
-			return ""
-		}
-	}
-	if v, ok := values.Get(p.Values(), "modelRoute.nginx.route"); ok {
-		if s, _ := v.(string); s != "" {
-			return s
-		}
-	}
-	if v, ok := values.Get(p.Values(), "serviceId"); ok {
-		if s, _ := v.(string); s != "" {
-			return s
-		}
-	}
-	return p.Release.Name
+	return plan.RouteOf(p.Values(), p.Release.Name)
 }
 
 func httpGet(ctx context.Context, url string, hdr http.Header) ([]byte, int, error) {

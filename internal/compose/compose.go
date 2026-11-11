@@ -378,6 +378,23 @@ func applyDefaults(site, derived, base values.Tree, in Input) error {
 			}
 		}
 	}
+	// modelRoute.url: a video service hands its download links to end users,
+	// so it has to know its own public address -- the one the status page shows,
+	// <site route.gateway>/<route>. Only for video: the LLM charts have no use
+	// for it, and their schema refuses a key it does not know.
+	if in.Resolved.Variant.IsVideo() {
+		merged := values.Tree{}
+		for _, layer := range []values.Tree{base, derived, in.Overrides, in.Edits} {
+			values.Merge(merged, layer, "", nil)
+		}
+		if _, set := values.Get(merged, "modelRoute.url"); !set {
+			if url := in.Profile.Route.ModelURL(plan.RouteOf(merged, in.Release)); url != "" {
+				if err := values.Set(derived, "modelRoute.url", url); err != nil {
+					return err
+				}
+			}
+		}
+	}
 	if len(in.GPUNodeSelectorTerms) > 0 {
 		if _, set := values.Get(base, requiredNodeTerms); !set {
 			// The form's own terms replace a derived list, so they carry the pin instead.

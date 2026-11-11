@@ -755,3 +755,56 @@ func TestVideoTakesNoCacheButKeepsTheModelFields(t *testing.T) {
 		t.Errorf("plan engine/chart = %s/%s", p.Engine, p.Chart.Name)
 	}
 }
+
+func videoRouted() Input {
+	in := videoInput()
+	in.Profile.Route = site.Route{Enabled: true, Gateway: "https://gw.example/"}
+	in.Overrides = values.Tree{"serviceId": "h3"}
+	return in
+}
+
+// A video service hands out download links, so it is told the address the
+// status page shows for it: the site gateway plus its route.
+func TestVideoIsToldItsPublicURL(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(*Input)
+		want any
+	}{
+		{"serviceId names the route", func(*Input) {}, "https://gw.example/h3"},
+		{"an explicit route wins", func(in *Input) {
+			in.Overrides["modelRoute"] = values.Tree{"nginx": values.Tree{"route": "video"}}
+		}, "https://gw.example/video"},
+		{"no gateway, no url", func(in *Input) { in.Profile.Route.Gateway = "" }, nil},
+		{"routing off, no url", func(in *Input) { in.Overrides["modelRoute"] = values.Tree{"enabled": false} }, nil},
+		{"the form's url stands", func(in *Input) {
+			in.Overrides["modelRoute"] = values.Tree{"url": "https://cdn.example/h3"}
+		}, "https://cdn.example/h3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := videoRouted()
+			tc.edit(&in)
+			p, err := Compose(in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, _ := values.Get(p.Values(), "modelRoute.url")
+			if got != tc.want {
+				t.Fatalf("modelRoute.url = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// The LLM charts refuse a key their schema does not know.
+func TestLLMIsNotToldAPublicURL(t *testing.T) {
+	in := testInput()
+	in.Profile.Route = site.Route{Enabled: true, Gateway: "https://gw.example"}
+	p, err := Compose(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := values.Get(p.Values(), "modelRoute.url"); ok {
+		t.Fatalf("an LLM plan must carry no modelRoute.url, got %v", v)
+	}
+}
