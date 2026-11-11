@@ -274,8 +274,11 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 		case len(terms) == 0:
 			warnings = append(warnings, fmt.Sprintf("no node label to match GPU products %s on for %s, so the deploy is not pinned to them -- list it with a labelKey in the site profile's nodes.gpus", strings.Join(products, ", "), gpuRes))
 		case asked:
+			// ANDed into the form's own terms rather than over them, so a term it set still holds.
 			const path = "affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms"
-			if err := values.Set(overrides, path, terms); err != nil {
+			have, _ := values.Get(overrides, path)
+			list, _ := have.([]any)
+			if err := values.Set(overrides, path, compose.AndTerms(list, terms)); err != nil {
 				return nil, err
 			}
 		default:
