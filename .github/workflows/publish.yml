@@ -60,8 +60,13 @@ jobs:
               echo "tag $version, but helm/swiss/Chart.yaml appVersion is $app" >&2
               exit 1
             fi
-            tags="$image:$version,$image:latest"
-            [ "$DOCKERHUB" = true ] && tags="$tags,$HUB_IMAGE:$version,$HUB_IMAGE:latest"
+            tags="$image:$version"
+            [ "$DOCKERHUB" = true ] && tags="$tags,$HUB_IMAGE:$version"
+            # A prerelease (X.Y.Z-anything) does not move latest.
+            if [[ "$version" != *-* ]]; then
+              tags="$tags,$image:latest"
+              [ "$DOCKERHUB" = true ] && tags="$tags,$HUB_IMAGE:latest"
+            fi
           else
             version="$app-git${GITHUB_SHA:0:7}"
             tags="$image:$version"
