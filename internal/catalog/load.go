@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"regexp"
+	"slices"
 	"sort"
 	"sync"
 
@@ -308,6 +310,9 @@ func (v Variant) Weightless() bool {
 	return ok && p == ""
 }
 
+// chartName is a helm chart name as a repository index carries it.
+var chartName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
+
 // validate is the rules one variant is judged on alone, the same in a v1 entry
 // and a v2 variant file.
 func (v Variant) validate() error {
@@ -322,8 +327,23 @@ func (v Variant) validate() error {
 		if v.Chart.Name != "sglang" && v.Chart.Name != "vllm" {
 			return fmt.Errorf("%s: engine mock runs on the sglang or vllm chart, not %q", where, v.Chart.Name)
 		}
+	case EngineVideo:
+		if !chartName.MatchString(v.Chart.Name) {
+			return fmt.Errorf("%s: engine video needs its own chart, got chart name %q", where, v.Chart.Name)
+		}
+		if slices.Contains(LLMCharts, v.Chart.Name) {
+			return fmt.Errorf("%s: engine video runs on a video chart, not the %s engine chart", where, v.Chart.Name)
+		}
+		// lws and pd are layouts of an LLM engine chart. A video chart lays out
+		// its own pods, so requires describes one pod and nothing more.
+		if t := v.Requires.TopologyOrDefault(); t != TopologySingleNode {
+			return fmt.Errorf("%s: engine video takes topology single-node, not %s -- requires describes one pod of the chart", where, t)
+		}
+		if v.Requires.NodesOrDefault() != 1 {
+			return fmt.Errorf("%s: engine video takes no requires.nodes -- requires describes one pod of the chart", where)
+		}
 	default:
-		return fmt.Errorf("%s: engine %q is not sglang, vllm or mock", where, v.Engine)
+		return fmt.Errorf("%s: engine %q is not sglang, vllm, mock or video", where, v.Engine)
 	}
 	if v.Chart.Version == "" {
 		return fmt.Errorf("%s: chart.version is required -- an unpinned chart is not a reproducible deploy", where)

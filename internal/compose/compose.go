@@ -245,7 +245,8 @@ func siteLayer(p site.Profile, v catalog.Variant) (values.Tree, error) {
 			return nil, err
 		}
 	}
-	if p.Cache.Enabled {
+	// The cache is the LLM engines' compile cache; a video chart has none.
+	if p.Cache.Enabled && !v.IsVideo() {
 		if err := values.Set(out, "cache.enabled", true); err != nil {
 			return nil, err
 		}
@@ -349,7 +350,7 @@ func applyDefaults(site, derived, base values.Tree, in Input) error {
 	// under cache: -- the key does not exist in every chart version, and a values
 	// file carrying a section the chart has never heard of is rejected by its
 	// schema rather than ignored.
-	if in.Profile.Cache.Enabled && in.Profile.Nodes.GPUsPerNode > 0 && in.Resolved.Variant.Requires.GPUs > 0 {
+	if in.Profile.Cache.Enabled && !in.Resolved.Variant.IsVideo() && in.Profile.Nodes.GPUsPerNode > 0 && in.Resolved.Variant.Requires.GPUs > 0 {
 		if _, set := values.Get(base, "cache.maxSlotsPerNode"); !set {
 			slots := max(in.Profile.Nodes.GPUsPerNode/in.Resolved.Variant.Requires.GPUs, 1)
 			if err := values.Set(derived, "cache.maxSlotsPerNode", slots); err != nil {

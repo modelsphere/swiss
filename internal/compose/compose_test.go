@@ -712,3 +712,46 @@ func TestAndTerms(t *testing.T) {
 		t.Errorf("the terms passed in were changed: %v", terms)
 	}
 }
+
+func videoInput() Input {
+	in := testInput()
+	in.Resolved.Model = "minimax-h3"
+	in.Resolved.Source = catalog.Source{HF: "MiniMaxAI/MiniMax-H3"}
+	in.Resolved.ServedName = "minimax-h3"
+	in.Resolved.Variant = catalog.Variant{
+		ID:       "h3-h100",
+		Engine:   catalog.EngineVideo,
+		Chart:    catalog.Chart{Name: "minimax-h3", Version: "0.3.0"},
+		Requires: catalog.Requires{GPUs: 4},
+	}
+	in.Release = "h3"
+	return in
+}
+
+// A video chart has no compile cache: a site with the cache on must not write
+// a cache section into it, while the identity fields still land where every
+// chart reads them.
+func TestVideoTakesNoCacheButKeepsTheModelFields(t *testing.T) {
+	p, err := Compose(videoInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := p.Values()["cache"]; ok {
+		t.Errorf("video plan carries a cache section: %v", p.Values()["cache"])
+	}
+	for path, want := range map[string]any{
+		"model.localPath": "/mnt/disk0/models/MiniMax-H3",
+		"model.gpus":      "4",
+		"model.name":      "minimax-h3",
+	} {
+		if got, _ := values.Get(p.Values(), path); got != want {
+			t.Errorf("%s = %v, want %v", path, got, want)
+		}
+	}
+	if _, ok := values.Get(p.Values(), "image.repository"); ok {
+		t.Error("a video variant names no image, so the plan must not write one")
+	}
+	if p.Engine != catalog.EngineVideo || p.Chart.Name != "minimax-h3" {
+		t.Errorf("plan engine/chart = %s/%s", p.Engine, p.Chart.Name)
+	}
+}

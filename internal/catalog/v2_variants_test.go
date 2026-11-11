@@ -202,7 +202,7 @@ func TestV2VariantIsValidated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := uc.Resolve(context.Background(), "m", "", ""); err == nil || !strings.Contains(err.Error(), "is not sglang, vllm or mock") {
+	if _, err := uc.Resolve(context.Background(), "m", "", ""); err == nil || !strings.Contains(err.Error(), "is not sglang, vllm, mock or video") {
 		t.Errorf("an unknown engine must be refused by v1's rule: %v", err)
 	}
 }
