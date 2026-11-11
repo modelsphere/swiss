@@ -776,6 +776,7 @@ func TestVideoIsToldItsPublicURL(t *testing.T) {
 			in.Overrides["modelRoute"] = values.Tree{"nginx": values.Tree{"route": "video"}}
 		}, "https://gw.example/video"},
 		{"no gateway, no url", func(in *Input) { in.Profile.Route.Gateway = "" }, nil},
+		{"no serviceId or route, no url", func(in *Input) { delete(in.Overrides, "serviceId") }, nil},
 		{"routing off, no url", func(in *Input) { in.Overrides["modelRoute"] = values.Tree{"enabled": false} }, nil},
 		{"the form's url stands", func(in *Input) {
 			in.Overrides["modelRoute"] = values.Tree{"url": "https://cdn.example/h3"}
