@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -56,7 +57,11 @@ func (s *Server) handleSLO(w http.ResponseWriter, r *http.Request) {
 	id := release
 	if want := r.URL.Query().Get("serviceId"); want != "" && want != release {
 		if err := s.ownSLO(ctx, ns, release, want); err != nil {
-			writeError(w, http.StatusNotFound, err.Error())
+			code := http.StatusBadGateway
+			if errors.Is(err, errNotOwnSLO) {
+				code = http.StatusNotFound
+			}
+			writeError(w, code, err.Error())
 			return
 		}
 		id = want
@@ -75,20 +80,32 @@ func (s *Server) handleSLO(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// ownSLO refuses a serviceId that no SLO requirement of this release carries,
-// so the endpoint cannot be pointed at another release's requirement.
+// errNotOwnSLO is a serviceId none of the release's SLO requirements carries.
+var errNotOwnSLO = errors.New("no SLO requirement of this release has that serviceId")
+
+// ownSLO checks that one of the release's own SLO requirements carries
+// serviceID. A requirement that cannot be read (RBAC, the API server) is an
+// error of its own when nothing else matched: it may be the one asked for, so
+// the answer is "could not tell", not "not ours".
 func (s *Server) ownSLO(ctx context.Context, ns, release, serviceID string) error {
 	rel, err := s.releaseRecord(ctx, ns, release)
 	if err != nil {
-		return err
+		return fmt.Errorf("release %s/%s: %w", ns, release, err)
 	}
+	var unread error
 	if rel != nil {
 		for _, ref := range rel.Objects {
 			if ref.Kind != "LLMSLORequirement" && ref.Kind != "JobSLORequirement" {
 				continue
 			}
 			o, err := s.probe.Object(ctx, ref)
-			if err != nil || o == nil {
+			if err != nil {
+				if unread == nil {
+					unread = fmt.Errorf("reading %s %s/%s: %w", ref.Kind, ref.Namespace, ref.Name, err)
+				}
+				continue
+			}
+			if o == nil {
 				continue
 			}
 			if id, _ := o.Spec["serviceId"].(string); id == serviceID {
@@ -96,7 +113,10 @@ func (s *Server) ownSLO(ctx context.Context, ns, release, serviceID string) erro
 			}
 		}
 	}
-	return fmt.Errorf("release %s/%s has no SLO requirement with serviceId %q", ns, release, serviceID)
+	if unread != nil {
+		return unread
+	}
+	return fmt.Errorf("release %s/%s, serviceId %q: %w", ns, release, serviceID, errNotOwnSLO)
 }
 
 // sloToken reads the bearer token. The API refuses anonymous calls, and the
