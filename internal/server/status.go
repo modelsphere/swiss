@@ -485,6 +485,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
+	// A video release serves a job API: a chat call would fail and read as a
+	// broken model.
+	if p.Engine == catalog.EngineVideo {
+		writeError(w, http.StatusBadRequest, "video releases have no chat API; use the readiness probe")
+		return
+	}
 	ep, err := s.entrypoint(ctx, p, req.entrypointAuth)
 	if err != nil {
 		writeError(w, http.StatusPreconditionFailed, err.Error())
