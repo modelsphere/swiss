@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/Masterminds/semver/v3"
@@ -317,17 +318,18 @@ var chartName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 // and a v2 variant file.
 func (v Variant) validate() error {
 	where := "variant " + v.ID
-	switch v.Engine {
-	case "sglang", "vllm":
+	switch {
+	case slices.Contains(LLMCharts, v.Engine):
+		// An LLM engine runs on the chart of the same name.
 		if v.Chart.Name != v.Engine {
 			return fmt.Errorf("%s: chart %q does not match engine %q", where, v.Chart.Name, v.Engine)
 		}
-	case EngineMock:
+	case v.Engine == EngineMock:
 		// A mock server has no chart of its own: it runs on an engine's chart through commandOverride.
-		if v.Chart.Name != "sglang" && v.Chart.Name != "vllm" {
-			return fmt.Errorf("%s: engine mock runs on the sglang or vllm chart, not %q", where, v.Chart.Name)
+		if !slices.Contains(LLMCharts, v.Chart.Name) {
+			return fmt.Errorf("%s: engine mock runs on one of the %s charts, not %q", where, strings.Join(LLMCharts, ", "), v.Chart.Name)
 		}
-	case EngineVideo:
+	case v.Engine == EngineVideo:
 		if !chartName.MatchString(v.Chart.Name) {
 			return fmt.Errorf("%s: engine video needs its own chart, got chart name %q", where, v.Chart.Name)
 		}
