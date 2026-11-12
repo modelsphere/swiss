@@ -156,7 +156,9 @@ rbac:
   # (cluster scope already reads every Secret). minimax-h3 reads its database
   # password from the modelsphere installer's CloudNativePG cluster this way:
   #   - {namespace: middleware, name: cnpg-rw}
-  # Each namespace must exist when swiss is installed.
+  # Each listed namespace is also granted CloudNativePG Databases: minimax-h3
+  # gives each release its own database on that cluster. (Cluster scope grants
+  # them everywhere.) Each namespace must exist when swiss is installed.
   lookupSecrets: []
 
 serviceAccount:

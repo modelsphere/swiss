@@ -45,7 +45,7 @@ func TestChartGrantsLookupSecretsByName(t *testing.T) {
 			role = doc
 		}
 	}
-	for _, want := range []string{"namespace: middleware", `resourceNames: ["cnpg-rw"]`, `verbs: ["get"]`} {
+	for _, want := range []string{"namespace: middleware", `resourceNames: ["cnpg-rw"]`, `verbs: ["get"]`, `apiGroups: ["postgresql.cnpg.io"]`, `resources: ["databases"]`} {
 		if !strings.Contains(role, want) {
 			t.Errorf("lookup Role is missing %s:\n%s", want, role)
 		}
@@ -58,5 +58,28 @@ func TestChartGrantsLookupSecretsByName(t *testing.T) {
 	}
 	if bad, err := helmTemplate(t, "rbac.lookupSecrets[0].namespace=middleware"); err == nil || !strings.Contains(bad, "need namespace and name") {
 		t.Errorf("an entry without a name must fail the render, got %v", err)
+	}
+}
+
+// minimax-h3 renders each release's CloudNativePG Database in the cluster's
+// namespace: cluster scope grants Databases everywhere, namespaced scope only
+// beside the Secrets it looks up.
+func TestChartGrantsCNPGDatabases(t *testing.T) {
+	if _, err := exec.LookPath("helm"); err != nil {
+		t.Skip("helm not on PATH")
+	}
+	cluster, err := helmTemplate(t, "rbac.scope=cluster")
+	if err != nil {
+		t.Fatal(cluster)
+	}
+	if !strings.Contains(cluster, `apiGroups: ["postgresql.cnpg.io"]`) {
+		t.Error("cluster scope does not grant CloudNativePG Databases")
+	}
+	none, err := helmTemplate(t)
+	if err != nil {
+		t.Fatal(none)
+	}
+	if strings.Contains(none, "postgresql.cnpg.io") {
+		t.Error("namespaced scope without lookupSecrets must not grant Databases anywhere")
 	}
 }
