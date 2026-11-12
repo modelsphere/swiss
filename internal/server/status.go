@@ -48,6 +48,8 @@ type releaseStatus struct {
 	// release runs, under a different entry digest. A warning: upgrade is
 	// still accepted. Computed here, for one release, and not on the list.
 	Drift string `json:"drift,omitempty"`
+	// External is an LLMService swiss did not write.
+	External bool `json:"external,omitempty"`
 	// EditedInPlace is an llmsvc release whose plan-hash annotation does not
 	// match the live spec.
 	EditedInPlace bool `json:"editedInPlace,omitempty"`
@@ -167,6 +169,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			out.Service.Phase = phaseUninstalling
 		}
 		out.Plan = llmPlanStatus(u, obj)
+		out.External = llmsvc.IsExternal(u)
 		if decoded, err := llmsvc.ToPlan(u); err == nil {
 			p = decoded
 			out.EditedInPlace = llmsvc.EditedInPlace(u, decoded)

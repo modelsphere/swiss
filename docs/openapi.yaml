@@ -2225,6 +2225,7 @@ components:
         authPrefix: { type: string, description: "Prefix before the key, e.g. `Bearer `; may be empty." }
         warning: { type: string }
         drift: { type: string, description: "The catalog republished this version and variant under another digest." }
+        external: { type: boolean, description: "An LLMService swiss did not write." }
         editedInPlace: { type: boolean, description: "The live LLMService spec was edited outside swiss: its plan-hash annotation does not match." }
         planStatus:
           type: object
