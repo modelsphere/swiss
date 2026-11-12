@@ -114,6 +114,17 @@ passes them on.
 {{- end -}}
 
 {{/*
+CloudNativePG databases a chart renders outside its release namespace:
+minimax-h3 gives each release its own Database on the shared cluster, in the
+cluster's namespace.
+*/}}
+{{- define "swiss.cnpgDatabaseRules" -}}
+- apiGroups: ["postgresql.cnpg.io"]
+  resources: ["databases"]
+  verbs: ["get","list","watch","create","update","patch","delete"]
+{{- end -}}
+
+{{/*
 LLMService access, granted whichever install method a release uses: the method
 is picked per install, so the grant cannot depend on it. controllerrevisions are
 read-only: they hold archived specs.
