@@ -254,17 +254,66 @@ func TestCatalogSchemaAnnotation(t *testing.T) {
 	}
 }
 
-func TestTamperedPlanHashIsRefused(t *testing.T) {
+func TestEditedSpecIsAccepted(t *testing.T) {
 	p := realistic(t)
 	u, err := FromPlan(p, "upgrade", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	ann := u.GetAnnotations()
-	ann["swiss.modelsphere.dev/plan-hash"] = "sha256:tampered"
-	u.SetAnnotations(ann)
-	if _, err := ToPlan(u); err == nil {
-		t.Fatal("a plan-hash that does not match the spec must be refused")
+	if EditedInPlace(u, p) {
+		t.Fatal("an unedited swiss object reports edited")
+	}
+
+	obj, err := FromUnstructured(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := false
+	for i := range obj.Spec.Layers {
+		if obj.Spec.Layers[i].Name != values.LayerForm {
+			continue
+		}
+		obj.Spec.Layers[i].Values["replicaCount"] = 9
+		changed = true
+	}
+	if !changed {
+		t.Fatal("fixture has no form layer")
+	}
+	edited, err := ToUnstructured(obj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if edited.GetAnnotations()[AnnPlanHash] != p.Hash {
+		t.Fatalf("plan-hash annotation %s, want the original %s", edited.GetAnnotations()[AnnPlanHash], p.Hash)
+	}
+	back, err := ToPlan(edited)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := asWhole(back.Layers[values.LayerForm]["replicaCount"])
+	if !ok || got != 9 {
+		t.Fatalf("replicaCount = %v", back.Layers[values.LayerForm]["replicaCount"])
+	}
+	if back.Hash == "" || back.Hash == p.Hash {
+		t.Fatalf("hash %s, want a recomputed hash", back.Hash)
+	}
+	if err := back.VerifyHash(); err != nil {
+		t.Fatal(err)
+	}
+	if !EditedInPlace(edited, back) {
+		t.Fatal("edited spec reports not edited")
+	}
+
+	ext := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": APIVersion,
+		"kind":       Kind,
+		"metadata":   map[string]any{"name": "qwen", "namespace": "models"},
+		"spec": map[string]any{
+			"chart": map[string]any{"name": "sglang", "repo": "oci://example", "version": "0.8.6"},
+		},
+	}}
+	if EditedInPlace(ext, p) {
+		t.Fatal("an external object reports edited")
 	}
 }
 
