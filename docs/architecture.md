@@ -187,7 +187,7 @@ An LLMService swiss wrote carries `swiss.modelsphere.dev/plan-hash`. The live sp
 
 - A `kubectl edit` leaves that annotation behind. Reads recompute the hash over the live spec and set `editedInPlace` on the deployment row and on status. It is not drift.
 - Upgrade keeps the form and edit layers from that live spec. Catalog, site, derived and autoscale layers are recomposed, so an edit there is overwritten.
-- Rollback still checks the hash on the archived plan Secret. A mismatch there is refused.
+- Rollback reads the ControllerRevision first and does not check the hash, so a revision that ran edited is accepted. The plan Secret fallback still checks the hash and refuses a mismatch.
 
 | endpoint | |
 | --- | --- |

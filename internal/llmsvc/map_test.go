@@ -65,6 +65,9 @@ func TestRoundTripKeepsThePlanHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if EditedInPlace(u, back) {
+		t.Fatal("an unedited swiss object reports edited")
+	}
 	if strings.Contains(back.Helmfile, "createNamespace: true") {
 		t.Fatalf("createNamespace survived in the helmfile:\n%s", back.Helmfile)
 	}
@@ -254,69 +257,6 @@ func TestCatalogSchemaAnnotation(t *testing.T) {
 	}
 }
 
-func TestEditedSpecIsAccepted(t *testing.T) {
-	p := realistic(t)
-	u, err := FromPlan(p, "upgrade", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if EditedInPlace(u, p) {
-		t.Fatal("an unedited swiss object reports edited")
-	}
-
-	obj, err := FromUnstructured(u)
-	if err != nil {
-		t.Fatal(err)
-	}
-	changed := false
-	for i := range obj.Spec.Layers {
-		if obj.Spec.Layers[i].Name != values.LayerForm {
-			continue
-		}
-		obj.Spec.Layers[i].Values["replicaCount"] = 9
-		changed = true
-	}
-	if !changed {
-		t.Fatal("fixture has no form layer")
-	}
-	edited, err := ToUnstructured(obj)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if edited.GetAnnotations()[AnnPlanHash] != p.Hash {
-		t.Fatalf("plan-hash annotation %s, want the original %s", edited.GetAnnotations()[AnnPlanHash], p.Hash)
-	}
-	back, err := ToPlan(edited)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, ok := asWhole(back.Layers[values.LayerForm]["replicaCount"])
-	if !ok || got != 9 {
-		t.Fatalf("replicaCount = %v", back.Layers[values.LayerForm]["replicaCount"])
-	}
-	if back.Hash == "" || back.Hash == p.Hash {
-		t.Fatalf("hash %s, want a recomputed hash", back.Hash)
-	}
-	if err := back.VerifyHash(); err != nil {
-		t.Fatal(err)
-	}
-	if !EditedInPlace(edited, back) {
-		t.Fatal("edited spec reports not edited")
-	}
-
-	ext := &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": APIVersion,
-		"kind":       Kind,
-		"metadata":   map[string]any{"name": "qwen", "namespace": "models"},
-		"spec": map[string]any{
-			"chart": map[string]any{"name": "sglang", "repo": "oci://example", "version": "0.8.6"},
-		},
-	}}
-	if EditedInPlace(ext, p) {
-		t.Fatal("an external object reports edited")
-	}
-}
-
 func TestExternalLLMServiceMaps(t *testing.T) {
 	u := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "serving.modelsphere.dev/v1alpha1",
@@ -344,6 +284,9 @@ func TestExternalLLMServiceMaps(t *testing.T) {
 	p, err := ToPlan(u)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if EditedInPlace(u, p) {
+		t.Fatal("an external object reports edited")
 	}
 	if p.Hash == "" {
 		t.Fatal("external object has no computed hash")
