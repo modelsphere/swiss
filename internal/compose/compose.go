@@ -391,14 +391,9 @@ func applyDefaults(site, derived, base values.Tree, in Input) error {
 		// serviceId. With neither, swiss falls back to the release name and a
 		// video chart to its own default, so a URL from here would name a path
 		// the chart does not publish.
-		named := false
-		for _, path := range []string{"modelRoute.nginx.route", "serviceId"} {
-			if v, _ := values.Get(merged, path); v != nil && v != "" {
-				named = true
-			}
-		}
+		route, named := plan.NamedRouteOf(merged, in.Release)
 		if _, set := values.Get(merged, "modelRoute.url"); !set && named {
-			if url := in.Profile.Route.ModelURL(plan.RouteOf(merged, in.Release)); url != "" {
+			if url := in.Profile.Route.ModelURL(route); url != "" {
 				if err := values.Set(derived, "modelRoute.url", url); err != nil {
 					return err
 				}

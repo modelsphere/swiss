@@ -777,6 +777,9 @@ func TestVideoIsToldItsPublicURL(t *testing.T) {
 		}, "https://gw.example/video"},
 		{"no gateway, no url", func(in *Input) { in.Profile.Route.Gateway = "" }, nil},
 		{"no serviceId or route, no url", func(in *Input) { delete(in.Overrides, "serviceId") }, nil},
+		// RouteOf takes only a string, so a number names nothing and the URL
+		// would be the release name's, which the chart may not publish.
+		{"a non-string serviceId names no route", func(in *Input) { in.Overrides["serviceId"] = 123 }, nil},
 		{"routing off, no url", func(in *Input) { in.Overrides["modelRoute"] = values.Tree{"enabled": false} }, nil},
 		{"the form's url stands", func(in *Input) {
 			in.Overrides["modelRoute"] = values.Tree{"url": "https://cdn.example/h3"}
