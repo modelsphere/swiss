@@ -128,9 +128,9 @@ func IsExternal(u *unstructured.Unstructured) bool {
 	return true
 }
 
-// ToPlan is the inverse of FromPlan. A plan-hash annotation is checked against
-// the spec; an object without one, including an external LLMService, gets a
-// computed hash and no check. The helmfile is regenerated the way compose does.
+// ToPlan is the inverse of FromPlan. The hash is computed over the live spec;
+// a stale plan-hash annotation is EditedInPlace and does not fail the read.
+// The helmfile is regenerated the way compose does.
 func ToPlan(u *unstructured.Unstructured) (*plan.Plan, error) {
 	if u == nil {
 		return nil, fmt.Errorf("nil object")
@@ -182,18 +182,20 @@ func ToPlan(u *unstructured.Unstructured) (*plan.Plan, error) {
 		p.Engine = m.Engine
 	}
 
-	if h := ann[AnnPlanHash]; h != "" {
-		p.Hash = h
-		if err := p.VerifyHash(); err != nil {
-			return nil, err
-		}
-	} else if err := p.ComputeHash(); err != nil {
+	if err := p.ComputeHash(); err != nil {
 		return nil, err
 	}
 	if doc, err := p.RenderHelmfile(""); err == nil {
 		p.Helmfile = doc
 	}
 	return p, nil
+}
+
+// EditedInPlace reports a plan-hash annotation that does not match the live spec.
+// No annotation, including an external LLMService, is false.
+func EditedInPlace(u *unstructured.Unstructured, p *plan.Plan) bool {
+	h := u.GetAnnotations()[AnnPlanHash]
+	return h != "" && h != p.Hash
 }
 
 // copyValues detaches a layer from the unstructured object. JSON is the form

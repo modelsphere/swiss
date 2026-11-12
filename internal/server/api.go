@@ -685,9 +685,11 @@ type deployment struct {
 	// route.
 	Route string `json:"route,omitempty"`
 	// Backend is helm or llmsvc. External is an LLMService swiss did not
-	// write. CleanupPending means both records still exist.
+	// write. EditedInPlace is a swiss object whose plan-hash annotation
+	// does not match the live spec. CleanupPending means both records still exist.
 	Backend        string                   `json:"backend"`
 	External       bool                     `json:"external,omitempty"`
+	EditedInPlace  bool                     `json:"editedInPlace,omitempty"`
 	ManagedBy      *llmsvc.CanaryOwner      `json:"managedBy,omitempty"`
 	AssignedTo     *llmsvc.CanaryAssignment `json:"assignedTo,omitempty"`
 	CleanupPending bool                     `json:"cleanupPending,omitempty"`
@@ -827,6 +829,7 @@ func (s *Server) deploymentFromService(ctx context.Context, ref deployRef) *depl
 	d.Model, d.Variant, d.Version = p.Source.Model, p.Source.Variant, p.Source.Version
 	d.CatalogRef = p.Source.Ref
 	d.source, d.catalogName = p.Source.Catalog, p.Source.CatalogName
+	d.EditedInPlace = llmsvc.EditedInPlace(u, p)
 	return d
 }
 

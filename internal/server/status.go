@@ -48,6 +48,9 @@ type releaseStatus struct {
 	// release runs, under a different entry digest. A warning: upgrade is
 	// still accepted. Computed here, for one release, and not on the list.
 	Drift string `json:"drift,omitempty"`
+	// EditedInPlace is an llmsvc release whose plan-hash annotation does not
+	// match the live spec.
+	EditedInPlace bool `json:"editedInPlace,omitempty"`
 	// Plan is the last apply, whichever backend ran it. On helm it is the status
 	// key written beside the release on every apply, the only thing that can say
 	// an apply was started and never finished -- helm's own status describes the
@@ -166,6 +169,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		out.Plan = llmPlanStatus(u, obj)
 		if decoded, err := llmsvc.ToPlan(u); err == nil {
 			p = decoded
+			out.EditedInPlace = llmsvc.EditedInPlace(u, decoded)
 		}
 	} else if rel != nil {
 		out.Exists, out.Revision, out.HelmStatus = true, rel.Revision, rel.Status

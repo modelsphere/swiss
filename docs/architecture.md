@@ -183,6 +183,12 @@ form / flags  ─┘             (hash)     ↓
 
 `applyWith` on the site profile picks the backend for a new install: `helm` (default) or `llmsvc` (LLMService). A release already in the cluster stays on the backend that owns it.
 
+An LLMService swiss wrote carries `swiss.modelsphere.dev/plan-hash`. The live spec is the plan swiss reads:
+
+- A `kubectl edit` leaves that annotation behind. Reads recompute the hash over the live spec and set `editedInPlace` on the deployment row and on status. It is not drift.
+- Upgrade keeps the form and edit layers from that live spec. Catalog, site, derived and autoscale layers are recomposed, so an edit there is overwritten.
+- Rollback reads the ControllerRevision first and does not check the hash, so a revision that ran edited is accepted. The plan Secret fallback still checks the hash and refuses a mismatch.
+
 | endpoint | |
 | --- | --- |
 | `POST /api/plans` | compose; returns the plan and stores it by hash |

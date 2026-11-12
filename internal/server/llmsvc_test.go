@@ -726,6 +726,79 @@ func TestLLMUpgrade(t *testing.T) {
 	}
 }
 
+func TestLLMEditedSpecPlanReads(t *testing.T) {
+	rig := startRig(t, llmProbe(), true, false, backendLLMSVC)
+	hash := rig.storePlan(t, map[string]any{
+		"release": llmRelease, "overrides": map[string]any{"replicaCount": 2},
+	})
+	p, err := rig.s.store.Plan(t.Context(), hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := llmsvc.FromPlan(p, "install", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	obj, err := llmsvc.FromUnstructured(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := false
+	for i := range obj.Spec.Layers {
+		if obj.Spec.Layers[i].Name != values.LayerForm {
+			continue
+		}
+		obj.Spec.Layers[i].Values["replicaCount"] = 9
+		changed = true
+	}
+	if !changed {
+		t.Fatal("plan has no form layer")
+	}
+	edited, err := llmsvc.ToUnstructured(obj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if edited.GetAnnotations()[llmsvc.AnnPlanHash] != hash {
+		t.Fatalf("annotation %s", edited.GetAnnotations()[llmsvc.AnnPlanHash])
+	}
+	if _, err := rig.c.Create(t.Context(), edited); err != nil {
+		t.Fatal(err)
+	}
+
+	code, body := get(t, rig.srv, "/api/releases/models/"+llmRelease+"/plan")
+	if code != 200 {
+		t.Fatalf("plan %d %v", code, body)
+	}
+	if body["hash"] == "" || body["hash"] == hash {
+		t.Fatalf("hash %v, want the recomputed one", body["hash"])
+	}
+	layers, _ := body["layers"].(map[string]any)
+	form, _ := layers["form"].(map[string]any)
+	if asNum(form["replicaCount"]) != 9 {
+		t.Fatalf("form %v", form)
+	}
+
+	code, st := get(t, rig.srv, "/api/releases/models/"+llmRelease+"/status")
+	if code != 200 || st["editedInPlace"] != true || st["model"] == "" || st["model"] == nil {
+		t.Fatalf("status %d %v", code, st)
+	}
+	code, deps := get(t, rig.srv, "/api/deployments")
+	if code != 200 {
+		t.Fatalf("deployments %d %v", code, deps)
+	}
+	rows, _ := deps["deployments"].([]any)
+	var row map[string]any
+	for _, raw := range rows {
+		m := raw.(map[string]any)
+		if m["release"] == llmRelease {
+			row = m
+		}
+	}
+	if row == nil || row["editedInPlace"] != true || row["model"] == "" || row["model"] == nil {
+		t.Fatalf("row %v", row)
+	}
+}
+
 func TestLLMUpgradeOfMissingService(t *testing.T) {
 	rig := startRig(t, llmProbe(), true, false, backendLLMSVC)
 	hash := rig.storePlan(t, map[string]any{"release": llmRelease})
