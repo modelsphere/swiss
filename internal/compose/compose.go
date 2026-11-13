@@ -245,7 +245,8 @@ func siteLayer(p site.Profile, v catalog.Variant) (values.Tree, error) {
 			return nil, err
 		}
 	}
-	if p.Cache.Enabled {
+	// The cache is the LLM engines' compile cache; a video chart has none.
+	if p.Cache.Enabled && !v.IsVideo() {
 		if err := values.Set(out, "cache.enabled", true); err != nil {
 			return nil, err
 		}
@@ -349,7 +350,7 @@ func applyDefaults(site, derived, base values.Tree, in Input) error {
 	// under cache: -- the key does not exist in every chart version, and a values
 	// file carrying a section the chart has never heard of is rejected by its
 	// schema rather than ignored.
-	if in.Profile.Cache.Enabled && in.Profile.Nodes.GPUsPerNode > 0 && in.Resolved.Variant.Requires.GPUs > 0 {
+	if in.Profile.Cache.Enabled && !in.Resolved.Variant.IsVideo() && in.Profile.Nodes.GPUsPerNode > 0 && in.Resolved.Variant.Requires.GPUs > 0 {
 		if _, set := values.Get(base, "cache.maxSlotsPerNode"); !set {
 			slots := max(in.Profile.Nodes.GPUsPerNode/in.Resolved.Variant.Requires.GPUs, 1)
 			if err := values.Set(derived, "cache.maxSlotsPerNode", slots); err != nil {
@@ -374,6 +375,28 @@ func applyDefaults(site, derived, base values.Tree, in Input) error {
 		case res != DefaultGPUResource:
 			if err := values.Set(derived, "model.gpuResource", res); err != nil {
 				return err
+			}
+		}
+	}
+	// modelRoute.url: a video service hands its download links to end users,
+	// so it has to know its own public address -- the one the status page shows,
+	// <site route.gateway>/<route>. Only for video: the LLM charts have no use
+	// for it, and their schema refuses a key it does not know.
+	if in.Resolved.Variant.IsVideo() {
+		merged := values.Tree{}
+		for _, layer := range []values.Tree{base, derived, in.Overrides, in.Edits} {
+			values.Merge(merged, layer, "", nil)
+		}
+		// Only a route the chart resolves the same way: nginx.route or the
+		// serviceId. With neither, swiss falls back to the release name and a
+		// video chart to its own default, so a URL from here would name a path
+		// the chart does not publish.
+		route, named := plan.NamedRouteOf(merged, in.Release)
+		if _, set := values.Get(merged, "modelRoute.url"); !set && named {
+			if url := in.Profile.Route.ModelURL(route); url != "" {
+				if err := values.Set(derived, "modelRoute.url", url); err != nil {
+					return err
+				}
 			}
 		}
 	}

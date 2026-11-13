@@ -97,10 +97,11 @@ auth:
 # swissd deploys, and writes its own site profile and the Secret beside it: the
 # chart always grants both. One replica: sqlite is a single writer.
 #
-# The deploy grant is everything the sglang and vllm charts render, in the
-# namespaces rbac.scope selects, and nothing else:
+# The deploy grant is everything the sglang, vllm and minimax-h3 charts render,
+# in the namespaces rbac.scope selects, and nothing else:
 #
-#   core                          configmaps, services, serviceaccounts, secrets
+#   core                          configmaps, services, serviceaccounts, secrets,
+#                                 persistentvolumeclaims (minimax-h3's asset volume)
 #   apps                          deployments
 #   policy                        poddisruptionbudgets
 #   rbac                          roles, rolebindings   (the cart subchart)
@@ -108,7 +109,8 @@ auth:
 #   leaderworkerset.x-k8s.io      leaderworkersets
 #   disaggregatedset.x-k8s.io     disaggregatedsets    (sglang prefill/decode)
 #   autoscaling.modelsphere.dev   llmscalers           (and autoscaling.modelsphere.dev)
-#   inference.modelsphere.dev     llmslorequirements   (and inference.modelsphere.dev)
+#   inference.modelsphere.dev     llmslorequirements, jobslorequirements
+#                                 (and inference.x-k8s.io)
 #   routing.modelsphere.dev       modelroutes          (and routing.modelsphere.dev)
 #
 # The profile grant is configmaps and secrets create/update in the profile's
@@ -148,6 +150,16 @@ rbac:
   namespaces: []
     # - models
     # - kimi
+
+  # Secrets outside those namespaces that a chart reads at render time with
+  # helm's lookup, granted get by name only. Used when scope is namespaced
+  # (cluster scope already reads every Secret). minimax-h3 reads its database
+  # password from the modelsphere installer's CloudNativePG cluster this way:
+  #   - {namespace: middleware, name: cnpg-rw}
+  # Each listed namespace is also granted CloudNativePG Databases: minimax-h3
+  # gives each release its own database on that cluster. (Cluster scope grants
+  # them everywhere.) Each namespace must exist when swiss is installed.
+  lookupSecrets: []
 
 serviceAccount:
   create: true

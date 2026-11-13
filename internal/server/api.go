@@ -669,10 +669,13 @@ type deployment struct {
 	Status      string             `json:"status,omitempty"`
 	// Revision is helm's. Omitted when there is none, so an uninstalling row
 	// whose release is already gone does not report 0.
-	Revision   int    `json:"revision,omitempty"`
-	Updated    string `json:"updated,omitempty"`
-	Model      string `json:"model,omitempty"`
-	Variant    string `json:"variant,omitempty"`
+	Revision int    `json:"revision,omitempty"`
+	Updated  string `json:"updated,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Variant  string `json:"variant,omitempty"`
+	// Engine is the plan's engine (sglang, vllm, mock or video), so a list can
+	// tell a video release from an LLM one without fetching each plan.
+	Engine     string `json:"engine,omitempty"`
 	CatalogRef string `json:"catalogRef,omitempty"`
 	// Catalog is the name of the configured catalog this was deployed from.
 	// Empty when the site no longer lists it, or the plan predates recording it.
@@ -825,7 +828,7 @@ func (s *Server) deploymentFromService(ctx context.Context, ref deployRef) *depl
 		}
 		return d
 	}
-	d.Route = routeOf(p)
+	d.Route, d.Engine = routeOf(p), p.Engine
 	d.Model, d.Variant, d.Version = p.Source.Model, p.Source.Variant, p.Source.Version
 	d.CatalogRef = p.Source.Ref
 	d.source, d.catalogName = p.Source.Catalog, p.Source.CatalogName
@@ -983,7 +986,7 @@ func (s *Server) deploymentRow(ctx context.Context, rel cluster.Release) *deploy
 	// is logged, because an empty route otherwise reads as "this release
 	// publishes none", which is a different fact.
 	if p, err := plan.FromFiles(rel.SwissFiles); err == nil {
-		d.Route = routeOf(p)
+		d.Route, d.Engine = routeOf(p), p.Engine
 	} else {
 		s.log.WarnContext(ctx, "route not derived: plan does not decode",
 			"namespace", rel.Namespace, "release", rel.Name, "err", err)
