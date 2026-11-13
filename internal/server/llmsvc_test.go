@@ -1146,6 +1146,29 @@ func TestLLMExternalUpgradeRefused(t *testing.T) {
 	}
 }
 
+func TestLLMStatusExternal(t *testing.T) {
+	rig := startRig(t, llmProbe(), true, false, backendLLMSVC)
+	ext := llmObject("models", "ext", nil)
+	swiss := llmObject("models", llmRelease, map[string]string{llmsvc.AnnProfile: "prod"})
+	for _, u := range []*unstructured.Unstructured{ext, swiss} {
+		if _, err := rig.c.Create(t.Context(), u); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	code, st := get(t, rig.srv, "/api/releases/models/ext/status")
+	if code != 200 || st["external"] != true {
+		t.Fatalf("external %d %v", code, st)
+	}
+	code, st = get(t, rig.srv, "/api/releases/models/"+llmRelease+"/status")
+	if code != 200 {
+		t.Fatalf("status %d %v", code, st)
+	}
+	if _, ok := st["external"]; ok {
+		t.Fatalf("a swiss LLMService is not external: %v", st)
+	}
+}
+
 func TestLLMStatusReadsTheService(t *testing.T) {
 	probe := llmProbe()
 	probe.Maps[planRef("models", llmRelease)] = map[string]string{
