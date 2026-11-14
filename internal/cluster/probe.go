@@ -361,7 +361,8 @@ type Writer interface {
 	// PutConfigMap creates or replaces a ConfigMap given as "namespace/name".
 	// labels are set in addition to app.kubernetes.io/managed-by=swiss, and the
 	// label set is replaced rather than merged: nil leaves only that one label.
-	PutConfigMap(ctx context.Context, ref string, data, labels map[string]string) error
+	// annotations replace the set; nil clears them.
+	PutConfigMap(ctx context.Context, ref string, data, labels, annotations map[string]string) error
 	// DeleteConfigMap removes one, and succeeds when it is already gone.
 	// Uninstall is a cleanup path: it has to be safe to run twice.
 	DeleteConfigMap(ctx context.Context, ref string) error

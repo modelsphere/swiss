@@ -177,6 +177,7 @@ func Compose(in Input) (*plan.Plan, error) {
 	if err := checkInputs(in.Resolved.Variant.Inputs, p.Values()); err != nil {
 		return nil, err
 	}
+	p.Inputs = answeredInputs(in.Resolved.Variant.Inputs, p.Values())
 	if err := p.ComputeHash(); err != nil {
 		return nil, err
 	}
@@ -474,6 +475,16 @@ func applyInputs(derived, site values.Tree, in Input) error {
 		}
 	}
 	return nil
+}
+
+// answeredInputs is each declared input's effective answer. The key is stored
+// as given; keyType is dotted, which is all the catalog has.
+func answeredInputs(inputs []catalog.Input, composed values.Tree) []plan.AnsweredInput {
+	var keys []plan.AnsweredInput
+	for _, input := range inputs {
+		keys = append(keys, plan.AnsweredInput{Key: input.Key, KeyType: plan.KeyTypeDotted})
+	}
+	return plan.Answered(keys, composed)
 }
 
 // checkInputs reads the composed values, so an answer from any layer counts.

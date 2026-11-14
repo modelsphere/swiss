@@ -1993,6 +1993,7 @@ components:
       description: |
         The deploy, complete on its own. `hash` covers release, source, chart
         and the merged values; two plans with one hash render the same thing.
+        `inputs` restates answered catalog inputs and is not hashed.
       required: [apiVersion, release, source, chart, engine, profile, hash]
       properties:
         apiVersion: { type: string, const: plan.swiss/v1 }
@@ -2040,6 +2041,21 @@ components:
         createNamespace: { type: boolean, default: false, deprecated: true, description: "Use `applyFlags.createNamespace`." }
         helmfile: { type: string, description: "The helmfile these values are applied through. Not hashed." }
         warnings: { type: array, items: { type: string }, description: "Accepted but worth seeing. Not hashed." }
+        inputs:
+          type: array
+          description: |
+            Answered catalog inputs, in catalog order. Each entry is the
+            effective value at that input's key after composition, not a values
+            document. Omitted when the variant declares none. Not hashed. The
+            same JSON is the annotation `swiss.modelsphere.dev/inputs` on the
+            helm plan ConfigMap and on the LLMService.
+          items:
+            type: object
+            required: [key, keyType, value]
+            properties:
+              key: { type: string, description: "The catalog input's key, as declared." }
+              keyType: { type: string, enum: [dotted], description: "How to read `key`. Every input is `dotted`." }
+              value: { description: "The answer: a string, integer or boolean." }
         hash: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
 
     DiffResult:

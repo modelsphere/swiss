@@ -704,7 +704,7 @@ func newUninstallCluster(t *testing.T, cs *uninstallCase) *uninstallCluster {
 	}
 	files[statusFile] = string(raw)
 	ctx := context.Background()
-	if err := c.PutConfigMap(ctx, planRef(cs.Namespace, cs.Release), files, nil); err != nil {
+	if err := c.PutConfigMap(ctx, planRef(cs.Namespace, cs.Release), files, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	c.helm[cs.Namespace+"/"+cs.Release] = &helmRec{revision: 4, status: "deployed", chart: cs.Chart + "-0.7.1"}
@@ -816,7 +816,7 @@ func (c *uninstallCluster) ConfigMap(_ context.Context, ref string) (map[string]
 	return nil, apierrors.NewNotFound(schema.GroupResource{Resource: "configmaps"}, name)
 }
 
-func (c *uninstallCluster) PutConfigMap(_ context.Context, ref string, data, labels map[string]string) error {
+func (c *uninstallCluster) PutConfigMap(_ context.Context, ref string, data, labels, _ map[string]string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	labs := map[string]string{"app.kubernetes.io/managed-by": "swiss"}
@@ -1033,8 +1033,8 @@ type llmMirrorWriter struct {
 	labels map[string]map[string]string
 }
 
-func (m *llmMirrorWriter) PutConfigMap(ctx context.Context, ref string, data, labels map[string]string) error {
-	if err := m.fakeWriter.PutConfigMap(ctx, ref, data, labels); err != nil {
+func (m *llmMirrorWriter) PutConfigMap(ctx context.Context, ref string, data, labels, anns map[string]string) error {
+	if err := m.fakeWriter.PutConfigMap(ctx, ref, data, labels, anns); err != nil {
 		return err
 	}
 	if m.probe.Maps == nil {

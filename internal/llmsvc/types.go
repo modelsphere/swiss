@@ -43,6 +43,9 @@ const (
 	AnnProfile       = SwissAnnotationPrefix + "profile"
 	AnnAction        = SwissAnnotationPrefix + "action"
 	AnnNote          = SwissAnnotationPrefix + "note"
+	// AnnInputs is the answered catalog inputs: a compact JSON list of
+	// {key, keyType, value}. Omitted when the variant declares none.
+	AnnInputs = SwissAnnotationPrefix + "inputs"
 
 	AnnDeletionPolicy = Group + "/deletion-policy"
 	AnnForceConflicts = Group + "/force-conflicts"

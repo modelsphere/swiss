@@ -212,5 +212,8 @@ func clonePlan(p *plan.Plan) *plan.Plan {
 	if p.Warnings != nil {
 		cp.Warnings = append([]string(nil), p.Warnings...)
 	}
+	if p.Inputs != nil {
+		cp.Inputs = append([]plan.AnsweredInput(nil), p.Inputs...)
+	}
 	return &cp
 }
