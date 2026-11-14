@@ -20,6 +20,7 @@ import (
 	"github.com/modelsphere/swiss/internal/compose"
 	"github.com/modelsphere/swiss/internal/exec"
 	"github.com/modelsphere/swiss/internal/gpu"
+	"github.com/modelsphere/swiss/internal/llmsvc"
 	"github.com/modelsphere/swiss/internal/plan"
 	"github.com/modelsphere/swiss/internal/store"
 	"github.com/modelsphere/swiss/internal/values"
@@ -1111,7 +1112,32 @@ func (s *Server) writePlan(ctx context.Context, p *plan.Plan, st planStatus) err
 		return err
 	}
 	files["status.yaml"] = string(status)
-	return s.writer.PutConfigMap(ctx, planRef(p.Release.Namespace, p.Release.Name), files, phaseLabel(st.Phase))
+	return s.writer.PutConfigMap(ctx, planRef(p.Release.Namespace, p.Release.Name), files, phaseLabel(st.Phase), inputAnnotations(p))
+}
+
+// inputAnnotations is the answered-inputs annotation, or nil when the variant
+// declared none. Nil clears it on a rewrite, which is what an upgrade onto a
+// variant with no inputs has to do.
+func inputAnnotations(p *plan.Plan) map[string]string {
+	raw := p.InputsJSON()
+	if raw == "" {
+		return nil
+	}
+	return map[string]string{llmsvc.AnnInputs: raw}
+}
+
+// inputAnnotationsFromFiles reads that annotation back off a plan ConfigMap's
+// files, so a rewrite that only changes status keeps it.
+func inputAnnotationsFromFiles(files map[string]string) map[string]string {
+	raw := files[plan.MetaFile]
+	if raw == "" {
+		return nil
+	}
+	p, err := plan.ParseYAML([]byte(raw))
+	if err != nil {
+		return nil
+	}
+	return inputAnnotations(p)
 }
 
 // phaseLabel is the metadata marker for a phase the deployments list has to

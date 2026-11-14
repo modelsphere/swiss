@@ -82,6 +82,7 @@ func annotations(p *plan.Plan, action, note string) map[string]string {
 		}
 	}
 	put(AnnPlanHash, p.Hash)
+	put(AnnInputs, p.InputsJSON())
 	put(AnnCatalog, p.Source.Catalog)
 	put(AnnCatalogName, p.Source.CatalogName)
 	put(AnnCatalogRef, p.Source.Ref)
@@ -180,6 +181,14 @@ func ToPlan(u *unstructured.Unstructured) (*plan.Plan, error) {
 		p.Source.Variant = m.Variant
 		p.Source.HF = m.HF
 		p.Engine = m.Engine
+	}
+	// Read back so the next apply rewrites the same record. A bad value must
+	// not make the release unreadable: the hash does not cover it.
+	if raw := ann[AnnInputs]; raw != "" {
+		var inputs []plan.AnsweredInput
+		if err := json.Unmarshal([]byte(raw), &inputs); err == nil {
+			p.Inputs = inputs
+		}
 	}
 
 	if err := p.ComputeHash(); err != nil {

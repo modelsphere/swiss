@@ -54,9 +54,52 @@ type Plan struct {
 	// GPU product forced past the catalog. Excluded from Hash, like Helmfile.
 	Warnings []string `json:"warnings,omitempty"`
 
+	// Inputs are the answered catalog inputs, one per declared input that has a
+	// value in the composed document. Excluded from Hash, like Warnings: they
+	// restate values the layers already hold, so a plan with none hashes as it
+	// did before they were recorded. Omitted when the variant declares no inputs.
+	Inputs []AnsweredInput `json:"inputs,omitempty"`
+
 	// Hash covers release identity, chart, and the composed values. Two plans
 	// with one hash render the same thing.
 	Hash string `json:"hash"`
+}
+
+// KeyTypeDotted is how every catalog input key is read. The catalog Input has
+// no keyType of its own; the key is stored as given.
+const KeyTypeDotted = "dotted"
+
+// AnsweredInput is one catalog input's effective value: the composed value at
+// Key, not the values document around it.
+type AnsweredInput struct {
+	Key     string `json:"key"`
+	KeyType string `json:"keyType"`
+	Value   any    `json:"value"`
+}
+
+// InputsJSON is the swiss.modelsphere.dev/inputs annotation, or "" when there
+// is nothing to record.
+func (p *Plan) InputsJSON() string {
+	if len(p.Inputs) == 0 {
+		return ""
+	}
+	b, _ := json.Marshal(p.Inputs)
+	return string(b)
+}
+
+// Answered sets each input's value from composed and drops a key composed does
+// not hold. Key and keyType are kept as given.
+func Answered(inputs []AnsweredInput, composed values.Tree) []AnsweredInput {
+	var out []AnsweredInput
+	for _, in := range inputs {
+		v, ok := values.Get(composed, in.Key)
+		if !ok || v == nil {
+			continue
+		}
+		in.Value = v
+		out = append(out, in)
+	}
+	return out
 }
 
 type Release struct {
@@ -102,6 +145,7 @@ type ChartRef struct {
 // ComputeHash sets p.Hash over the fields that decide what gets rendered.
 // Provenance is deliberately excluded: it explains the values, it does not
 // change them, and including it would make an explanation look like a diff.
+// Answered inputs are excluded for the same reason.
 func (p *Plan) ComputeHash() error {
 	// The catalog's name is a label for the location beside it, which is
 	// hashed; nothing rendered depends on it. And a swissd older than the field

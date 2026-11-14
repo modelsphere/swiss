@@ -504,7 +504,8 @@ var (
 )
 
 // PutConfigMap creates or replaces a ConfigMap given as "namespace/name".
-func (k *Kube) PutConfigMap(ctx context.Context, ref string, data, labels map[string]string) error {
+// annotations replace the set; nil clears them.
+func (k *Kube) PutConfigMap(ctx context.Context, ref string, data, labels, annotations map[string]string) error {
 	ns, name, err := SplitRef(ref)
 	if err != nil {
 		return err
@@ -517,9 +518,10 @@ func (k *Kube) PutConfigMap(ctx context.Context, ref string, data, labels map[st
 	}
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Namespace: ns,
-			Name:      name,
-			Labels:    labs,
+			Namespace:   ns,
+			Name:        name,
+			Labels:      labs,
+			Annotations: annotations,
 		},
 		Data: data,
 	}

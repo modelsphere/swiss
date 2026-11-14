@@ -214,7 +214,7 @@ func (s *Server) markUninstalling(ctx context.Context, ns, release string) (hadP
 		return false, err
 	}
 	files[statusFile] = string(raw)
-	if err := s.writer.PutConfigMap(ctx, ref, files, phaseLabel(next.Phase)); err != nil {
+	if err := s.writer.PutConfigMap(ctx, ref, files, phaseLabel(next.Phase), inputAnnotationsFromFiles(files)); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -250,7 +250,7 @@ func (s *Server) finishUninstallFailed(ctx context.Context, ns, release string, 
 		return err
 	}
 	files[statusFile] = string(raw)
-	return s.writer.PutConfigMap(ctx, ref, files, nil)
+	return s.writer.PutConfigMap(ctx, ref, files, nil, inputAnnotationsFromFiles(files))
 }
 
 // snapshotPlan copies the plan ConfigMap so a delete that finds nothing can
@@ -279,7 +279,7 @@ func (s *Server) restorePlan(ctx context.Context, ns, release string, data map[s
 		return fmt.Errorf("no cluster writer")
 	}
 	phase := parseStatus([]byte(data[statusFile])).Phase
-	return s.writer.PutConfigMap(ctx, planRef(ns, release), data, phaseLabel(phase))
+	return s.writer.PutConfigMap(ctx, planRef(ns, release), data, phaseLabel(phase), inputAnnotationsFromFiles(data))
 }
 
 // errUninstalling is what refuseUninstalling wraps, so the autoscaler can tell

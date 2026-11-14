@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/modelsphere/swiss/internal/cluster"
+	"github.com/modelsphere/swiss/internal/llmsvc"
 	"github.com/modelsphere/swiss/internal/plan"
 	"github.com/modelsphere/swiss/internal/store"
 	"github.com/modelsphere/swiss/internal/values"
@@ -32,6 +34,7 @@ type fakeWriter struct {
 	namespaces map[string]bool
 	strictNS   bool
 	ensured    []string
+	anns       map[string]map[string]string
 }
 
 // missingNS is the apiserver's own answer, so a test exercises the error the
@@ -59,7 +62,7 @@ func (f *fakeWriter) EnsureNamespace(_ context.Context, name string) error {
 	return nil
 }
 
-func (f *fakeWriter) PutConfigMap(_ context.Context, ref string, data, _ map[string]string) error {
+func (f *fakeWriter) PutConfigMap(_ context.Context, ref string, data, _, anns map[string]string) error {
 	if err := f.missingNS(ref); err != nil {
 		return err
 	}
@@ -67,6 +70,14 @@ func (f *fakeWriter) PutConfigMap(_ context.Context, ref string, data, _ map[str
 		f.written = map[string]map[string]string{}
 	}
 	f.written[ref] = cloneData(data)
+	if f.anns == nil {
+		f.anns = map[string]map[string]string{}
+	}
+	if len(anns) == 0 {
+		delete(f.anns, ref)
+	} else {
+		f.anns[ref] = cloneData(anns)
+	}
 	return nil
 }
 
@@ -409,6 +420,49 @@ func TestPlanConfigMapRefIsBesideTheRelease(t *testing.T) {
 	}
 }
 
+// The answered inputs ride on the plan ConfigMap as an annotation, and in
+// plan.yaml so a later read still has them. A variant with none leaves both off.
+func TestPlanConfigMapCarriesAnsweredInputs(t *testing.T) {
+	cfg := testConfig("prod")
+	cfg.Server.AllowDeploy = true
+	s := New(cfg, liveProbe(), discardLogger(), "test")
+	w := &fakeWriter{}
+	s.SetWriter(w)
+
+	p, err := s.compose(context.Background(), planRequest{Model: "qwen3.6-35b-a3b", Release: "glm-53"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := "models/" + cluster.PlanConfigMapPrefix + "glm-53"
+	if err := s.writePlan(context.Background(), p, planStatus{Phase: phaseApplied}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := w.anns[ref][llmsvc.AnnInputs]; ok {
+		t.Fatalf("a variant with no inputs wrote %s", w.anns[ref][llmsvc.AnnInputs])
+	}
+
+	p.Inputs = []plan.AnsweredInput{{
+		Key: "storageKVOffload.mooncake.master", KeyType: plan.KeyTypeDotted, Value: "10.0.0.1:50051",
+	}}
+	if err := s.writePlan(context.Background(), p, planStatus{Phase: phaseApplied}); err != nil {
+		t.Fatal(err)
+	}
+	const want = `[{"key":"storageKVOffload.mooncake.master","keyType":"dotted","value":"10.0.0.1:50051"}]`
+	if got := w.anns[ref][llmsvc.AnnInputs]; got != want {
+		t.Fatalf("annotation %s", got)
+	}
+	back, err := plan.FromFiles(w.written[ref])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(back.Inputs, p.Inputs) {
+		t.Fatalf("plan.yaml lost the answers: %v", back.Inputs)
+	}
+	if err := back.VerifyHash(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // Write-ahead: nothing reaches the cluster when the plan cannot be recorded.
 func TestApplyRefusesWhenThePlanCannotBeRecorded(t *testing.T) {
 	cfg := testConfig("prod")
@@ -442,7 +496,7 @@ func (failingWriter) EnsureNamespace(context.Context, string) error {
 	return errors.New("forbidden")
 }
 
-func (failingWriter) PutConfigMap(context.Context, string, map[string]string, map[string]string) error {
+func (failingWriter) PutConfigMap(context.Context, string, map[string]string, map[string]string, map[string]string) error {
 	return errors.New("forbidden")
 }
 

@@ -43,6 +43,8 @@ func (s *Server) composeLive(ctx context.Context, req planRequest) (*plan.Plan, 
 		}
 		p.Layers[values.LayerEdit] = edits
 	}
+	// Recorded keys stay; the value is whatever the new layers hold.
+	p.Inputs = plan.Answered(p.Inputs, p.Values())
 	if err = p.ComputeHash(); err != nil {
 		return nil, err
 	}

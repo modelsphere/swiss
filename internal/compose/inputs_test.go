@@ -1,10 +1,13 @@
 package compose
 
 import (
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/modelsphere/swiss/internal/catalog"
+	"github.com/modelsphere/swiss/internal/plan"
 	"github.com/modelsphere/swiss/internal/values"
 )
 
@@ -161,6 +164,51 @@ func TestAnAnswerTheInputDoesNotTakeRefusesThePlan(t *testing.T) {
 	in.Profile.Inputs = map[string]any{masterKey: "no-port"}
 	if _, err := Compose(in); err == nil || !strings.Contains(err.Error(), `"no-port" does not match`) {
 		t.Fatalf("want a refusal quoting the answer, got %v", err)
+	}
+}
+
+// The recorded answer is the composed value at the input key, so a form
+// override wins over the site, and a chart value that is not an input is not
+// copied in. A variant with no inputs records nothing and hashes as before.
+func TestComposeRecordsTheEffectiveInputAnswer(t *testing.T) {
+	plain, err := Compose(testInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.Inputs != nil {
+		t.Fatalf("no inputs declared, recorded %v", plain.Inputs)
+	}
+	bare, err := json.Marshal(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(bare), `"inputs"`) {
+		t.Fatalf("a plan with no inputs must omit the field: %s", bare)
+	}
+
+	in := inputsInput()
+	in.Resolved.Variant.Values["storageKVOffload"].(map[string]any)["mooncake"].(map[string]any)["master"] = "from-catalog:50051"
+	in.Profile.Inputs = map[string]any{masterKey: "site.svc:50051"}
+	in.Overrides = values.Tree{"storageKVOffload": map[string]any{"mooncake": map[string]any{"master": "10.0.0.1:50051"}}}
+	p, err := Compose(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []plan.AnsweredInput{{Key: masterKey, KeyType: plan.KeyTypeDotted, Value: "10.0.0.1:50051"}}
+	if !reflect.DeepEqual(p.Inputs, want) {
+		t.Fatalf("recorded %v, want the form's answer only", p.Inputs)
+	}
+	const ann = `[{"key":"storageKVOffload.mooncake.master","keyType":"dotted","value":"10.0.0.1:50051"}]`
+	if p.InputsJSON() != ann {
+		t.Fatalf("annotation %s", p.InputsJSON())
+	}
+	cleared := *p
+	cleared.Inputs = nil
+	if err := cleared.ComputeHash(); err != nil {
+		t.Fatal(err)
+	}
+	if cleared.Hash != p.Hash {
+		t.Fatal("answered inputs must not change the plan hash")
 	}
 }
 

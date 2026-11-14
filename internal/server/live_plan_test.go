@@ -2,11 +2,12 @@ package server
 
 import (
 	"encoding/json"
+	"testing"
+
 	"github.com/modelsphere/swiss/internal/llmsvc"
+	"github.com/modelsphere/swiss/internal/plan"
 	"github.com/modelsphere/swiss/internal/values"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-
-	"testing"
 )
 
 func TestLivePlanReusesSourceWithoutCanaryRestrictions(t *testing.T) {
@@ -72,5 +73,21 @@ func TestLivePlanReusesSourceWithoutCanaryRestrictions(t *testing.T) {
 	}
 	if route["default_max"] != "99" {
 		t.Fatal("non-adaptive route setting was restricted")
+	}
+}
+
+func TestRefreshAnsweredInputsUsesTheComposedValue(t *testing.T) {
+	p := &plan.Plan{
+		Layers: map[string]values.Tree{
+			values.LayerDerived: {"storageKVOffload": map[string]any{"mooncake": map[string]any{"master": "old:1"}}},
+			values.LayerForm:    {"storageKVOffload": map[string]any{"mooncake": map[string]any{"master": "10.0.0.1:50051"}}},
+		},
+		Inputs: []plan.AnsweredInput{{
+			Key: "storageKVOffload.mooncake.master", KeyType: plan.KeyTypeDotted, Value: "old:1",
+		}},
+	}
+	p.Inputs = plan.Answered(p.Inputs, p.Values())
+	if len(p.Inputs) != 1 || p.Inputs[0].Value != "10.0.0.1:50051" || p.Inputs[0].KeyType != plan.KeyTypeDotted {
+		t.Fatalf("refreshed %v", p.Inputs)
 	}
 }

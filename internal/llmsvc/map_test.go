@@ -167,6 +167,53 @@ func TestChartPathPlanIsRefused(t *testing.T) {
 	}
 }
 
+func TestInputsAnnotationRoundTripsAndIsNotTheHash(t *testing.T) {
+	p := realistic(t)
+	u, err := FromPlan(p, "install", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := u.GetAnnotations()[AnnInputs]; ok {
+		t.Fatal("a variant with no inputs must not carry the annotation")
+	}
+	back, err := ToPlan(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if EditedInPlace(u, back) {
+		t.Fatal("recording no inputs looks like an edit")
+	}
+
+	p.Inputs = []plan.AnsweredInput{{
+		Key: "storageKVOffload.mooncake.master", KeyType: plan.KeyTypeDotted, Value: "10.0.0.1:50051",
+	}}
+	hash := p.Hash
+	if err := p.ComputeHash(); err != nil {
+		t.Fatal(err)
+	}
+	if p.Hash != hash {
+		t.Fatal("answered inputs must not change the plan hash")
+	}
+	u, err = FromPlan(p, "upgrade", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `[{"key":"storageKVOffload.mooncake.master","keyType":"dotted","value":"10.0.0.1:50051"}]`
+	if got := u.GetAnnotations()[AnnInputs]; got != want {
+		t.Fatalf("annotation %s", got)
+	}
+	back, err = ToPlan(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if EditedInPlace(u, back) {
+		t.Fatal("the inputs annotation must not count as an edit")
+	}
+	if !reflect.DeepEqual(back.Inputs, p.Inputs) {
+		t.Fatalf("read back %v", back.Inputs)
+	}
+}
+
 func TestAnnotationsAreExact(t *testing.T) {
 	p := realistic(t)
 	u, err := FromPlan(p, "upgrade", "bump to 1.1.0")
