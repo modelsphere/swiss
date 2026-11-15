@@ -20,6 +20,7 @@ import (
 	"github.com/modelsphere/swiss/internal/compose"
 	"github.com/modelsphere/swiss/internal/exec"
 	"github.com/modelsphere/swiss/internal/gpu"
+	"github.com/modelsphere/swiss/internal/llmsvc"
 	"github.com/modelsphere/swiss/internal/plan"
 	"github.com/modelsphere/swiss/internal/store"
 	"github.com/modelsphere/swiss/internal/values"
@@ -78,6 +79,10 @@ type planRequest struct {
 	// ChartVersion must fall in the variant's chart.version. Empty resolves as
 	// chart.Resolve does.
 	ChartVersion string `json:"chartVersion,omitempty"`
+	// AdditionalAnnotations are client-owned annotations. Nil means the field
+	// was omitted: an upgrade or reuseSource keeps the release's. An empty
+	// map clears them. Only allowlisted keys are accepted.
+	AdditionalAnnotations map[string]string `json:"additionalAnnotations,omitempty"`
 
 	// Set by carryForward, never by the caller.
 	runningChart plan.ChartRef
@@ -174,6 +179,9 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, error) {
+	if err := llmsvc.CheckAdditionalAnnotations(req.AdditionalAnnotations); err != nil {
+		return nil, err
+	}
 	if req.ReuseSource {
 		return s.composeLive(ctx, req)
 	}
@@ -332,6 +340,7 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 			return nil, err
 		}
 	}
+	p.AdditionalAnnotations = maps.Clone(req.AdditionalAnnotations)
 	p.Warnings = warnings
 	return p, nil
 }
@@ -373,6 +382,11 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 		runningChart: prev.Chart,
 		movedFrom:    movedFrom,
 		GPUResource:  req.GPUResource,
+	}
+	if req.AdditionalAnnotations == nil {
+		out.AdditionalAnnotations = prev.AdditionalAnnotations
+	} else {
+		out.AdditionalAnnotations = req.AdditionalAnnotations
 	}
 	if req.Variant != "" {
 		out.Variant = req.Variant
@@ -1111,7 +1125,21 @@ func (s *Server) writePlan(ctx context.Context, p *plan.Plan, st planStatus) err
 		return err
 	}
 	files["status.yaml"] = string(status)
-	return s.writer.PutConfigMap(ctx, planRef(p.Release.Namespace, p.Release.Name), files, phaseLabel(st.Phase))
+	return s.writer.PutConfigMap(ctx, planRef(p.Release.Namespace, p.Release.Name), files, phaseLabel(st.Phase), p.AdditionalAnnotations)
+}
+
+// inputAnnotationsFromFiles reads additionalAnnotations off plan.yaml so a
+// rewrite that only changes status keeps them.
+func inputAnnotationsFromFiles(files map[string]string) map[string]string {
+	raw := files[plan.MetaFile]
+	if raw == "" {
+		return nil
+	}
+	p, err := plan.ParseYAML([]byte(raw))
+	if err != nil {
+		return nil
+	}
+	return p.AdditionalAnnotations
 }
 
 // phaseLabel is the metadata marker for a phase the deployments list has to

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"maps"
 
 	"github.com/modelsphere/swiss/internal/llmsvc"
 	"github.com/modelsphere/swiss/internal/plan"
@@ -42,6 +43,11 @@ func (s *Server) composeLive(ctx context.Context, req planRequest) (*plan.Plan, 
 			return nil, fmt.Errorf("edits: %w", err)
 		}
 		p.Layers[values.LayerEdit] = edits
+	}
+	// Omitted keeps what the live object carried. Sending the field, including
+	// {}, replaces it.
+	if req.AdditionalAnnotations != nil {
+		p.AdditionalAnnotations = maps.Clone(req.AdditionalAnnotations)
 	}
 	if err = p.ComputeHash(); err != nil {
 		return nil, err

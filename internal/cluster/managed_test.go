@@ -92,7 +92,8 @@ func TestPutConfigMapReplacesPhaseLabel(t *testing.T) {
 	ref := "models/" + PlanConfigMapPrefix + "glm-53"
 	data := map[string]string{planKey: "source:\n  model: glm\n"}
 
-	if err := k.PutConfigMap(ctx, ref, data, map[string]string{LabelPhase: "uninstalling"}); err != nil {
+	ann := map[string]string{"swiss.modelsphere.dev/inputs": `[{"key":"k","keyType":"dotted","value":"v"}]`}
+	if err := k.PutConfigMap(ctx, ref, data, map[string]string{LabelPhase: "uninstalling"}, ann); err != nil {
 		t.Fatal(err)
 	}
 	cm, err := cs.CoreV1().ConfigMaps("models").Get(ctx, PlanConfigMapPrefix+"glm-53", metav1.GetOptions{})
@@ -102,8 +103,11 @@ func TestPutConfigMapReplacesPhaseLabel(t *testing.T) {
 	if cm.Labels["app.kubernetes.io/managed-by"] != "swiss" || cm.Labels[LabelPhase] != "uninstalling" {
 		t.Fatalf("labels %+v", cm.Labels)
 	}
+	if cm.Annotations["swiss.modelsphere.dev/inputs"] != ann["swiss.modelsphere.dev/inputs"] {
+		t.Fatalf("annotations %+v", cm.Annotations)
+	}
 
-	if err := k.PutConfigMap(ctx, ref, data, nil); err != nil {
+	if err := k.PutConfigMap(ctx, ref, data, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	cm, err = cs.CoreV1().ConfigMaps("models").Get(ctx, PlanConfigMapPrefix+"glm-53", metav1.GetOptions{})
@@ -115,6 +119,9 @@ func TestPutConfigMapReplacesPhaseLabel(t *testing.T) {
 	}
 	if _, ok := cm.Labels[LabelPhase]; ok {
 		t.Fatalf("nil labels must clear the phase marker, labels %+v", cm.Labels)
+	}
+	if len(cm.Annotations) != 0 {
+		t.Fatalf("nil annotations must clear them, got %+v", cm.Annotations)
 	}
 }
 

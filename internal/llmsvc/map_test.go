@@ -167,6 +167,47 @@ func TestChartPathPlanIsRefused(t *testing.T) {
 	}
 }
 
+func TestAdditionalAnnotationsRoundTripAndAreNotTheHash(t *testing.T) {
+	p := realistic(t)
+	u, err := FromPlan(p, "install", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := u.GetAnnotations()[AnnInputs]; ok {
+		t.Fatal("a plan with no additional annotations must not carry inputs")
+	}
+
+	const raw = `[{ "key" : "a", "value" : 1 }]`
+	p.AdditionalAnnotations = map[string]string{AnnInputs: raw}
+	hash := p.Hash
+	if err := p.ComputeHash(); err != nil {
+		t.Fatal(err)
+	}
+	if p.Hash != hash {
+		t.Fatal("additional annotations must not change the plan hash")
+	}
+	u, err = FromPlan(p, "upgrade", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := u.GetAnnotations()[AnnInputs]; got != raw {
+		t.Fatalf("annotation %s", got)
+	}
+	ann := u.GetAnnotations()
+	ann["hand.example/note"] = "added by hand"
+	u.SetAnnotations(ann)
+	back, err := ToPlan(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if EditedInPlace(u, back) {
+		t.Fatal("additional annotations must not count as an edit")
+	}
+	if !reflect.DeepEqual(back.AdditionalAnnotations, map[string]string{AnnInputs: raw}) {
+		t.Fatalf("read back %v", back.AdditionalAnnotations)
+	}
+}
+
 func TestAnnotationsAreExact(t *testing.T) {
 	p := realistic(t)
 	u, err := FromPlan(p, "upgrade", "bump to 1.1.0")

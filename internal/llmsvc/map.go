@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/modelsphere/swiss/internal/plan"
@@ -76,6 +77,7 @@ func modelFromPlan(p *plan.Plan) *ModelSpec {
 
 func annotations(p *plan.Plan, action, note string) map[string]string {
 	ann := map[string]string{}
+	maps.Copy(ann, p.AdditionalAnnotations)
 	put := func(k, v string) {
 		if v != "" {
 			ann[k] = v
@@ -180,6 +182,10 @@ func ToPlan(u *unstructured.Unstructured) (*plan.Plan, error) {
 		p.Source.Variant = m.Variant
 		p.Source.HF = m.HF
 		p.Engine = m.Engine
+	}
+	// AnnInputs is opaque. Anything else on the object stays off the plan.
+	if raw, ok := ann[AnnInputs]; ok {
+		p.AdditionalAnnotations = map[string]string{AnnInputs: raw}
 	}
 
 	if err := p.ComputeHash(); err != nil {

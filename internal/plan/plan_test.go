@@ -145,6 +145,27 @@ func TestWarningsAreKeptButNotHashed(t *testing.T) {
 	}
 }
 
+func TestAdditionalAnnotationsAreNotInTheHash(t *testing.T) {
+	a, b := testPlan(), testPlan()
+	b.AdditionalAnnotations = map[string]string{"swiss.modelsphere.dev/inputs": `[{ "key" : "k", "value" : "v" }]`}
+	if err := a.ComputeHash(); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.ComputeHash(); err != nil {
+		t.Fatal(err)
+	}
+	if a.Hash != b.Hash {
+		t.Fatal("additional annotations must not change the hash")
+	}
+	b.AdditionalAnnotations = nil
+	if err := b.ComputeHash(); err != nil {
+		t.Fatal(err)
+	}
+	if a.Hash != b.Hash {
+		t.Fatal("clearing additional annotations must not change the hash")
+	}
+}
+
 func TestHelmChartArgs(t *testing.T) {
 	for _, tc := range []struct {
 		repo, path, root string

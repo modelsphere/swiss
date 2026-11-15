@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/modelsphere/swiss/internal/cluster"
+	"github.com/modelsphere/swiss/internal/llmsvc"
 	"github.com/modelsphere/swiss/internal/plan"
 	"github.com/modelsphere/swiss/internal/store"
 	"github.com/modelsphere/swiss/internal/values"
@@ -32,6 +33,7 @@ type fakeWriter struct {
 	namespaces map[string]bool
 	strictNS   bool
 	ensured    []string
+	anns       map[string]map[string]string
 }
 
 // missingNS is the apiserver's own answer, so a test exercises the error the
@@ -59,7 +61,7 @@ func (f *fakeWriter) EnsureNamespace(_ context.Context, name string) error {
 	return nil
 }
 
-func (f *fakeWriter) PutConfigMap(_ context.Context, ref string, data, _ map[string]string) error {
+func (f *fakeWriter) PutConfigMap(_ context.Context, ref string, data, _, anns map[string]string) error {
 	if err := f.missingNS(ref); err != nil {
 		return err
 	}
@@ -67,6 +69,14 @@ func (f *fakeWriter) PutConfigMap(_ context.Context, ref string, data, _ map[str
 		f.written = map[string]map[string]string{}
 	}
 	f.written[ref] = cloneData(data)
+	if f.anns == nil {
+		f.anns = map[string]map[string]string{}
+	}
+	if len(anns) == 0 {
+		delete(f.anns, ref)
+	} else {
+		f.anns[ref] = cloneData(anns)
+	}
 	return nil
 }
 
@@ -409,6 +419,190 @@ func TestPlanConfigMapRefIsBesideTheRelease(t *testing.T) {
 	}
 }
 
+// A client annotation is stored on the plan, in plan.yaml, and on the plan
+// ConfigMap. Omitting the field leaves all three without it.
+func TestInstallPersistsAdditionalAnnotations(t *testing.T) {
+	cfg := testConfig("prod")
+	cfg.Server.AllowDeploy = true
+	s := New(cfg, liveProbe(), discardLogger(), "test")
+	w := &fakeWriter{}
+	s.SetWriter(w)
+
+	const raw = `[{ "key" : "storageKVOffload.mooncake.master", "value" : "10.0.0.1:50051" }]`
+	p, err := s.compose(context.Background(), planRequest{
+		Model: "qwen3.6-35b-a3b", Release: "glm-53",
+		AdditionalAnnotations: map[string]string{llmsvc.AnnInputs: raw},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.AdditionalAnnotations[llmsvc.AnnInputs] != raw {
+		t.Fatalf("plan annotations %v", p.AdditionalAnnotations)
+	}
+	ref := "models/" + cluster.PlanConfigMapPrefix + "glm-53"
+	if err := s.writePlan(context.Background(), p, planStatus{Phase: phaseApplied}); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.anns[ref][llmsvc.AnnInputs]; got != raw {
+		t.Fatalf("annotation %s", got)
+	}
+	back, err := plan.FromFiles(w.written[ref])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back.AdditionalAnnotations[llmsvc.AnnInputs] != raw {
+		t.Fatalf("plan.yaml lost the annotation: %v", back.AdditionalAnnotations)
+	}
+	if err := back.VerifyHash(); err != nil {
+		t.Fatal(err)
+	}
+
+	bare, err := s.compose(context.Background(), planRequest{Model: "qwen3.6-35b-a3b", Release: "glm-53"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bare.AdditionalAnnotations != nil {
+		t.Fatalf("omitted annotations were recorded: %v", bare.AdditionalAnnotations)
+	}
+	if bare.Hash != p.Hash {
+		t.Fatal("additional annotations changed the plan hash")
+	}
+	if err := s.writePlan(context.Background(), bare, planStatus{Phase: phaseApplied}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := w.anns[ref][llmsvc.AnnInputs]; ok {
+		t.Fatalf("omitted annotations left %s on the configmap", w.anns[ref][llmsvc.AnnInputs])
+	}
+}
+
+func TestAdditionalAnnotationsRejectsDisallowedOrOversized(t *testing.T) {
+	srv, s := deployServerWith(t, liveProbe(), true)
+	w := s.writer.(*fakeWriter)
+	bodies := []map[string]any{
+		{"model": "qwen3.6-35b-a3b", "release": "glm-53", "additionalAnnotations": map[string]string{"other.example/x": "v"}},
+		{"model": "qwen3.6-35b-a3b", "release": "glm-53", "additionalAnnotations": map[string]string{llmsvc.AnnInputs: strings.Repeat("x", 16*1024+1)}},
+	}
+	for _, body := range bodies {
+		code, out := post(t, srv, "/api/plans", body)
+		if code != http.StatusBadRequest {
+			t.Fatalf("status %d %v", code, out)
+		}
+	}
+	if len(w.written) != 0 || len(w.anns) != 0 {
+		t.Fatalf("a refused annotation wrote %#v %#v", w.written, w.anns)
+	}
+
+	ok := strings.Repeat("y", 16*1024)
+	code, out := post(t, srv, "/api/plans", map[string]any{
+		"model": "qwen3.6-35b-a3b", "release": "glm-53",
+		"additionalAnnotations": map[string]string{llmsvc.AnnInputs: ok},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("16 KiB exactly: status %d %v", code, out)
+	}
+	anns, _ := out["additionalAnnotations"].(map[string]any)
+	if anns[llmsvc.AnnInputs] != ok {
+		t.Fatal("a 16 KiB value was not kept")
+	}
+}
+
+func TestUpgradeAdditionalAnnotationsKeepClearReplace(t *testing.T) {
+	const raw = `[{ "key" : "k", "value" : "v" }]`
+	probe := deployed(t, planRequest{
+		Model: "qwen3.6-35b-a3b", Release: "r", ServiceID: "r",
+		AdditionalAnnotations: map[string]string{llmsvc.AnnInputs: raw},
+	})
+	srv, s := deployServerWith(t, probe, true)
+
+	code, up := post(t, srv, "/api/plans", map[string]any{"fromRelease": "r"})
+	if code != http.StatusOK {
+		t.Fatalf("keep: status %d %v", code, up)
+	}
+	anns, _ := up["additionalAnnotations"].(map[string]any)
+	if anns[llmsvc.AnnInputs] != raw {
+		t.Fatalf("omitted field did not keep the annotation: %v", up["additionalAnnotations"])
+	}
+	hash, _ := up["hash"].(string)
+
+	code, up = post(t, srv, "/api/plans", map[string]any{
+		"fromRelease":           "r",
+		"additionalAnnotations": map[string]string{},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("clear: status %d %v", code, up)
+	}
+	if _, ok := up["additionalAnnotations"]; ok {
+		t.Fatalf("empty annotations must be omitted, got %v", up["additionalAnnotations"])
+	}
+	if up["hash"] != hash {
+		t.Fatal("clearing annotations changed the hash")
+	}
+	if stored, err := s.store.Plan(context.Background(), hash); err != nil || len(stored.AdditionalAnnotations) != 0 {
+		t.Fatalf("stored plan after clear: err=%v anns=%v", err, stored)
+	}
+
+	const next = `[{ "key" : "k", "value" : "w" }]`
+	code, up = post(t, srv, "/api/plans", map[string]any{
+		"fromRelease":           "r",
+		"additionalAnnotations": map[string]string{llmsvc.AnnInputs: next},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("replace: status %d %v", code, up)
+	}
+	anns, _ = up["additionalAnnotations"].(map[string]any)
+	if anns[llmsvc.AnnInputs] != next {
+		t.Fatalf("replacement did not win: %v", up["additionalAnnotations"])
+	}
+	if up["hash"] != hash {
+		t.Fatal("replacing annotations changed the hash")
+	}
+	if stored, err := s.store.Plan(context.Background(), hash); err != nil || stored.AdditionalAnnotations[llmsvc.AnnInputs] != next {
+		t.Fatalf("stored plan after replace: err=%v anns=%v", err, stored)
+	}
+}
+
+// A fresh install has no release to carry annotations forward. Re-composing
+// with only additionalAnnotations changed keeps the hash, and install reads
+// the latest staged copy of that hash.
+func TestInstallRecomposeStoresLatestAnnotations(t *testing.T) {
+	probe := liveProbe()
+	probe.Maps["swiss/site-profile"] = map[string]string{
+		"profile.yaml": profileYAML + "chartRepo: oci://ghcr.io/modelsphere/charts\n",
+	}
+	srv, s := deployServerWith(t, probe, true)
+	s.cfg.Server.HelmBin, s.cfg.Server.HelmfileBin = stubHelm(t, 0), stubHelm(t, 0)
+	body := map[string]any{
+		"model": "qwen3.6-35b-a3b", "release": "fresh-ann",
+		"additionalAnnotations": map[string]string{llmsvc.AnnInputs: `[{ "key" : "k", "value" : "v" }]`},
+	}
+	code, out := post(t, srv, "/api/plans", body)
+	if code != http.StatusOK {
+		t.Fatalf("install plan: %d %v", code, out)
+	}
+	hash, _ := out["hash"].(string)
+
+	const next = `[{ "key" : "k", "value" : "w" }]`
+	body["additionalAnnotations"] = map[string]string{llmsvc.AnnInputs: next}
+	code, out = post(t, srv, "/api/plans", body)
+	if code != http.StatusOK {
+		t.Fatalf("replan: %d %v", code, out)
+	}
+	if out["hash"] != hash {
+		t.Fatalf("hash changed: %v vs %s", out["hash"], hash)
+	}
+	stored, err := s.store.Plan(context.Background(), hash)
+	if err != nil || stored.AdditionalAnnotations[llmsvc.AnnInputs] != next {
+		t.Fatalf("stored plan: err=%v anns=%v", err, stored)
+	}
+
+	if code, out = post(t, srv, "/api/install", map[string]any{"planHash": hash}); code != http.StatusOK {
+		t.Fatalf("install: %d %v", code, out)
+	}
+	if got := writtenPlan(t, s, "models", "fresh-ann").AdditionalAnnotations[llmsvc.AnnInputs]; got != next {
+		t.Fatalf("install read stale annotations: %s", got)
+	}
+}
+
 // Write-ahead: nothing reaches the cluster when the plan cannot be recorded.
 func TestApplyRefusesWhenThePlanCannotBeRecorded(t *testing.T) {
 	cfg := testConfig("prod")
@@ -442,7 +636,7 @@ func (failingWriter) EnsureNamespace(context.Context, string) error {
 	return errors.New("forbidden")
 }
 
-func (failingWriter) PutConfigMap(context.Context, string, map[string]string, map[string]string) error {
+func (failingWriter) PutConfigMap(context.Context, string, map[string]string, map[string]string, map[string]string) error {
 	return errors.New("forbidden")
 }
 

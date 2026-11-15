@@ -43,6 +43,9 @@ const (
 	AnnProfile       = SwissAnnotationPrefix + "profile"
 	AnnAction        = SwissAnnotationPrefix + "action"
 	AnnNote          = SwissAnnotationPrefix + "note"
+	// AnnInputs is the one client-owned annotation swiss stores. The value is
+	// opaque; swiss does not read it.
+	AnnInputs = SwissAnnotationPrefix + "inputs"
 
 	AnnDeletionPolicy = Group + "/deletion-policy"
 	AnnForceConflicts = Group + "/force-conflicts"
@@ -52,6 +55,20 @@ const (
 	// predates it ignores it, and the release is applied with the schema checked.
 	AnnSkipSchemaValidation = Group + "/skip-schema-validation"
 )
+
+// CheckAdditionalAnnotations rejects a key other than AnnInputs or a value
+// longer than 16 KiB. Nil and empty are valid: an omitted field and {} both pass.
+func CheckAdditionalAnnotations(m map[string]string) error {
+	for k, v := range m {
+		if k != AnnInputs {
+			return fmt.Errorf("additionalAnnotations: unknown key %q", k)
+		}
+		if len(v) > 16*1024 {
+			return fmt.Errorf("additionalAnnotations: %q exceeds 16 KiB", k)
+		}
+	}
+	return nil
+}
 
 var GVR = schema.GroupVersionResource{Group: Group, Version: Version, Resource: Resource}
 

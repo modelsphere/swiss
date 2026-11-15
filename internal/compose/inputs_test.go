@@ -164,6 +164,28 @@ func TestAnAnswerTheInputDoesNotTakeRefusesThePlan(t *testing.T) {
 	}
 }
 
+// Compose does not record annotations. The client supplies those, including
+// when the variant declares inputs.
+func TestComposeLeavesAdditionalAnnotationsEmpty(t *testing.T) {
+	plain, err := Compose(testInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.AdditionalAnnotations != nil {
+		t.Fatalf("compose recorded annotations: %v", plain.AdditionalAnnotations)
+	}
+
+	in := inputsInput()
+	in.Profile.Inputs = map[string]any{masterKey: "site.svc:50051"}
+	p, err := Compose(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.AdditionalAnnotations != nil {
+		t.Fatalf("compose recorded annotations for a variant with inputs: %v", p.AdditionalAnnotations)
+	}
+}
+
 // An answer reaches only a variant that declares its key: unlike extra, a
 // site answer never lands in a deploy that did not ask.
 func TestASiteAnswerReachesOnlyAVariantThatDeclaresIt(t *testing.T) {

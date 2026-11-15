@@ -71,16 +71,20 @@ func Open(path string) (*Store, error) {
 
 func (s *Store) Close() error { return s.db.Close() }
 
-// PutPlan stores a plan. Plans are immutable: re-storing the same hash is a
-// no-op, which is what makes "revert to the plan applied on the 3rd" work.
+// PutPlan stores a plan by its hash. What the hash covers (release, source,
+// chart and values) is immutable, while unhashed metadata such as
+// AdditionalAnnotations is updated to the latest staged copy so apply sees
+// what the last compose returned. Rollback reads archived plans from the
+// cluster rather than this table.
 func (s *Store) PutPlan(ctx context.Context, p *plan.Plan) error {
 	doc, err := json.Marshal(p)
 	if err != nil {
 		return err
 	}
 	_, err = s.db.ExecContext(ctx,
-		`INSERT OR IGNORE INTO plans (hash, namespace, release, model, variant, document, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO plans (hash, namespace, release, model, variant, document, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(hash) DO UPDATE SET document = excluded.document`,
 		p.Hash, p.Release.Namespace, p.Release.Name, p.Source.Model, p.Source.Variant,
 		string(doc), now())
 	return err

@@ -457,7 +457,7 @@ func (s *Server) handleSaveProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := map[string]string{s.cfg.Cluster.Profile.Key: body}
-	if err := s.writer.PutConfigMap(ctx, ref, data, nil); err != nil {
+	if err := s.writer.PutConfigMap(ctx, ref, data, nil, nil); err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
