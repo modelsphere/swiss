@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -420,46 +419,139 @@ func TestPlanConfigMapRefIsBesideTheRelease(t *testing.T) {
 	}
 }
 
-// The answered inputs ride on the plan ConfigMap as an annotation, and in
-// plan.yaml so a later read still has them. A variant with none leaves both off.
-func TestPlanConfigMapCarriesAnsweredInputs(t *testing.T) {
+// A client annotation is stored on the plan, in plan.yaml, and on the plan
+// ConfigMap. Omitting the field leaves all three without it.
+func TestInstallPersistsAdditionalAnnotations(t *testing.T) {
 	cfg := testConfig("prod")
 	cfg.Server.AllowDeploy = true
 	s := New(cfg, liveProbe(), discardLogger(), "test")
 	w := &fakeWriter{}
 	s.SetWriter(w)
 
-	p, err := s.compose(context.Background(), planRequest{Model: "qwen3.6-35b-a3b", Release: "glm-53"})
+	const raw = `[{ "key" : "storageKVOffload.mooncake.master", "value" : "10.0.0.1:50051" }]`
+	p, err := s.compose(context.Background(), planRequest{
+		Model: "qwen3.6-35b-a3b", Release: "glm-53",
+		AdditionalAnnotations: map[string]string{llmsvc.AnnInputs: raw},
+	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if p.AdditionalAnnotations[llmsvc.AnnInputs] != raw {
+		t.Fatalf("plan annotations %v", p.AdditionalAnnotations)
 	}
 	ref := "models/" + cluster.PlanConfigMapPrefix + "glm-53"
 	if err := s.writePlan(context.Background(), p, planStatus{Phase: phaseApplied}); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := w.anns[ref][llmsvc.AnnInputs]; ok {
-		t.Fatalf("a variant with no inputs wrote %s", w.anns[ref][llmsvc.AnnInputs])
-	}
-
-	p.Inputs = []plan.AnsweredInput{{
-		Key: "storageKVOffload.mooncake.master", KeyType: plan.KeyTypeDotted, Value: "10.0.0.1:50051",
-	}}
-	if err := s.writePlan(context.Background(), p, planStatus{Phase: phaseApplied}); err != nil {
-		t.Fatal(err)
-	}
-	const want = `[{"key":"storageKVOffload.mooncake.master","keyType":"dotted","value":"10.0.0.1:50051"}]`
-	if got := w.anns[ref][llmsvc.AnnInputs]; got != want {
+	if got := w.anns[ref][llmsvc.AnnInputs]; got != raw {
 		t.Fatalf("annotation %s", got)
 	}
 	back, err := plan.FromFiles(w.written[ref])
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(back.Inputs, p.Inputs) {
-		t.Fatalf("plan.yaml lost the answers: %v", back.Inputs)
+	if back.AdditionalAnnotations[llmsvc.AnnInputs] != raw {
+		t.Fatalf("plan.yaml lost the annotation: %v", back.AdditionalAnnotations)
 	}
 	if err := back.VerifyHash(); err != nil {
 		t.Fatal(err)
+	}
+
+	bare, err := s.compose(context.Background(), planRequest{Model: "qwen3.6-35b-a3b", Release: "glm-53"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bare.AdditionalAnnotations != nil {
+		t.Fatalf("omitted annotations were recorded: %v", bare.AdditionalAnnotations)
+	}
+	if bare.Hash != p.Hash {
+		t.Fatal("additional annotations changed the plan hash")
+	}
+	if err := s.writePlan(context.Background(), bare, planStatus{Phase: phaseApplied}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := w.anns[ref][llmsvc.AnnInputs]; ok {
+		t.Fatalf("omitted annotations left %s on the configmap", w.anns[ref][llmsvc.AnnInputs])
+	}
+}
+
+func TestAdditionalAnnotationsRejectsDisallowedOrOversized(t *testing.T) {
+	srv, s := deployServerWith(t, liveProbe(), true)
+	w := s.writer.(*fakeWriter)
+	bodies := []map[string]any{
+		{"model": "qwen3.6-35b-a3b", "release": "glm-53", "additionalAnnotations": map[string]string{"other.example/x": "v"}},
+		{"model": "qwen3.6-35b-a3b", "release": "glm-53", "additionalAnnotations": map[string]string{llmsvc.AnnInputs: strings.Repeat("x", 16*1024+1)}},
+	}
+	for _, body := range bodies {
+		code, out := post(t, srv, "/api/plans", body)
+		if code != http.StatusBadRequest {
+			t.Fatalf("status %d %v", code, out)
+		}
+	}
+	if len(w.written) != 0 || len(w.anns) != 0 {
+		t.Fatalf("a refused annotation wrote %#v %#v", w.written, w.anns)
+	}
+
+	ok := strings.Repeat("y", 16*1024)
+	code, out := post(t, srv, "/api/plans", map[string]any{
+		"model": "qwen3.6-35b-a3b", "release": "glm-53",
+		"additionalAnnotations": map[string]string{llmsvc.AnnInputs: ok},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("16 KiB exactly: status %d %v", code, out)
+	}
+	anns, _ := out["additionalAnnotations"].(map[string]any)
+	if anns[llmsvc.AnnInputs] != ok {
+		t.Fatal("a 16 KiB value was not kept")
+	}
+}
+
+func TestUpgradeAdditionalAnnotationsKeepClearReplace(t *testing.T) {
+	const raw = `[{ "key" : "k", "value" : "v" }]`
+	probe := deployed(t, planRequest{
+		Model: "qwen3.6-35b-a3b", Release: "r", ServiceID: "r",
+		AdditionalAnnotations: map[string]string{llmsvc.AnnInputs: raw},
+	})
+	srv, _ := deployServerWith(t, probe, true)
+
+	code, up := post(t, srv, "/api/plans", map[string]any{"fromRelease": "r"})
+	if code != http.StatusOK {
+		t.Fatalf("keep: status %d %v", code, up)
+	}
+	anns, _ := up["additionalAnnotations"].(map[string]any)
+	if anns[llmsvc.AnnInputs] != raw {
+		t.Fatalf("omitted field did not keep the annotation: %v", up["additionalAnnotations"])
+	}
+	hash, _ := up["hash"].(string)
+
+	code, up = post(t, srv, "/api/plans", map[string]any{
+		"fromRelease":           "r",
+		"additionalAnnotations": map[string]string{},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("clear: status %d %v", code, up)
+	}
+	if _, ok := up["additionalAnnotations"]; ok {
+		t.Fatalf("empty annotations must be omitted, got %v", up["additionalAnnotations"])
+	}
+	if up["hash"] != hash {
+		t.Fatal("clearing annotations changed the hash")
+	}
+
+	const next = `[{ "key" : "k", "value" : "w" }]`
+	code, up = post(t, srv, "/api/plans", map[string]any{
+		"fromRelease":           "r",
+		"additionalAnnotations": map[string]string{llmsvc.AnnInputs: next},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("replace: status %d %v", code, up)
+	}
+	anns, _ = up["additionalAnnotations"].(map[string]any)
+	if anns[llmsvc.AnnInputs] != next {
+		t.Fatalf("replacement did not win: %v", up["additionalAnnotations"])
+	}
+	if up["hash"] != hash {
+		t.Fatal("replacing annotations changed the hash")
 	}
 }
 

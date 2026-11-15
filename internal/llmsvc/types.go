@@ -43,8 +43,8 @@ const (
 	AnnProfile       = SwissAnnotationPrefix + "profile"
 	AnnAction        = SwissAnnotationPrefix + "action"
 	AnnNote          = SwissAnnotationPrefix + "note"
-	// AnnInputs is the answered catalog inputs: a compact JSON list of
-	// {key, keyType, value}. Omitted when the variant declares none.
+	// AnnInputs is the one client-owned annotation swiss stores. The value is
+	// opaque; swiss does not read it.
 	AnnInputs = SwissAnnotationPrefix + "inputs"
 
 	AnnDeletionPolicy = Group + "/deletion-policy"
@@ -55,6 +55,40 @@ const (
 	// predates it ignores it, and the release is applied with the schema checked.
 	AnnSkipSchemaValidation = Group + "/skip-schema-validation"
 )
+
+// AllowedAdditionalAnnotations is the fixed set a client may set on a plan.
+// A request naming any other key is refused. A plan read from the cluster
+// keeps only these, so a hand-added annotation is not carried forward.
+var AllowedAdditionalAnnotations = map[string]bool{AnnInputs: true}
+
+// CheckAdditionalAnnotations rejects an unknown key or a value over 16 KiB.
+// Nil and empty are valid: an omitted field and {} both pass.
+func CheckAdditionalAnnotations(m map[string]string) error {
+	for k, v := range m {
+		if !AllowedAdditionalAnnotations[k] {
+			return fmt.Errorf("additionalAnnotations: unknown key %q", k)
+		}
+		if len(v) > 16*1024 {
+			return fmt.Errorf("additionalAnnotations: %q exceeds 16 KiB", k)
+		}
+	}
+	return nil
+}
+
+// FilterAdditionalAnnotations keeps allowlisted keys. Nil when none remain.
+func FilterAdditionalAnnotations(m map[string]string) map[string]string {
+	var out map[string]string
+	for k, v := range m {
+		if !AllowedAdditionalAnnotations[k] {
+			continue
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[k] = v
+	}
+	return out
+}
 
 var GVR = schema.GroupVersionResource{Group: Group, Version: Version, Resource: Resource}
 

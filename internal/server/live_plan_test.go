@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/modelsphere/swiss/internal/llmsvc"
-	"github.com/modelsphere/swiss/internal/plan"
 	"github.com/modelsphere/swiss/internal/values"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -76,18 +75,65 @@ func TestLivePlanReusesSourceWithoutCanaryRestrictions(t *testing.T) {
 	}
 }
 
-func TestRefreshAnsweredInputsUsesTheComposedValue(t *testing.T) {
-	p := &plan.Plan{
-		Layers: map[string]values.Tree{
-			values.LayerDerived: {"storageKVOffload": map[string]any{"mooncake": map[string]any{"master": "old:1"}}},
-			values.LayerForm:    {"storageKVOffload": map[string]any{"mooncake": map[string]any{"master": "10.0.0.1:50051"}}},
-		},
-		Inputs: []plan.AnsweredInput{{
-			Key: "storageKVOffload.mooncake.master", KeyType: plan.KeyTypeDotted, Value: "old:1",
-		}},
+func TestComposeLiveKeepsClearsOrReplacesAdditionalAnnotations(t *testing.T) {
+	rig := startRig(t, llmProbe(), true, false, backendLLMSVC)
+	hash := rig.storePlan(t, map[string]any{"release": "adaptive-arm"})
+	p, err := rig.s.store.Plan(t.Context(), hash)
+	if err != nil {
+		t.Fatal(err)
 	}
-	p.Inputs = plan.Answered(p.Inputs, p.Values())
-	if len(p.Inputs) != 1 || p.Inputs[0].Value != "10.0.0.1:50051" || p.Inputs[0].KeyType != plan.KeyTypeDotted {
-		t.Fatalf("refreshed %v", p.Inputs)
+	const kept = `[{ "key" : "a", "value" : 1 }]`
+	p.AdditionalAnnotations = map[string]string{llmsvc.AnnInputs: kept}
+	if err = p.ComputeHash(); err != nil {
+		t.Fatal(err)
+	}
+	u, err := llmsvc.FromPlan(p, "apply", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire, _, err := unstructured.UnstructuredJSONScheme.Decode(raw, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u = wire.(*unstructured.Unstructured)
+	if _, err = rig.c.Create(t.Context(), u); err != nil {
+		t.Fatal(err)
+	}
+
+	base := planRequest{ReuseSource: true, Namespace: "models", FromRelease: "adaptive-arm"}
+	got, err := rig.s.composeLive(t.Context(), base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AdditionalAnnotations[llmsvc.AnnInputs] != kept {
+		t.Fatalf("omitted field did not keep the annotation: %v", got.AdditionalAnnotations)
+	}
+	if got.Hash != p.Hash {
+		t.Fatal("keeping annotations changed the hash")
+	}
+
+	clear := base
+	clear.AdditionalAnnotations = map[string]string{}
+	got, err = rig.s.composeLive(t.Context(), clear)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.AdditionalAnnotations) != 0 {
+		t.Fatalf("empty field did not clear annotations: %v", got.AdditionalAnnotations)
+	}
+
+	const next = `[{ "key" : "a", "value" : 2 }]`
+	repl := base
+	repl.AdditionalAnnotations = map[string]string{llmsvc.AnnInputs: next}
+	got, err = rig.s.composeLive(t.Context(), repl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AdditionalAnnotations[llmsvc.AnnInputs] != next || len(got.AdditionalAnnotations) != 1 {
+		t.Fatalf("replacement did not win: %v", got.AdditionalAnnotations)
 	}
 }

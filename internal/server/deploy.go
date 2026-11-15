@@ -79,6 +79,10 @@ type planRequest struct {
 	// ChartVersion must fall in the variant's chart.version. Empty resolves as
 	// chart.Resolve does.
 	ChartVersion string `json:"chartVersion,omitempty"`
+	// AdditionalAnnotations are client-owned annotations. Nil means the field
+	// was omitted: an upgrade or reuseSource keeps the release's. An empty
+	// map clears them. Only allowlisted keys are accepted.
+	AdditionalAnnotations map[string]string `json:"additionalAnnotations,omitempty"`
 
 	// Set by carryForward, never by the caller.
 	runningChart plan.ChartRef
@@ -175,6 +179,9 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, error) {
+	if err := llmsvc.CheckAdditionalAnnotations(req.AdditionalAnnotations); err != nil {
+		return nil, err
+	}
 	if req.ReuseSource {
 		return s.composeLive(ctx, req)
 	}
@@ -333,6 +340,7 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 			return nil, err
 		}
 	}
+	p.AdditionalAnnotations = maps.Clone(req.AdditionalAnnotations)
 	p.Warnings = warnings
 	return p, nil
 }
@@ -374,6 +382,11 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 		runningChart: prev.Chart,
 		movedFrom:    movedFrom,
 		GPUResource:  req.GPUResource,
+	}
+	if req.AdditionalAnnotations == nil {
+		out.AdditionalAnnotations = llmsvc.FilterAdditionalAnnotations(prev.AdditionalAnnotations)
+	} else {
+		out.AdditionalAnnotations = req.AdditionalAnnotations
 	}
 	if req.Variant != "" {
 		out.Variant = req.Variant
@@ -1115,19 +1128,14 @@ func (s *Server) writePlan(ctx context.Context, p *plan.Plan, st planStatus) err
 	return s.writer.PutConfigMap(ctx, planRef(p.Release.Namespace, p.Release.Name), files, phaseLabel(st.Phase), inputAnnotations(p))
 }
 
-// inputAnnotations is the answered-inputs annotation, or nil when the variant
-// declared none. Nil clears it on a rewrite, which is what an upgrade onto a
-// variant with no inputs has to do.
+// inputAnnotations is the plan's allowlisted client annotations, or nil when
+// there are none. Nil clears them on a rewrite.
 func inputAnnotations(p *plan.Plan) map[string]string {
-	raw := p.InputsJSON()
-	if raw == "" {
-		return nil
-	}
-	return map[string]string{llmsvc.AnnInputs: raw}
+	return llmsvc.FilterAdditionalAnnotations(p.AdditionalAnnotations)
 }
 
-// inputAnnotationsFromFiles reads that annotation back off a plan ConfigMap's
-// files, so a rewrite that only changes status keeps it.
+// inputAnnotationsFromFiles reads those annotations back off a plan ConfigMap's
+// files, so a rewrite that only changes status keeps them.
 func inputAnnotationsFromFiles(files map[string]string) map[string]string {
 	raw := files[plan.MetaFile]
 	if raw == "" {
