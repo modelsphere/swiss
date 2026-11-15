@@ -565,7 +565,12 @@ func TestUpgradeAdditionalAnnotationsKeepClearReplace(t *testing.T) {
 // with only additionalAnnotations changed keeps the hash, and install reads
 // the latest staged copy of that hash.
 func TestInstallRecomposeStoresLatestAnnotations(t *testing.T) {
-	srv, s := deployServer(t, true)
+	probe := liveProbe()
+	probe.Maps["swiss/site-profile"] = map[string]string{
+		"profile.yaml": profileYAML + "chartRepo: oci://ghcr.io/modelsphere/charts\n",
+	}
+	srv, s := deployServerWith(t, probe, true)
+	s.cfg.Server.HelmBin, s.cfg.Server.HelmfileBin = stubHelm(t, 0), stubHelm(t, 0)
 	body := map[string]any{
 		"model": "qwen3.6-35b-a3b", "release": "fresh-ann",
 		"additionalAnnotations": map[string]string{llmsvc.AnnInputs: `[{ "key" : "k", "value" : "v" }]`},
@@ -590,7 +595,9 @@ func TestInstallRecomposeStoresLatestAnnotations(t *testing.T) {
 		t.Fatalf("stored plan: err=%v anns=%v", err, stored)
 	}
 
-	post(t, srv, "/api/install", map[string]any{"planHash": hash})
+	if code, out = post(t, srv, "/api/install", map[string]any{"planHash": hash}); code != http.StatusOK {
+		t.Fatalf("install: %d %v", code, out)
+	}
 	if got := writtenPlan(t, s, "models", "fresh-ann").AdditionalAnnotations[llmsvc.AnnInputs]; got != next {
 		t.Fatalf("install read stale annotations: %s", got)
 	}
