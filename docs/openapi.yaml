@@ -1989,13 +1989,14 @@ components:
         chartVersion: { type: string, description: "Must fall in the variant's chart range. Empty is the newest it allows (or the running one on upgrade)." }
         additionalAnnotations:
           type: object
-          additionalProperties: { type: string, maxLength: 16384 }
+          additionalProperties: { type: string }
           propertyNames: { enum: ["swiss.modelsphere.dev/inputs"] }
           description: |
             Client-owned annotations to record on the release: on the helm plan
             ConfigMap and on the LLMService. swissd stores and returns them but
             does not read them, and they are not hashed. Only the keys listed
-            here are accepted; any other key is refused with 400.
+            here are accepted; any other key is refused with 400. Each value is
+            at most 16384 bytes (UTF-8); a larger value is refused with 400.
 
             - `swiss.modelsphere.dev/inputs`: the deploy form's own record of
               the catalog inputs the user answered, so an upgrade can show them

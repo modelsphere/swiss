@@ -76,8 +76,7 @@ func modelFromPlan(p *plan.Plan) *ModelSpec {
 
 func annotations(p *plan.Plan, action, note string) map[string]string {
 	ann := map[string]string{}
-	// Client keys first, so a swiss key written below wins on overlap.
-	for k, v := range FilterAdditionalAnnotations(p.AdditionalAnnotations) {
+	for k, v := range p.AdditionalAnnotations {
 		ann[k] = v
 	}
 	put := func(k, v string) {
@@ -185,9 +184,10 @@ func ToPlan(u *unstructured.Unstructured) (*plan.Plan, error) {
 		p.Source.HF = m.HF
 		p.Engine = m.Engine
 	}
-	// Allowlisted client annotations only, as opaque strings. Anything else
-	// on the object stays off the plan so a later apply does not carry it.
-	p.AdditionalAnnotations = FilterAdditionalAnnotations(ann)
+	// AnnInputs is opaque. Anything else on the object stays off the plan.
+	if raw, ok := ann[AnnInputs]; ok {
+		p.AdditionalAnnotations = map[string]string{AnnInputs: raw}
+	}
 
 	if err := p.ComputeHash(); err != nil {
 		return nil, err

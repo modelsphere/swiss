@@ -56,16 +56,11 @@ const (
 	AnnSkipSchemaValidation = Group + "/skip-schema-validation"
 )
 
-// AllowedAdditionalAnnotations is the fixed set a client may set on a plan.
-// A request naming any other key is refused. A plan read from the cluster
-// keeps only these, so a hand-added annotation is not carried forward.
-var AllowedAdditionalAnnotations = map[string]bool{AnnInputs: true}
-
-// CheckAdditionalAnnotations rejects an unknown key or a value over 16 KiB.
-// Nil and empty are valid: an omitted field and {} both pass.
+// CheckAdditionalAnnotations rejects a key other than AnnInputs or a value
+// longer than 16 KiB. Nil and empty are valid: an omitted field and {} both pass.
 func CheckAdditionalAnnotations(m map[string]string) error {
 	for k, v := range m {
-		if !AllowedAdditionalAnnotations[k] {
+		if k != AnnInputs {
 			return fmt.Errorf("additionalAnnotations: unknown key %q", k)
 		}
 		if len(v) > 16*1024 {
@@ -73,21 +68,6 @@ func CheckAdditionalAnnotations(m map[string]string) error {
 		}
 	}
 	return nil
-}
-
-// FilterAdditionalAnnotations keeps allowlisted keys. Nil when none remain.
-func FilterAdditionalAnnotations(m map[string]string) map[string]string {
-	var out map[string]string
-	for k, v := range m {
-		if !AllowedAdditionalAnnotations[k] {
-			continue
-		}
-		if out == nil {
-			out = map[string]string{}
-		}
-		out[k] = v
-	}
-	return out
 }
 
 var GVR = schema.GroupVersionResource{Group: Group, Version: Version, Resource: Resource}

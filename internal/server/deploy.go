@@ -384,7 +384,7 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 		GPUResource:  req.GPUResource,
 	}
 	if req.AdditionalAnnotations == nil {
-		out.AdditionalAnnotations = llmsvc.FilterAdditionalAnnotations(prev.AdditionalAnnotations)
+		out.AdditionalAnnotations = prev.AdditionalAnnotations
 	} else {
 		out.AdditionalAnnotations = req.AdditionalAnnotations
 	}
@@ -1125,17 +1125,11 @@ func (s *Server) writePlan(ctx context.Context, p *plan.Plan, st planStatus) err
 		return err
 	}
 	files["status.yaml"] = string(status)
-	return s.writer.PutConfigMap(ctx, planRef(p.Release.Namespace, p.Release.Name), files, phaseLabel(st.Phase), inputAnnotations(p))
+	return s.writer.PutConfigMap(ctx, planRef(p.Release.Namespace, p.Release.Name), files, phaseLabel(st.Phase), p.AdditionalAnnotations)
 }
 
-// inputAnnotations is the plan's allowlisted client annotations, or nil when
-// there are none. Nil clears them on a rewrite.
-func inputAnnotations(p *plan.Plan) map[string]string {
-	return llmsvc.FilterAdditionalAnnotations(p.AdditionalAnnotations)
-}
-
-// inputAnnotationsFromFiles reads those annotations back off a plan ConfigMap's
-// files, so a rewrite that only changes status keeps them.
+// inputAnnotationsFromFiles reads additionalAnnotations off plan.yaml so a
+// rewrite that only changes status keeps them.
 func inputAnnotationsFromFiles(files map[string]string) map[string]string {
 	raw := files[plan.MetaFile]
 	if raw == "" {
@@ -1145,7 +1139,7 @@ func inputAnnotationsFromFiles(files map[string]string) map[string]string {
 	if err != nil {
 		return nil
 	}
-	return inputAnnotations(p)
+	return p.AdditionalAnnotations
 }
 
 // phaseLabel is the metadata marker for a phase the deployments list has to

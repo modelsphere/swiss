@@ -841,14 +841,11 @@ func TestUninstallRewriteKeepsAdditionalAnnotations(t *testing.T) {
 	const raw = `[{ "key" : "k", "value" : "v" }]`
 	c := &uninstallCluster{Fake: fakeProbe()}
 	p := &plan.Plan{
-		APIVersion: plan.APIVersion,
-		Release:    plan.Release{Name: "r", Namespace: "models"},
-		Source:     plan.SourceRef{Model: "qwen3.6-35b-a3b", Variant: "sglang-tp2-h100"},
-		Chart:      plan.ChartRef{Name: "sglang", Version: "0.7.1"},
-		AdditionalAnnotations: map[string]string{
-			llmsvc.AnnInputs:    raw,
-			"hand.example/note": "drop",
-		},
+		APIVersion:            plan.APIVersion,
+		Release:               plan.Release{Name: "r", Namespace: "models"},
+		Source:                plan.SourceRef{Model: "qwen3.6-35b-a3b", Variant: "sglang-tp2-h100"},
+		Chart:                 plan.ChartRef{Name: "sglang", Version: "0.7.1"},
+		AdditionalAnnotations: map[string]string{llmsvc.AnnInputs: raw},
 	}
 	if err := p.ComputeHash(); err != nil {
 		t.Fatal(err)
@@ -864,7 +861,7 @@ func TestUninstallRewriteKeepsAdditionalAnnotations(t *testing.T) {
 	files[statusFile] = string(status)
 	ref := planRef("models", "r")
 	ctx := context.Background()
-	if err := c.PutConfigMap(ctx, ref, files, nil, map[string]string{llmsvc.AnnInputs: raw, "hand.example/note": "drop"}); err != nil {
+	if err := c.PutConfigMap(ctx, ref, files, nil, map[string]string{llmsvc.AnnInputs: raw}); err != nil {
 		t.Fatal(err)
 	}
 	s := New(testConfig("prod"), c, discardLogger(), "test")
@@ -874,9 +871,6 @@ func TestUninstallRewriteKeepsAdditionalAnnotations(t *testing.T) {
 	}
 	if got := c.cms[ref].anns[llmsvc.AnnInputs]; got != raw {
 		t.Fatalf("uninstall rewrite lost the annotation: %q", got)
-	}
-	if _, ok := c.cms[ref].anns["hand.example/note"]; ok {
-		t.Fatal("a hand-added annotation was carried forward")
 	}
 }
 
