@@ -29,7 +29,7 @@ func testPlan(hash string) *plan.Plan {
 	}
 }
 
-func TestPlansAreImmutableAndRoundTrip(t *testing.T) {
+func TestPutPlanStoresLatestAndRoundTrips(t *testing.T) {
 	s, ctx := open(t), context.Background()
 	if err := s.PutPlan(ctx, testPlan("sha256:a")); err != nil {
 		t.Fatal(err)

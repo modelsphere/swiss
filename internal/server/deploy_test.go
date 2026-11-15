@@ -561,6 +561,41 @@ func TestUpgradeAdditionalAnnotationsKeepClearReplace(t *testing.T) {
 	}
 }
 
+// A fresh install has no release to carry annotations forward. Re-composing
+// with only additionalAnnotations changed keeps the hash, and install reads
+// the latest staged copy of that hash.
+func TestInstallRecomposeStoresLatestAnnotations(t *testing.T) {
+	srv, s := deployServer(t, true)
+	body := map[string]any{
+		"model": "qwen3.6-35b-a3b", "release": "fresh-ann",
+		"additionalAnnotations": map[string]string{llmsvc.AnnInputs: `[{ "key" : "k", "value" : "v" }]`},
+	}
+	code, out := post(t, srv, "/api/plans", body)
+	if code != http.StatusOK {
+		t.Fatalf("install plan: %d %v", code, out)
+	}
+	hash, _ := out["hash"].(string)
+
+	const next = `[{ "key" : "k", "value" : "w" }]`
+	body["additionalAnnotations"] = map[string]string{llmsvc.AnnInputs: next}
+	code, out = post(t, srv, "/api/plans", body)
+	if code != http.StatusOK {
+		t.Fatalf("replan: %d %v", code, out)
+	}
+	if out["hash"] != hash {
+		t.Fatalf("hash changed: %v vs %s", out["hash"], hash)
+	}
+	stored, err := s.store.Plan(context.Background(), hash)
+	if err != nil || stored.AdditionalAnnotations[llmsvc.AnnInputs] != next {
+		t.Fatalf("stored plan: err=%v anns=%v", err, stored)
+	}
+
+	post(t, srv, "/api/install", map[string]any{"planHash": hash})
+	if got := writtenPlan(t, s, "models", "fresh-ann").AdditionalAnnotations[llmsvc.AnnInputs]; got != next {
+		t.Fatalf("install read stale annotations: %s", got)
+	}
+}
+
 // Write-ahead: nothing reaches the cluster when the plan cannot be recorded.
 func TestApplyRefusesWhenThePlanCannotBeRecorded(t *testing.T) {
 	cfg := testConfig("prod")
