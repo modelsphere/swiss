@@ -5,14 +5,13 @@ import (
 	"math"
 	"regexp"
 	"strings"
-
-	"github.com/modelsphere/swiss/internal/values"
 )
 
 // Input is one inputs entry. Its rules repeat the catalog's
 // hack/lib/inputs.js: the catalog is untrusted where it is used.
+// swiss does not evaluate keys against values.
 type Input struct {
-	// Key is the chart value's dotted key, as helm --set takes it: storageKVOffload.mooncake.master.
+	// Key is a kyaml-style path (segments joined by ".", brackets kept whole), not merely a dotted key.
 	Key         string `yaml:"key" json:"key"`
 	Title       string `yaml:"title" json:"title"`
 	Description string `yaml:"description,omitempty" json:"description,omitempty"`
@@ -22,8 +21,10 @@ type Input struct {
 	Pattern string `yaml:"pattern,omitempty" json:"pattern,omitempty"`
 	// Example is the form's placeholder and what catalog CI renders with; never deployed.
 	Example any `yaml:"example" json:"example"`
-	// Default answers the input when the site profile does not.
+	// Default is the answer the web uses when the site profile has none. swiss does not apply it.
 	Default any `yaml:"default,omitempty" json:"default,omitempty"`
+	// Patcher wraps a string answer. It contains "{value}" exactly once.
+	Patcher string `yaml:"patcher,omitempty" json:"patcher,omitempty"`
 }
 
 const (
@@ -32,7 +33,7 @@ const (
 	InputBoolean = "boolean"
 )
 
-var inputKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*(\.[A-Za-z_][A-Za-z0-9_-]*)*$`)
+var inputKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*(\.([A-Za-z_][A-Za-z0-9_-]*|0|[1-9][0-9]*|\[[A-Za-z_][A-Za-z0-9_-]*=[^\]]*\]|\[=[^\]]*\]|\[\^=[^\]]+\]))*$`)
 
 func validInputKey(k string) bool { return inputKey.MatchString(k) }
 
@@ -93,14 +94,15 @@ func isInteger(v any) bool {
 	return false
 }
 
-// checkInputs: a value values gives an input's key is the base compose's answer overrides.
-func checkInputs(inputs []Input, vals values.Tree) error {
+// checkInputs is static syntax: key grammar, patcher, and that the example
+// and default are valid answers. It does not look at variant values.
+func checkInputs(inputs []Input) error {
 	declared := map[string]bool{}
 	for _, in := range inputs {
 		where := "inputs " + in.Key
 		switch {
 		case !validInputKey(in.Key):
-			return fmt.Errorf("inputs: key %q is not a dotted chart key", in.Key)
+			return fmt.Errorf("inputs: key %q is not a kyaml-style chart key", in.Key)
 		case in.Key == "model.localPath":
 			return fmt.Errorf("%s: swiss answers it from the site's model.pathTemplate, so it is never an input", where)
 		case declared[in.Key]:
@@ -111,8 +113,13 @@ func checkInputs(inputs []Input, vals values.Tree) error {
 			return fmt.Errorf("%s: pattern is only for a string input, and this one is %s", where, in.TypeOrDefault())
 		}
 		declared[in.Key] = true
-		if at := setAt(vals, strings.Split(in.Key, ".")); at != "" && at != in.Key {
-			return fmt.Errorf("%s: values.%s is not a map, so the answer has no place to go", where, at)
+		if in.Patcher != "" {
+			if parts := strings.Split(in.Patcher, "{value}"); len(parts) != 2 {
+				return fmt.Errorf("%s: patcher must contain {value} exactly once", where)
+			}
+			if in.TypeOrDefault() != InputString {
+				return fmt.Errorf("%s: patcher is only for a string input, and this one is %s", where, in.TypeOrDefault())
+			}
 		}
 		if in.Pattern != "" {
 			if _, err := in.pattern(); err != nil {
@@ -132,27 +139,4 @@ func checkInputs(inputs []Input, vals values.Tree) error {
 		}
 	}
 	return nil
-}
-
-// setAt is where vals already says something about keys: the value, under it, or a scalar above it.
-func setAt(vals values.Tree, keys []string) string {
-	node := map[string]any(vals)
-	for i, k := range keys {
-		next, ok := node[k]
-		if !ok {
-			return ""
-		}
-		if i == len(keys)-1 {
-			return strings.Join(keys, ".")
-		}
-		switch m := next.(type) {
-		case map[string]any:
-			node = m
-		case values.Tree:
-			node = m
-		default:
-			return strings.Join(keys[:i+1], ".")
-		}
-	}
-	return ""
 }

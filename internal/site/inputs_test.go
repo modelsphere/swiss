@@ -1,13 +1,11 @@
 package site
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
 const inputsHead = "name: prod\nmodel:\n  pathTemplate: /models/{{name}}\nnodes:\n  gpus: []\n"
 
-func TestInputAnswersFillTheModelPlaceholders(t *testing.T) {
+// Parse keeps profile inputs as written. swiss does not fill placeholders.
+func TestParseKeepsProfileInputsAsWritten(t *testing.T) {
 	p, err := Parse([]byte(inputsHead+`inputs:
   storageKVOffload.mooncake.master: mooncake-master.svc:50051
   engineCache.hostPath: /data/cache/{{model}}/{{org}}
@@ -19,27 +17,16 @@ func TestInputAnswersFillTheModelPlaceholders(t *testing.T) {
 	}
 	for key, want := range map[string]any{
 		"storageKVOffload.mooncake.master": "mooncake-master.svc:50051",
-		"engineCache.hostPath":             "/data/cache/glm-5.3/zai-org",
+		"engineCache.hostPath":             "/data/cache/{{model}}/{{org}}",
 		"service.port":                     8050,
 		"shm.enabled":                      true,
 	} {
-		got, ok, err := p.InputAnswer(key, "zai-org/GLM-5.3", "glm-5.3")
-		if err != nil || !ok || got != want {
-			t.Errorf("%s = %v (ok %v, err %v), want %v", key, got, ok, err, want)
+		got, ok := p.Inputs[key]
+		if !ok || got != want {
+			t.Errorf("%s = %v (ok %v), want %v", key, got, ok, want)
 		}
 	}
-	if _, ok, _ := p.InputAnswer("not.answered", "zai-org/GLM-5.3", "glm-5.3"); ok {
-		t.Error("an unanswered key has an answer")
-	}
-}
-
-// A model with no weights has no repo id for a template to name.
-func TestATemplateNamingTheRepoNeedsASource(t *testing.T) {
-	p := Profile{Inputs: map[string]any{"a.b": "/data/{{name}}", "c.d": "/data/{{model}}"}}
-	if _, _, err := p.InputAnswer("a.b", "", "mock"); err == nil || !strings.Contains(err.Error(), "no source.hf") {
-		t.Errorf("want a refusal naming source.hf, got %v", err)
-	}
-	if got, _, err := p.InputAnswer("c.d", "", "mock"); err != nil || got != "/data/mock" {
-		t.Errorf("{{model}} needs no source: %v, %v", got, err)
+	if len(p.Inputs) != 4 {
+		t.Errorf("inputs = %#v", p.Inputs)
 	}
 }

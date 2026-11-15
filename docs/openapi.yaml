@@ -749,9 +749,9 @@ paths:
         With `reuseSource: true`, it instead reads the live LLMService plan and
         merges arbitrary form overrides and optional edit values, without resolving a catalog.
 
-        Each of the variant's `inputs` is answered in the `derived` layer by the
-        site profile's `inputs`, else the input's `default`; `overrides` go over
-        it. A plan that leaves one without a valid answer is 400.
+        swiss does not answer a variant's `inputs` when composing, and a plan
+        is not 400 because an input is unanswered. The web writes those answers
+        into the form layer.
       operationId: composePlan
       requestBody:
         required: true
@@ -1795,11 +1795,10 @@ components:
         inputs:
           type: object
           description: |
-            Answers to variants' `inputs`, by each input's key. Unlike `extra`, an
-            answer reaches only a variant that declares the key, in the `derived`
-            layer. A string may use `model.pathTemplate`'s placeholders
-            (`{{hf}}`, `{{org}}`, `{{name}}`, `{{model}}`). Where `extra` sets the
-            same key, `extra` wins.
+            Answers the web reads from GET /api/profile to answer catalog inputs.
+            swiss serves the map and does not apply it when composing. A string
+            may use `model.pathTemplate`'s placeholders (`{{hf}}`, `{{org}}`,
+            `{{name}}`, `{{model}}`); the web fills them.
           additionalProperties: { type: [string, number, boolean] }
           examples:
             - storageKVOffload.mooncake.master: mooncake-master.svc:50051
@@ -1842,16 +1841,22 @@ components:
 
     Input:
       type: object
-      description: A chart value every deploy must answer. Answered in the `derived` layer by the site profile's `inputs`, else `default`; a deploy's overrides go over it.
+      description: A chart value the web answers. swiss does not apply it when composing.
       required: [key, title, example]
       properties:
-        key: { type: string, description: "The chart value's dotted key.", examples: [storageKVOffload.mooncake.master] }
+        key:
+          type: string
+          description: "A kyaml-style path: segments joined by `.`, brackets kept whole. A segment is a field, `[field=value]`, `[=value]`, a bare index, or `[^=prefix]`. The `-` and `*` selectors are not implemented."
+          examples:
+            - storageKVOffload.mooncake.master
+            - "volumes.[name=draft-model].hostPath.path"
         title: { type: string }
         description: { type: string }
         type: { type: string, enum: [string, integer, boolean], default: string }
         pattern: { type: string, description: "A string answer matches it, whole." }
         example: { type: [string, integer, boolean], description: "The form's placeholder; never deployed." }
-        default: { type: [string, integer, boolean], description: "The answer when the site profile has none." }
+        patcher: { type: string, description: "Wraps a string answer. Contains `{value}` exactly once." }
+        default: { type: [string, integer, boolean], description: "The answer the web uses when the site profile has none." }
 
     ModelVariant:
       type: object
