@@ -1,6 +1,7 @@
 package llmsvc
 
 import (
+	"maps"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -76,9 +77,7 @@ func modelFromPlan(p *plan.Plan) *ModelSpec {
 
 func annotations(p *plan.Plan, action, note string) map[string]string {
 	ann := map[string]string{}
-	for k, v := range p.AdditionalAnnotations {
-		ann[k] = v
-	}
+	maps.Copy(ann, p.AdditionalAnnotations)
 	put := func(k, v string) {
 		if v != "" {
 			ann[k] = v
