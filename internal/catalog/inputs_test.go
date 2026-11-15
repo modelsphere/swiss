@@ -27,8 +27,8 @@ func inputVariant(inputs []Input, vals values.Tree) Variant {
 	}
 }
 
-// Static syntax from the catalog's hack/lib/inputs.js. swiss does not
-// evaluate keys against values. The catalog is untrusted where it is used.
+// The checks swiss still owns. Catalog CI validates key grammar and patcher.
+// swiss does not evaluate keys against values.
 func TestAnInputsDefaultAndExampleAreAnswers(t *testing.T) {
 	withDefault := mooncakeMaster
 	withDefault.Default = "mc.svc:50051"
@@ -60,7 +60,6 @@ func TestAnInputsDefaultAndExampleAreAnswers(t *testing.T) {
 		"default of a type":   {inputVariant(one(Input{Key: "a.b", Title: "t", Type: InputInteger, Example: 1, Default: "8"}), nil), "default 8 is not an integer"},
 		"declared twice":      {inputVariant([]Input{mooncakeMaster, mooncakeMaster}, nil), "declared twice"},
 		"the model path":      {inputVariant(one(Input{Key: "model.localPath", Title: "p", Example: "/m"}), nil), "never an input"},
-		"not a key":           {inputVariant(one(at(mooncakeMaster, func(i *Input) { i.Key = "a..b" })), nil), "not a kyaml-style chart key"},
 		"no title":            {inputVariant(one(at(mooncakeMaster, func(i *Input) { i.Title = " " })), nil), "title is required"},
 		"no example":          {inputVariant(one(at(mooncakeMaster, func(i *Input) { i.Example = nil })), nil), "example is required"},
 		"example off pattern": {inputVariant(one(at(mooncakeMaster, func(i *Input) { i.Example = "no-port" })), nil), `example "no-port" does not match`},
@@ -88,57 +87,17 @@ func TestAnIntegerInputTakesAWholeNumberOfAnyKind(t *testing.T) {
 	}
 }
 
-func TestInputKeyGrammar(t *testing.T) {
-	for _, key := range []string{
-		"storageKVOffload.mooncake.master",
-		"volumes.[name=draft-model].hostPath.path",
-		"extraArgs.[=--foo=1]",
-		"extraArgs.[^=--speculative-draft-model-path=]",
-		"volumes.0.hostPath.path",
-	} {
-		in := mooncakeMaster
-		in.Key = key
-		if err := inputVariant([]Input{in}, nil).validate(); err != nil {
-			t.Errorf("valid key %q: %v", key, err)
-		}
+// A kyaml-style key and a patcher are stored as-is. An empty key is rejected.
+func TestKeyAndPatcherAreStoredAsIs(t *testing.T) {
+	in := mooncakeMaster
+	in.Key = "volumes.[name=draft-model].hostPath.path"
+	in.Patcher = "http://{value}/v1"
+	if err := inputVariant([]Input{in}, nil).validate(); err != nil {
+		t.Errorf("kyaml key and patcher: %v", err)
 	}
-	for _, key := range []string{
-		"[name=draft-model].hostPath.path",
-		"0.hostPath.path",
-		"volumes.[name=draft-model",
-		"extraArgs.[*]",
-		"extraArgs.[-]",
-		"extraArgs.[^=]",
-		"a..b",
-	} {
-		in := mooncakeMaster
-		in.Key = key
-		err := inputVariant([]Input{in}, nil).validate()
-		if err == nil || !strings.Contains(err.Error(), "is not a kyaml-style chart key") {
-			t.Errorf("invalid key %q: want a rejection, got %v", key, err)
-		}
-	}
-}
-
-func TestPatcherIsSyntaxOnly(t *testing.T) {
-	ok := mooncakeMaster
-	ok.Patcher = "http://{value}/v1"
-	if err := inputVariant([]Input{ok}, nil).validate(); err != nil {
-		t.Errorf("valid patcher: %v", err)
-	}
-	no := mooncakeMaster
-	no.Patcher = "no-placeholder"
-	twice := mooncakeMaster
-	twice.Patcher = "{value} and {value}"
-	integer := Input{Key: "a.b", Title: "t", Type: InputInteger, Example: 1, Patcher: "n={value}"}
-	for name, in := range map[string]Input{
-		"no placeholder": no,
-		"twice":          twice,
-		"on an integer":  integer,
-	} {
-		if err := inputVariant([]Input{in}, nil).validate(); err == nil || !strings.Contains(err.Error(), "patcher") {
-			t.Errorf("%s: want a patcher error, got %v", name, err)
-		}
+	in.Key = ""
+	if err := inputVariant([]Input{in}, nil).validate(); err == nil || !strings.Contains(err.Error(), "key is required") {
+		t.Errorf("empty key: want a rejection, got %v", err)
 	}
 }
 

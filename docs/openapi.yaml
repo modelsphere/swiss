@@ -1841,12 +1841,12 @@ components:
 
     Input:
       type: object
-      description: A chart value the web answers. swiss does not apply it when composing.
+      description: A chart value the web answers. swiss stores `key` and `patcher` as-is and does not apply the input when composing. Catalog CI validates the key grammar and patcher.
       required: [key, title, example]
       properties:
         key:
           type: string
-          description: "A kyaml-style path: segments joined by `.`, brackets kept whole. A segment is a field, `[field=value]`, `[=value]`, a bare index, or `[^=prefix]`. The `-` and `*` selectors are not implemented."
+          description: "The catalog's form of a key: a kyaml-style path, segments joined by `.`, brackets kept whole. A segment is a field, `[field=value]`, `[=value]`, a bare index, or `[^=prefix]`. The `-` and `*` selectors are not part of that form. swiss stores the key as-is; catalog CI validates the grammar."
           examples:
             - storageKVOffload.mooncake.master
             - "volumes.[name=draft-model].hostPath.path"
@@ -1855,7 +1855,7 @@ components:
         type: { type: string, enum: [string, integer, boolean], default: string }
         pattern: { type: string, description: "A string answer matches it, whole." }
         example: { type: [string, integer, boolean], description: "The form's placeholder; never deployed." }
-        patcher: { type: string, description: "Wraps a string answer. Contains `{value}` exactly once." }
+        patcher: { type: string, description: "Stored as-is. Catalog CI validates it." }
         default: { type: [string, integer, boolean], description: "The answer the web uses when the site profile has none." }
 
     ModelVariant:

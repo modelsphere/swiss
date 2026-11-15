@@ -7,11 +7,11 @@ import (
 	"strings"
 )
 
-// Input is one inputs entry. Its rules repeat the catalog's
-// hack/lib/inputs.js: the catalog is untrusted where it is used.
-// swiss does not evaluate keys against values.
+// Input is one inputs entry. swiss stores the key and patcher as-is: catalog CI
+// validates the kyaml key grammar and patcher. swiss does not evaluate keys
+// against values and does not re-implement that grammar.
 type Input struct {
-	// Key is a kyaml-style path (segments joined by ".", brackets kept whole), not merely a dotted key.
+	// Key is stored as-is. In the catalog it is a kyaml-style path.
 	Key         string `yaml:"key" json:"key"`
 	Title       string `yaml:"title" json:"title"`
 	Description string `yaml:"description,omitempty" json:"description,omitempty"`
@@ -23,7 +23,7 @@ type Input struct {
 	Example any `yaml:"example" json:"example"`
 	// Default is the answer the web uses when the site profile has none. swiss does not apply it.
 	Default any `yaml:"default,omitempty" json:"default,omitempty"`
-	// Patcher wraps a string answer. It contains "{value}" exactly once.
+	// Patcher is stored as-is. Catalog CI validates it.
 	Patcher string `yaml:"patcher,omitempty" json:"patcher,omitempty"`
 }
 
@@ -32,10 +32,6 @@ const (
 	InputInteger = "integer"
 	InputBoolean = "boolean"
 )
-
-var inputKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*(\.([A-Za-z_][A-Za-z0-9_-]*|0|[1-9][0-9]*|\[[A-Za-z_][A-Za-z0-9_-]*=[^\]]*\]|\[=[^\]]*\]|\[\^=[^\]]+\]))*$`)
-
-func validInputKey(k string) bool { return inputKey.MatchString(k) }
 
 func (i Input) TypeOrDefault() string {
 	if i.Type == "" {
@@ -94,15 +90,15 @@ func isInteger(v any) bool {
 	return false
 }
 
-// checkInputs is static syntax: key grammar, patcher, and that the example
-// and default are valid answers. It does not look at variant values.
+// checkInputs checks what swiss still owns. Key and patcher are stored as-is.
+// It does not look at variant values.
 func checkInputs(inputs []Input) error {
 	declared := map[string]bool{}
 	for _, in := range inputs {
 		where := "inputs " + in.Key
 		switch {
-		case !validInputKey(in.Key):
-			return fmt.Errorf("inputs: key %q is not a kyaml-style chart key", in.Key)
+		case strings.TrimSpace(in.Key) == "":
+			return fmt.Errorf("inputs: key is required")
 		case in.Key == "model.localPath":
 			return fmt.Errorf("%s: swiss answers it from the site's model.pathTemplate, so it is never an input", where)
 		case declared[in.Key]:
@@ -113,14 +109,6 @@ func checkInputs(inputs []Input) error {
 			return fmt.Errorf("%s: pattern is only for a string input, and this one is %s", where, in.TypeOrDefault())
 		}
 		declared[in.Key] = true
-		if in.Patcher != "" {
-			if parts := strings.Split(in.Patcher, "{value}"); len(parts) != 2 {
-				return fmt.Errorf("%s: patcher must contain {value} exactly once", where)
-			}
-			if in.TypeOrDefault() != InputString {
-				return fmt.Errorf("%s: patcher is only for a string input, and this one is %s", where, in.TypeOrDefault())
-			}
-		}
 		if in.Pattern != "" {
 			if _, err := in.pattern(); err != nil {
 				return fmt.Errorf("%s: %w", where, err)
