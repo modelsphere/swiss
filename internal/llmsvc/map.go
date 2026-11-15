@@ -1,10 +1,10 @@
 package llmsvc
 
 import (
-	"maps"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/modelsphere/swiss/internal/plan"
