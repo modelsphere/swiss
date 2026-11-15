@@ -57,7 +57,7 @@ type Variant struct {
 	Chart       Chart    `yaml:"chart" json:"chart"`
 	Image       *Image   `yaml:"image,omitempty" json:"image,omitempty"`
 	Requires    Requires `yaml:"requires" json:"requires"`
-	// Inputs are declared chart value keys with a patcher. The web answers them.
+	// Inputs are declared chart value keys, with an optional patcher. The web answers them.
 	// swiss only validates and serves them.
 	Inputs []Input     `yaml:"inputs,omitempty" json:"inputs,omitempty"`
 	Values values.Tree `yaml:"values,omitempty" json:"values,omitempty"`
