@@ -1987,13 +1987,31 @@ components:
         editsYAML: { type: string, description: "The edit layer, exempt from ownership. The autoscale layer is applied after it." }
         createNamespace: { type: boolean, default: false, deprecated: true, description: "Use `applyFlags.createNamespace`." }
         chartVersion: { type: string, description: "Must fall in the variant's chart range. Empty is the newest it allows (or the running one on upgrade)." }
+        additionalAnnotations:
+          type: object
+          additionalProperties: { type: string, maxLength: 16384 }
+          propertyNames: { enum: ["swiss.modelsphere.dev/inputs"] }
+          description: |
+            Client-owned annotations to record on the release: on the helm plan
+            ConfigMap and on the LLMService. swissd stores and returns them but
+            does not read them, and they are not hashed. Only the keys listed
+            here are accepted; any other key is refused with 400.
+
+            - `swiss.modelsphere.dev/inputs`: the deploy form's own record of
+              the catalog inputs the user answered, so an upgrade can show them
+              again. Its content is the form's to define (by convention a JSON
+              list of `{key, value}`, the value as typed, before any `patcher`).
+
+            On an upgrade or a `reuseSource`, leaving the field out keeps the
+            release's previous annotations; sending it replaces them all, and
+            `{}` removes them.
 
     Plan:
       type: object
       description: |
         The deploy, complete on its own. `hash` covers release, source, chart
         and the merged values; two plans with one hash render the same thing.
-        `inputs` restates answered catalog inputs and is not hashed.
+        `additionalAnnotations` is not hashed.
       required: [apiVersion, release, source, chart, engine, profile, hash]
       properties:
         apiVersion: { type: string, const: plan.swiss/v1 }
@@ -2041,21 +2059,14 @@ components:
         createNamespace: { type: boolean, default: false, deprecated: true, description: "Use `applyFlags.createNamespace`." }
         helmfile: { type: string, description: "The helmfile these values are applied through. Not hashed." }
         warnings: { type: array, items: { type: string }, description: "Accepted but worth seeing. Not hashed." }
-        inputs:
-          type: array
+        additionalAnnotations:
+          type: object
+          additionalProperties: { type: string }
           description: |
-            Answered catalog inputs, in catalog order. Each entry is the
-            effective value at that input's key after composition, not a values
-            document. Omitted when the variant declares none. Not hashed. The
-            same JSON is the annotation `swiss.modelsphere.dev/inputs` on the
-            helm plan ConfigMap and on the LLMService.
-          items:
-            type: object
-            required: [key, keyType, value]
-            properties:
-              key: { type: string, description: "The catalog input's key, as declared." }
-              keyType: { type: string, enum: [dotted], description: "How to read `key`. Every input is `dotted`." }
-              value: { description: "The answer: a string, integer or boolean." }
+            The `PlanRequest.additionalAnnotations` this plan carries, written
+            as is onto the helm plan ConfigMap and the LLMService. Not hashed:
+            two plans that differ only here render the same thing. Omitted when
+            empty.
         hash: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
 
     DiffResult:
