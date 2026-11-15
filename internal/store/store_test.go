@@ -34,7 +34,7 @@ func TestPlansAreImmutableAndRoundTrip(t *testing.T) {
 	if err := s.PutPlan(ctx, testPlan("sha256:a")); err != nil {
 		t.Fatal(err)
 	}
-	// Re-storing the same hash must not clobber: history is what rollback uses.
+	// Re-storing the same hash with identical content succeeds.
 	if err := s.PutPlan(ctx, testPlan("sha256:a")); err != nil {
 		t.Fatal(err)
 	}
@@ -50,6 +50,39 @@ func TestPlansAreImmutableAndRoundTrip(t *testing.T) {
 	}
 	if _, err := s.Plan(ctx, "sha256:missing"); err == nil {
 		t.Error("expected an error for an unknown plan")
+	}
+}
+
+func TestPutPlanUpdatesUnhashedMetadataForSameHash(t *testing.T) {
+	s, ctx := open(t), context.Background()
+	p := testPlan("sha256:a")
+	if err := s.PutPlan(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+
+	const ann = `[{"key":"k","value":"v"}]`
+	p.AdditionalAnnotations = map[string]string{"swiss.modelsphere.dev/inputs": ann}
+	if err := s.PutPlan(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Plan(ctx, "sha256:a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AdditionalAnnotations["swiss.modelsphere.dev/inputs"] != ann {
+		t.Fatalf("re-storing with updated annotations kept stale copy: %v", got.AdditionalAnnotations)
+	}
+
+	p.AdditionalAnnotations = nil
+	if err := s.PutPlan(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.Plan(ctx, "sha256:a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.AdditionalAnnotations) != 0 {
+		t.Fatalf("clearing annotations on same hash left %v", got.AdditionalAnnotations)
 	}
 }
 

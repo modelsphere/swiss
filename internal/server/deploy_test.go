@@ -512,7 +512,7 @@ func TestUpgradeAdditionalAnnotationsKeepClearReplace(t *testing.T) {
 		Model: "qwen3.6-35b-a3b", Release: "r", ServiceID: "r",
 		AdditionalAnnotations: map[string]string{llmsvc.AnnInputs: raw},
 	})
-	srv, _ := deployServerWith(t, probe, true)
+	srv, s := deployServerWith(t, probe, true)
 
 	code, up := post(t, srv, "/api/plans", map[string]any{"fromRelease": "r"})
 	if code != http.StatusOK {
@@ -537,6 +537,9 @@ func TestUpgradeAdditionalAnnotationsKeepClearReplace(t *testing.T) {
 	if up["hash"] != hash {
 		t.Fatal("clearing annotations changed the hash")
 	}
+	if stored, err := s.store.Plan(context.Background(), hash); err != nil || len(stored.AdditionalAnnotations) != 0 {
+		t.Fatalf("stored plan after clear: err=%v anns=%v", err, stored)
+	}
 
 	const next = `[{ "key" : "k", "value" : "w" }]`
 	code, up = post(t, srv, "/api/plans", map[string]any{
@@ -552,6 +555,9 @@ func TestUpgradeAdditionalAnnotationsKeepClearReplace(t *testing.T) {
 	}
 	if up["hash"] != hash {
 		t.Fatal("replacing annotations changed the hash")
+	}
+	if stored, err := s.store.Plan(context.Background(), hash); err != nil || stored.AdditionalAnnotations[llmsvc.AnnInputs] != next {
+		t.Fatalf("stored plan after replace: err=%v anns=%v", err, stored)
 	}
 }
 

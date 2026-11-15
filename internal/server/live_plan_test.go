@@ -136,4 +136,26 @@ func TestComposeLiveKeepsClearsOrReplacesAdditionalAnnotations(t *testing.T) {
 	if got.AdditionalAnnotations[llmsvc.AnnInputs] != next || len(got.AdditionalAnnotations) != 1 {
 		t.Fatalf("replacement did not win: %v", got.AdditionalAnnotations)
 	}
+
+	// Re-composing via HTTP with only additionalAnnotations changed keeps the
+	// same hash and updates the staged plan that apply reads.
+	code, out := post(t, rig.srv, "/api/plans", map[string]any{
+		"reuseSource":           true,
+		"namespace":             "models",
+		"fromRelease":           "adaptive-arm",
+		"additionalAnnotations": map[string]string{llmsvc.AnnInputs: next},
+	})
+	if code != 200 {
+		t.Fatalf("http replan status %d %v", code, out)
+	}
+	if out["hash"] != hash {
+		t.Fatalf("hash changed: %v vs %s", out["hash"], hash)
+	}
+	stored, err := rig.s.store.Plan(t.Context(), hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.AdditionalAnnotations[llmsvc.AnnInputs] != next {
+		t.Fatalf("stored plan kept stale annotations: %v", stored.AdditionalAnnotations)
+	}
 }
