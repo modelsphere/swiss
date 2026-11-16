@@ -28,8 +28,9 @@ import (
 )
 
 type planRequest struct {
-	// FromRelease recomposes a deployed release: its stored plan supplies the
-	// form layer, the model and the variant, and only the catalog layer moves.
+	// FromRelease recomposes a deployed release. Overrides replace its form
+	// layer; with none, the stored form layer is kept. Model and variant come
+	// from its plan, and only the catalog layer moves.
 	FromRelease string `json:"fromRelease,omitempty"`
 	ReuseSource bool   `json:"reuseSource,omitempty"`
 	// Catalog names the configured catalog to compose from. Required when the
@@ -396,10 +397,11 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 	// version picker send no overrides and mean "move the catalog, keep every
 	// setting"; the upgrade form sends the whole form and is authoritative.
 	//
-	// The overrides merge rather than replace, so a value no form field covers
-	// -- set once from a flag or the advanced box -- survives an upgrade instead
-	// of being dropped by a form that never knew about it. Edits do replace:
-	// the form shows them, so an empty box means the operator emptied it.
+	// The form request replaces the previous form layer exactly, so clearing
+	// an input or a variant dropping a key really removes it. The web builds
+	// the form from the previous form layer, so keys with no form field
+	// survive. Edits do replace: the form shows them, so an empty box means
+	// the operator emptied it.
 	if len(req.Overrides) == 0 {
 		if edits := prev.Layers[values.LayerEdit]; len(edits) > 0 {
 			out.EditsYAML = mustYAML(edits)
@@ -410,12 +412,10 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 		}
 		return s.withAutoscale(prev, out), nil
 	}
-	// A plan composed with no form values has no form layer to merge into.
-	if out.Overrides == nil {
-		out.Overrides = values.Tree{}
-	}
-	values.Merge(out.Overrides, req.Overrides, values.LayerForm, nil)
+	out.Overrides = req.Overrides
 	out.EditsYAML = req.EditsYAML
+	// The replaced form layer drops serviceId; keep the deployed one.
+	out.ServiceID = serviceIDOf(prev)
 	// serviceId is identity, not a setting: the route, the scaler and the SLO
 	// are all named after it. Changing it on an upgrade renames none of them --
 	// helm renders a new set under the new name and orphans the old ones, on a
