@@ -1988,7 +1988,7 @@ components:
         gpuProducts: { type: array, items: { type: string }, description: "Any one of these products. Empty uses the variant's requires.gpuProduct." }
         forceGpuProducts: { type: boolean, default: false, description: "Accept products the variant does not list, if this cluster has them." }
         gpuResource: { type: string, description: "The resource to request, one the site profile's nodes.gpus lists for the variant's vendor. Empty picks it from the products' nodes, else the vendor's default. An upgrade sending no form keeps the resource the release runs on." }
-        overrides: { type: object, description: "Form-layer values. On an upgrade, replaces the release's form layer." }
+        overrides: { type: object, description: "Form-layer values. On an upgrade, omitted or {} keeps the previous form layer; otherwise overrides replace it as-is." }
         overridesYAML: { type: string, description: "Form-layer values as YAML text." }
         editsYAML: { type: string, description: "The edit layer, exempt from ownership. The autoscale layer is applied after it." }
         createNamespace: { type: boolean, default: false, deprecated: true, description: "Use `applyFlags.createNamespace`." }
