@@ -208,6 +208,9 @@ func (c *V1) Entry(ctx context.Context, name, wantVersion string) (Entry, error)
 	}
 	e.Digest = iv.Digest
 	e.applyMetadata(m)
+	for i := range e.Variants {
+		e.Variants[i].Inputs = usableInputs(name, e.Variants[i].ID, e.Variants[i].Inputs)
+	}
 	if err := e.Validate(); err != nil {
 		return Entry{}, fmt.Errorf("%s %s (%s): %w", name, iv.Version, iv.Path, err)
 	}
@@ -250,7 +253,8 @@ func (c *V1) All(ctx context.Context) ([]Entry, error) {
 func ParseEntry(raw []byte) (*Entry, error) {
 	var e Entry
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
-	dec.KnownFields(true) // an unknown key is a typo, not a setting that does nothing
+	// Unknown fields are ignored so a catalog for a newer swissd still loads.
+	// Only the values tree is checked strictly; the digest covers the full raw bytes.
 	if err := dec.Decode(&e); err != nil {
 		return nil, err
 	}
@@ -351,9 +355,6 @@ func (v Variant) validate() error {
 		if n, _ := size.(int); n != v.Requires.NodesOrDefault() {
 			return fmt.Errorf("%s: values.lws.size (%v) != requires.nodes (%d)", where, size, v.Requires.NodesOrDefault())
 		}
-	}
-	if err := checkInputs(v.Inputs); err != nil {
-		return fmt.Errorf("%s: %w", where, err)
 	}
 	return nil
 }

@@ -296,8 +296,9 @@ func TestV2PublishedIsPerVariant(t *testing.T) {
 	}
 }
 
-// The v1 types carry nothing of v2: its keys are unknown keys to a v1 index.
-func TestV1IndexStaysStrict(t *testing.T) {
+// A v1 index ignores keys it does not know. A catalog published for a newer
+// swissd still loads; known fields are what a deploy uses.
+func TestV1IndexIgnoresUnknownFields(t *testing.T) {
 	good := index(map[string]string{"1.0.0": testEntry, "1.1.0": testEntryV2})
 	if _, err := parseIndex([]byte(good)); err != nil {
 		t.Fatal(err)
@@ -306,13 +307,43 @@ func TestV1IndexStaysStrict(t *testing.T) {
 		"variant digest": strings.Replace(good, `"variants":[{"id":"v"`, `"variants":[{"id":"v","digest":"sha256:x"`, 1),
 		"variant path":   strings.Replace(good, `"variants":[{"id":"v"`, `"variants":[{"id":"v","path":"models/m/v.yaml"`, 1),
 		"reports":        strings.Replace(good, `{"name":"m",`, `{"name":"m","reports":["r.html"],`, 1),
+		"top level":      strings.Replace(good, `"count": 1,`, `"future":true,"count": 1,`, 1),
 	} {
 		if bad == good {
 			t.Fatalf("%s: fixture did not change", name)
 		}
-		if _, err := parseIndex([]byte(bad)); err == nil || !strings.Contains(err.Error(), "unknown field") {
-			t.Errorf("%s: v1 must refuse it, got %v", name, err)
+		idx, err := parseIndex([]byte(bad))
+		if err != nil {
+			t.Errorf("%s: unknown field must be ignored, got %v", name, err)
+			continue
 		}
+		m, ok := idx.Model("m")
+		if !ok || m.Latest != "1.1.0" || m.Source.HF != "org/m" || len(m.Versions) != 2 {
+			t.Errorf("%s: known fields = %+v", name, m)
+			continue
+		}
+		for _, ver := range m.Versions {
+			if len(ver.Variants) != 1 || ver.Variants[0].ID != "v" || ver.Variants[0].Engine != "sglang" || ver.Digest == "" {
+				t.Errorf("%s: version = %+v", name, ver)
+			}
+		}
+	}
+}
+
+// index-v2.json already ignored unknown keys. A newer field must not refuse it.
+func TestV2IndexIgnoresUnknownFields(t *testing.T) {
+	raw := []byte(`{"apiVersion":"catalog.swiss/v2","future":true,"count":1,"models":[{"name":"m","futureModel":1,"source":{"hf":"org/m","futureSrc":1},"variants":[{"id":"a","futurePin":true,"version":"1.0.0","path":"models/m/a.yaml","digest":"sha256:abc","engine":"sglang","chart":{"name":"sglang","version":"0.8.0","futureChart":1},"requires":{"gpus":1,"futureReq":true}}]}]}`)
+	idx, err := parseIndexV2(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, ok := idx.Model("m")
+	if !ok || m.Source.HF != "org/m" || len(m.Variants) != 1 {
+		t.Fatalf("%+v", m)
+	}
+	v := m.Variants[0]
+	if v.ID != "a" || v.Digest != "sha256:abc" || v.Requires.GPUs != 1 || v.Chart.Name != "sglang" || v.Chart.Version != "0.8.0" {
+		t.Fatalf("known fields dropped: %+v", v)
 	}
 }
 

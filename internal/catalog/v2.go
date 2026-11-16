@@ -143,6 +143,7 @@ func (c *V2) Resolve(ctx context.Context, model, variant, version string) (Resol
 		return Resolved{}, fmt.Errorf("%s %s %s (%s): %w", model, pin.ID, rev.Version, where, err)
 	}
 	v := doc.variant(pin.ID == m.DefaultID())
+	v.Inputs = usableInputs(m.Name, v.ID, v.Inputs)
 	if err := v.validate(); err != nil {
 		return Resolved{}, fmt.Errorf("%s %s (%s): %w", model, rev.Version, where, err)
 	}

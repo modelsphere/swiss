@@ -166,9 +166,7 @@ func TestIndexRejectsAVersionWithoutADigest(t *testing.T) {
 	}
 }
 
-// An index is parsed with unknown fields refused, so a swissd that predates a
-// field fails to load any catalog that publishes it. tuning is declared here
-// before the catalog starts writing it.
+// tuning is display data on the index. A re-measurement needs no new version.
 func TestIndexCarriesTuning(t *testing.T) {
 	withTuning := strings.Replace(index(map[string]string{"1.1.0": testEntryV2}),
 		`"latest":"1.1.0"`,
@@ -188,8 +186,7 @@ func TestIndexCarriesTuning(t *testing.T) {
 	}
 }
 
-// The catalog's site is declared before the catalog starts publishing it, for
-// the same reason tuning is: unknown fields are refused.
+// The catalog's site is where a tuned variant's report is served.
 func TestIndexCarriesTheSite(t *testing.T) {
 	withSite := strings.Replace(index(map[string]string{"1.1.0": testEntryV2}),
 		`"count": 1,`, `"site": "https://models.example.com/catalog/", "count": 1,`, 1)
@@ -263,5 +260,125 @@ func TestLocalDirectoryAndFileBothWork(t *testing.T) {
 		if _, err := c.(*V1).Entry(context.Background(), "qwen3.6-35b-a3b", ""); err != nil {
 			t.Errorf("%s: %v", loc, err)
 		}
+	}
+}
+
+// A field this swissd does not know, at the top of an entry and inside a
+// variant, is ignored. The digest the index publishes is still the raw file.
+func TestUnknownEntryFieldsAreIgnored(t *testing.T) {
+	body := `
+apiVersion: catalog.swiss/v1
+name: m
+version: 1.1.0
+futureTop: yes
+variants:
+  - id: v
+    futureVariant: 1
+    engine: sglang
+    chart: {name: sglang, version: "0.8.0", futureChart: x}
+    requires: {gpus: 2, futureReq: true}
+    inputs:
+      - {key: a.keep, title: Keep, example: ok, futureInput: 1}
+    values:
+      extraArgs: [--tp-size=2]
+`
+	srv := serve(t, map[string]string{
+		"catalog/index.json":          index(map[string]string{"1.1.0": body}),
+		"catalog/models/m/1.1.0.yaml": body,
+	})
+	c, err := Open(context.Background(), srv.URL+"/catalog")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := c.(*V1).Entry(context.Background(), "m", "1.1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Name != "m" || e.Version != "1.1.0" || e.Digest != contentRef([]byte(body)) {
+		t.Fatalf("entry = %+v", e)
+	}
+	v := e.Variants[0]
+	if v.ID != "v" || v.Engine != "sglang" || v.Chart.Name != "sglang" || v.Chart.Version != "0.8.0" || v.Requires.GPUs != 2 {
+		t.Fatalf("variant = %+v", v)
+	}
+	if len(v.Inputs) != 1 || v.Inputs[0].Key != "a.keep" || v.Values["extraArgs"] == nil {
+		t.Fatalf("known input or values dropped: %+v", v)
+	}
+
+	raw := []byte(`apiVersion: catalog.swiss/v2
+kind: Variant
+model: m
+id: a
+version: 1.0.0
+futureTop: yes
+engine: sglang
+chart: {name: sglang, version: "0.8.0", futureChart: x}
+requires: {gpus: 2, futureReq: true}
+values: {extraArgs: ["--tp=1"]}
+`)
+	f := memFetcher{"models/m/a.yaml": raw}
+	f["index-v2.json"] = []byte(fmt.Sprintf(`{"apiVersion":"catalog.swiss/v2","future":true,"count":1,"models":[{"name":"m","futureModel":1,"source":{"hf":"org/m"},"variants":[{"id":"a","futurePin":true,"version":"1.0.0","path":"models/m/a.yaml","digest":%q,"engine":"sglang","chart":{"name":"sglang","version":"0.8.0"},"requires":{"gpus":2}}]}]}`, contentRef(raw)))
+	vc, err := OpenFetcher(context.Background(), f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := vc.Resolve(context.Background(), "m", "a", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Digest != contentRef(raw) || r.Variant.ID != "a" || r.Variant.Engine != "sglang" || r.Variant.Chart.Version != "0.8.0" || r.Variant.Requires.GPUs != 2 || r.Variant.Values["extraArgs"] == nil {
+		t.Fatalf("v2 variant = %+v", r)
+	}
+	pin := VariantPinV2{ID: "a", Version: "1.0.0", Path: "models/m/a.yaml", Digest: "sha256:abc"}
+	if _, err := parseHistoryV2([]byte(`{"model":"m","id":"a","path":"models/m/a.yaml","future":true,"revisions":[{"version":"1.0.0","digest":"sha256:abc","futureRev":1}]}`), "m", pin); err != nil {
+		t.Fatalf("history: %v", err)
+	}
+}
+
+// lws.size against requires.nodes is a values-tree check and still refuses the variant.
+func TestLWSSizeMismatchStillRefusesTheVariant(t *testing.T) {
+	body := `
+apiVersion: catalog.swiss/v1
+name: m
+version: 1.1.0
+variants:
+  - id: v
+    engine: sglang
+    chart: {name: sglang, version: "0.8.0"}
+    requires: {gpus: 8, nodes: 2, topology: lws}
+    values:
+      lws: {size: 1}
+`
+	srv := serve(t, map[string]string{
+		"catalog/index.json":          index(map[string]string{"1.1.0": body}),
+		"catalog/models/m/1.1.0.yaml": body,
+	})
+	c, err := Open(context.Background(), srv.URL+"/catalog")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.(*V1).Entry(context.Background(), "m", "1.1.0")
+	if err == nil || !strings.Contains(err.Error(), "lws.size") {
+		t.Fatalf("v1: %v", err)
+	}
+
+	raw := []byte(`apiVersion: catalog.swiss/v2
+kind: Variant
+model: m
+id: a
+version: 1.0.0
+engine: sglang
+chart: {name: sglang, version: "0.8.0"}
+requires: {gpus: 8, nodes: 2, topology: lws}
+values: {lws: {size: 1}}
+`)
+	f := memFetcher{"models/m/a.yaml": raw}
+	f["index-v2.json"] = []byte(fmt.Sprintf(`{"apiVersion":"catalog.swiss/v2","count":1,"models":[{"name":"m","source":{"hf":"org/m"},"variants":[{"id":"a","version":"1.0.0","path":"models/m/a.yaml","digest":%q,"engine":"sglang","chart":{"name":"sglang","version":"0.8.0"},"requires":{"gpus":8,"nodes":2,"topology":"lws"}}]}]}`, contentRef(raw)))
+	vc, err := OpenFetcher(context.Background(), f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vc.Resolve(context.Background(), "m", "a", ""); err == nil || !strings.Contains(err.Error(), "lws.size") {
+		t.Fatalf("v2: %v", err)
 	}
 }
