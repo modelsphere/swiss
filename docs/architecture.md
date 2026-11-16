@@ -181,7 +181,7 @@ Catalog files (`index.json`, a v1 entry, `index-v2.json`, a v2 variant file, `hi
 - The digest is sha256 of the full raw bytes, including ignored fields. A mismatch refuses the file.
 - An input this swissd cannot use is dropped, with a warning. The rest of the variant loads. The API and a deploy see only the inputs that remain.
 
-An input is dropped when its key is empty or `model.localPath` (swiss answers that from the site profile), it repeats a key already kept, its title is empty, its type is not string, integer or boolean, its pattern is on a non-string or does not compile, or its example or default is missing or does not match. `Input.Check` still checks an answer at deploy time.
+An input is dropped when its key is empty or `model.localPath` (swiss answers that from the site profile), it repeats a key already kept, its title is empty, its type is not string, integer or boolean, its pattern is on a non-string or does not compile, or its example or default is missing or does not match.
 
 Site profiles, swissd config and API request bodies are parsed strictly. This rule is for catalog files.
 

@@ -67,32 +67,35 @@ func TestAnInputsDefaultAndExampleAreAnswers(t *testing.T) {
 	}
 	one := func(in Input) []Input { return []Input{in} }
 	at := func(in Input, edit func(*Input)) Input { edit(&in); return in }
-	second := mooncakeMaster
-	second.Title = "Second"
 	blankTitle := mooncakeMaster
 	blankTitle.Title = " "
+	second := mooncakeMaster
+	second.Title = "Second"
+	if got := usableInputs("m", "a", []Input{mooncakeMaster, second}); len(got) != 1 || got[0].Key != mooncakeMaster.Key || got[0].Title != mooncakeMaster.Title {
+		t.Errorf("duplicate kept %+v", got)
+	}
 	later := mooncakeMaster
 	later.Title = "Later"
+	if got := usableInputs("m", "a", []Input{blankTitle, later}); len(got) != 1 || got[0].Key != later.Key || got[0].Title != later.Title {
+		t.Errorf("a dropped key blocked the next: %+v", got)
+	}
 	for _, c := range []struct {
-		name  string
-		v     Variant
-		want  []string // keys kept, in order; titles checked when set
-		title string
+		name string
+		v    Variant
+		want []string
 	}{
-		{"default off pattern", inputVariant(one(at(mooncakeMaster, func(i *Input) { i.Default = "no-port" })), nil), nil, ""},
-		{"a blank default", inputVariant(one(at(mooncakeMaster, func(i *Input) { i.Default = "" })), nil), nil, ""},
-		{"default of a type", inputVariant(one(Input{Key: "a.b", Title: "t", Type: InputInteger, Example: 1, Default: "8"}), nil), nil, ""},
-		{"declared twice", inputVariant([]Input{mooncakeMaster, second}, nil), []string{mooncakeMaster.Key}, "Mooncake master"},
-		{"a dropped key does not block the next", inputVariant([]Input{blankTitle, later}, nil), []string{mooncakeMaster.Key}, "Later"},
-		{"the model path", inputVariant(one(Input{Key: "model.localPath", Title: "p", Example: "/m"}), nil), nil, ""},
-		{"no title", inputVariant(one(blankTitle), nil), nil, ""},
-		{"no example", inputVariant(one(at(mooncakeMaster, func(i *Input) { i.Example = nil })), nil), nil, ""},
-		{"example off pattern", inputVariant(one(at(mooncakeMaster, func(i *Input) { i.Example = "no-port" })), nil), nil, ""},
-		{"pattern compiles", inputVariant(one(at(mooncakeMaster, func(i *Input) { i.Pattern = "(" })), nil), nil, ""},
-		{"pattern on integer", inputVariant(one(Input{Key: "a.b", Title: "t", Type: InputInteger, Pattern: "[0-9]+", Example: 1}), nil), nil, ""},
-		{"example of a type", inputVariant(one(Input{Key: "a.b", Title: "t", Type: InputInteger, Example: "8"}), nil), nil, ""},
-		{"unknown type", inputVariant(one(Input{Key: "a.b", Title: "t", Type: "list", Example: "x"}), nil), nil, ""},
-		{"unknown type beside a keeper", inputVariant([]Input{mooncakeMaster, {Key: "a.b", Title: "t", Type: "list", Example: "x"}}, nil), []string{mooncakeMaster.Key}, "Mooncake master"},
+		{"default off pattern", inputVariant(one(at(mooncakeMaster, func(i *Input) { i.Default = "no-port" })), nil), nil},
+		{"a blank default", inputVariant(one(at(mooncakeMaster, func(i *Input) { i.Default = "" })), nil), nil},
+		{"default of a type", inputVariant(one(Input{Key: "a.b", Title: "t", Type: InputInteger, Example: 1, Default: "8"}), nil), nil},
+		{"the model path", inputVariant(one(Input{Key: "model.localPath", Title: "p", Example: "/m"}), nil), nil},
+		{"no title", inputVariant(one(blankTitle), nil), nil},
+		{"no example", inputVariant(one(at(mooncakeMaster, func(i *Input) { i.Example = nil })), nil), nil},
+		{"example off pattern", inputVariant(one(at(mooncakeMaster, func(i *Input) { i.Example = "no-port" })), nil), nil},
+		{"pattern compiles", inputVariant(one(at(mooncakeMaster, func(i *Input) { i.Pattern = "(" })), nil), nil},
+		{"pattern on integer", inputVariant(one(Input{Key: "a.b", Title: "t", Type: InputInteger, Pattern: "[0-9]+", Example: 1}), nil), nil},
+		{"example of a type", inputVariant(one(Input{Key: "a.b", Title: "t", Type: InputInteger, Example: "8"}), nil), nil},
+		{"unknown type", inputVariant(one(Input{Key: "a.b", Title: "t", Type: "list", Example: "x"}), nil), nil},
+		{"unknown type beside a keeper", inputVariant([]Input{mooncakeMaster, {Key: "a.b", Title: "t", Type: "list", Example: "x"}}, nil), []string{mooncakeMaster.Key}},
 	} {
 		if err := c.v.validate(); err != nil {
 			t.Errorf("%s: validate failed the variant: %v", c.name, err)
@@ -106,13 +109,6 @@ func TestAnInputsDefaultAndExampleAreAnswers(t *testing.T) {
 			if got[i].Key != k {
 				t.Errorf("%s: inputs[%d].key = %q, want %q", c.name, i, got[i].Key, k)
 			}
-		}
-		if c.title != "" && (len(got) != 1 || got[0].Title != c.title) {
-			gotTitle := ""
-			if len(got) == 1 {
-				gotTitle = got[0].Title
-			}
-			t.Errorf("%s: title = %q, want %q", c.name, gotTitle, c.title)
 		}
 	}
 }

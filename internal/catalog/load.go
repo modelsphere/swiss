@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 	"sync"
 
@@ -211,6 +212,7 @@ func (c *V1) Entry(ctx context.Context, name, wantVersion string) (Entry, error)
 	for i := range e.Variants {
 		e.Variants[i].Inputs = usableInputs(name, e.Variants[i].ID, e.Variants[i].Inputs)
 	}
+	e.Variants = dropUnknownEngines(name, e.Variants)
 	if err := e.Validate(); err != nil {
 		return Entry{}, fmt.Errorf("%s %s (%s): %w", name, iv.Version, iv.Path, err)
 	}
@@ -312,8 +314,32 @@ func (v Variant) Weightless() bool {
 	return ok && p == ""
 }
 
+func knownEngine(engine string) bool {
+	switch engine {
+	case "sglang", "vllm", EngineMock:
+		return true
+	default:
+		return false
+	}
+}
+
+// dropUnknownEngines drops variants whose engine this swissd cannot deploy, with
+// a warning, so a newer catalog's engine does not refuse its siblings.
+func dropUnknownEngines(model string, variants []Variant) []Variant {
+	out := make([]Variant, 0, len(variants))
+	for _, v := range variants {
+		if knownEngine(v.Engine) {
+			out = append(out, v)
+			continue
+		}
+		slog.Warn("dropping catalog variant this swissd cannot deploy",
+			"model", model, "variant", v.ID, "engine", v.Engine)
+	}
+	return out
+}
+
 // validate is the rules one variant is judged on alone, the same in a v1 entry
-// and a v2 variant file.
+// and a v2 variant file. An unknown engine is dropped before this runs.
 func (v Variant) validate() error {
 	where := "variant " + v.ID
 	switch v.Engine {

@@ -96,9 +96,6 @@ func isInteger(v any) bool {
 // the variant. A key counts as taken only once an input is kept. It does not
 // look at variant values. Key and patcher are stored as-is.
 func usableInputs(model, variant string, inputs []Input) []Input {
-	if len(inputs) == 0 {
-		return inputs
-	}
 	declared := map[string]bool{}
 	out := make([]Input, 0, len(inputs))
 	for _, in := range inputs {
@@ -109,9 +106,6 @@ func usableInputs(model, variant string, inputs []Input) []Input {
 		}
 		declared[in.Key] = true
 		out = append(out, in)
-	}
-	if len(out) == 0 {
-		return nil
 	}
 	return out
 }
@@ -132,10 +126,10 @@ func inputDropReason(in Input, declared map[string]bool) string {
 	default:
 		return fmt.Sprintf("type %q is not string, integer or boolean", t)
 	}
-	if in.Pattern != "" && in.TypeOrDefault() != InputString {
-		return fmt.Sprintf("pattern is only for a string input, and this one is %s", in.TypeOrDefault())
-	}
 	if in.Pattern != "" {
+		if in.TypeOrDefault() != InputString {
+			return fmt.Sprintf("pattern is only for a string input, and this one is %s", in.TypeOrDefault())
+		}
 		if _, err := in.pattern(); err != nil {
 			return err.Error()
 		}

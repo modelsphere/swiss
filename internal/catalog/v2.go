@@ -144,6 +144,9 @@ func (c *V2) Resolve(ctx context.Context, model, variant, version string) (Resol
 	}
 	v := doc.variant(pin.ID == m.DefaultID())
 	v.Inputs = usableInputs(m.Name, v.ID, v.Inputs)
+	if kept := dropUnknownEngines(m.Name, []Variant{v}); len(kept) == 0 {
+		return Resolved{}, fmt.Errorf("%s %s (%s): engine %q is not sglang, vllm or mock", model, rev.Version, where, v.Engine)
+	}
 	if err := v.validate(); err != nil {
 		return Resolved{}, fmt.Errorf("%s %s (%s): %w", model, rev.Version, where, err)
 	}
