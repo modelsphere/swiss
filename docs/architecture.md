@@ -186,7 +186,7 @@ form / flags  ─┘             (hash)     ↓
 An LLMService swiss wrote carries `swiss.modelsphere.dev/plan-hash`. The live spec is the plan swiss reads:
 
 - A `kubectl edit` leaves that annotation behind. Reads recompute the hash over the live spec and set `editedInPlace` on the deployment row and on status. It is not drift.
-- Upgrade keeps the form and edit layers from that live spec. Catalog, site, derived and autoscale layers are recomposed, so an edit there is overwritten.
+- An upgrade without overrides keeps the form and edit layers. With overrides, the request overrides are the form layer as-is (no merge), the edit layer is the request's edits, and serviceId comes from the deployed plan. Catalog, site, derived and autoscale layers are recomposed, so an edit there is overwritten.
 - Rollback reads the ControllerRevision first and does not check the hash, so a revision that ran edited is accepted. The plan Secret fallback still checks the hash and refuses a mismatch.
 
 | endpoint | |
