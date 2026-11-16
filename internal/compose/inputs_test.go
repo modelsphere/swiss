@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/modelsphere/swiss/internal/catalog"
+	"github.com/modelsphere/swiss/internal/site"
 	"github.com/modelsphere/swiss/internal/values"
 )
 
@@ -36,7 +37,7 @@ func TestComposeSucceedsWhenAnInputIsUnanswered(t *testing.T) {
 func TestComposeDoesNotApplySiteInputsOrTheDefault(t *testing.T) {
 	in := inputsInput()
 	in.Resolved.Variant.Inputs[0].Default = "tuned.svc:50051"
-	in.Profile.Inputs = map[string]any{masterKey: "mc-{{model}}.svc:50051"}
+	in.Profile.Inputs = []site.Input{{Key: masterKey, Value: "mc-{{model}}.svc:50051"}}
 	p, err := Compose(in)
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +68,7 @@ func TestAVariantValueForAnInputKeyStands(t *testing.T) {
 	in := inputsInput()
 	in.Resolved.Variant.Values["storageKVOffload"].(map[string]any)["mooncake"].(map[string]any)["master"] = "mooncake-master.example:50051"
 	in.Resolved.Variant.Inputs[0].Default = "tuned.svc:50051"
-	in.Profile.Inputs = map[string]any{masterKey: "site.svc:50051"}
+	in.Profile.Inputs = []site.Input{{Key: masterKey, Value: "site.svc:50051"}}
 	p, err := Compose(in)
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +102,7 @@ func TestComposeLeavesAdditionalAnnotationsEmpty(t *testing.T) {
 // does not declare the key.
 func TestSiteInputsDoNothingWhenTheVariantDoesNotDeclareTheKey(t *testing.T) {
 	in := testInput()
-	in.Profile.Inputs = map[string]any{masterKey: "site.svc:50051"}
+	in.Profile.Inputs = []site.Input{{Key: masterKey, Value: "site.svc:50051"}}
 	p, err := Compose(in)
 	if err != nil {
 		t.Fatal(err)

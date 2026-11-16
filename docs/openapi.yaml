@@ -1794,15 +1794,24 @@ components:
           type: object
           description: Values every release on this site gets, as the site layer.
         inputs:
-          type: object
+          type: array
           description: |
-            Answers the web reads from GET /api/profile to answer catalog inputs.
-            swiss serves the map and does not apply it when composing. A string
+            Answers the web reads from GET /api/profile to answer catalog inputs,
+            one entry per catalog input key. A key is listed at most once.
+            swiss serves the list and does not apply it when composing. A string
             may use `model.pathTemplate`'s placeholders (`{{hf}}`, `{{org}}`,
             `{{name}}`, `{{model}}`); the web fills them.
-          additionalProperties: { type: [string, number, boolean] }
+          items:
+            type: object
+            required: [key, value]
+            properties:
+              key: { type: string, description: "The catalog input's key, as written in the catalog." }
+              value: { type: [string, number, boolean] }
           examples:
-            - storageKVOffload.mooncake.master: mooncake-master.svc:50051
+            - - key: storageKVOffload.mooncake.master
+                value: mooncake-master.svc:50051
+              - key: volumes.[name=draft-model].hostPath.path
+                value: /data/models/{{name}}
 
     Secrets:
       type: object
