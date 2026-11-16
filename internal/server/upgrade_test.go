@@ -41,21 +41,18 @@ func TestUpgradeFormOverridesWin(t *testing.T) {
 	}
 }
 
-// A value no form field covers -- set once from a flag or the advanced box --
-// must survive an upgrade rather than being dropped by a form that never knew
-// about it. This is why the overrides merge instead of replacing.
-func TestUpgradeKeepsValuesTheFormDoesNotCover(t *testing.T) {
+// The form request replaces the previous form layer exactly. A key the
+// request omits is removed; an upgrade that sends no overrides keeps it.
+func TestUpgradeFormReplacesAbsentKeys(t *testing.T) {
 	probe := deployed(t, planRequest{
 		Model: "qwen3.6-35b-a3b", Release: "r", ServiceID: "r",
 		Overrides: values.Tree{
 			"replicaCount":      2,
 			"priorityClassName": "high",
-			"nodeSelector":      values.Tree{"disktype": "nvme"},
 		},
 	})
 	srv, _ := deployServerWith(t, probe, true)
 
-	// The web form covers replicaCount but has no nodeSelector field.
 	code, up := post(t, srv, "/api/plans", map[string]any{
 		"fromRelease": "r",
 		"overrides":   map[string]any{"replicaCount": 4},
@@ -63,13 +60,21 @@ func TestUpgradeKeepsValuesTheFormDoesNotCover(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("status %d: %v", code, up)
 	}
-	vals := planValues(up)
-	sel, ok := vals["nodeSelector"].(map[string]any)
-	if !ok || sel["disktype"] != "nvme" {
-		t.Fatalf("a value the form does not cover must survive: %v", vals["nodeSelector"])
+	form := layerDoc(up, "form")
+	if _, ok := form["priorityClassName"]; ok {
+		t.Fatalf("a key absent from the request overrides must leave the form layer, got %v", form["priorityClassName"])
 	}
-	if vals["priorityClassName"] != "high" {
-		t.Errorf("priorityClassName was dropped: %v", vals["priorityClassName"])
+	if form["replicaCount"] != float64(4) {
+		t.Fatalf("replicaCount = %v, want the request's 4", form["replicaCount"])
+	}
+
+	code, bare := post(t, srv, "/api/plans", map[string]any{"fromRelease": "r"})
+	if code != 200 {
+		t.Fatalf("bare upgrade status %d: %v", code, bare)
+	}
+	kept := layerDoc(bare, "form")
+	if kept["priorityClassName"] != "high" {
+		t.Fatalf("an upgrade with no overrides must keep the key, got %v", kept["priorityClassName"])
 	}
 }
 
@@ -246,6 +251,30 @@ func TestUpgradeRefusesAServiceIDChange(t *testing.T) {
 	}
 	if msg, _ := out["error"].(string); !strings.Contains(msg, "serviceId cannot change") {
 		t.Fatalf("the refusal must say what is wrong, got %q", msg)
+	}
+}
+
+// Overrides replace the form layer, which is where serviceId lived. Omitting
+// it must not rename the service to the release: the deployed id is identity.
+func TestUpgradeKeepsServiceIDWhenTheFormOmitsIt(t *testing.T) {
+	probe := deployed(t, planRequest{
+		Model: "qwen3.6-35b-a3b", Release: "r", ServiceID: "svc",
+	})
+	srv, _ := deployServerWith(t, probe, true)
+
+	code, up := post(t, srv, "/api/plans", map[string]any{
+		"fromRelease": "r",
+		"overrides":   map[string]any{"replicaCount": 2},
+	})
+	if code != 200 {
+		t.Fatalf("status %d: %v", code, up)
+	}
+	if got := planValues(up)["serviceId"]; got != "svc" {
+		t.Fatalf("serviceId = %v, want the deployed svc", got)
+	}
+	rel := up["release"].(map[string]any)
+	if rel["name"] != "r" {
+		t.Fatalf("release name = %v, want r", rel["name"])
 	}
 }
 

@@ -44,9 +44,8 @@ func TestScalerOffKeepsTheFixedReplicaCount(t *testing.T) {
 	}
 }
 
-// The upgrade merge carries forward anything the form does not send, which
-// would otherwise resurrect a replicaCount stored before the form made the two
-// mutually exclusive.
+// The request form replaces the previous form layer, so a replicaCount it
+// omits is gone. Compose also drops one that arrives beside a live scaler.
 func TestUpgradeDoesNotResurrectAReplicaCount(t *testing.T) {
 	_, doc := livePlan(t, planRequest{
 		Model: "qwen3.6-35b-a3b", Release: "r", ServiceID: "r",
