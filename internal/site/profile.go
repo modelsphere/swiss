@@ -76,8 +76,9 @@ type Profile struct {
 	// and composes above the catalog.
 	Defaults Defaults `yaml:"defaults,omitempty" json:"defaults"`
 
-	// Inputs answer a variant's inputs by key, only for a variant that declares
-	// the key -- unlike extra. Strings take pathTemplate's placeholders.
+	// Inputs are answers the web uses for catalog inputs. swiss serves the map
+	// on the profile API and does not apply it when composing. Strings may use
+	// pathTemplate's placeholders; the web fills them.
 	Inputs map[string]any `yaml:"inputs,omitempty" json:"inputs,omitempty"`
 
 	// Presets are named values a deploy may pick one of. The console merges the
@@ -213,23 +214,6 @@ func (f FeatureDefaults) Resolve() map[string]bool {
 		"sloRequirement": on(f.SLORequirement),
 		"scaler":         on(f.Scaler),
 	}
-}
-
-// InputAnswer is the site's answer to an input, placeholders filled for this model.
-func (p Profile) InputAnswer(key, hf, model string) (answer any, ok bool, err error) {
-	v, ok := p.Inputs[key]
-	if !ok {
-		return nil, false, nil
-	}
-	s, isString := v.(string)
-	if !isString {
-		return v, true, nil
-	}
-	out, err := fill(s, hf, model)
-	if err != nil {
-		return nil, true, fmt.Errorf("inputs[%q]: %w", key, err)
-	}
-	return out, true, nil
 }
 
 // DefaultSLOAddress is the in-cluster SLO API when the profile names none.

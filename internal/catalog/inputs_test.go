@@ -27,8 +27,8 @@ func inputVariant(inputs []Input, vals values.Tree) Variant {
 	}
 }
 
-// The same rules as the catalog's validator (hack/lib/inputs.js), because the
-// catalog is untrusted where it is used.
+// The checks swiss still owns. Catalog CI validates key grammar and patcher.
+// swiss does not evaluate keys against values.
 func TestAnInputsDefaultAndExampleAreAnswers(t *testing.T) {
 	withDefault := mooncakeMaster
 	withDefault.Default = "mc.svc:50051"
@@ -38,12 +38,16 @@ func TestAnInputsDefaultAndExampleAreAnswers(t *testing.T) {
 			t.Errorf("default %v: %v", in.Default, err)
 		}
 	}
-	// values may set an input's key: it is the base an answer overrides.
+	// values may set an input's key, or a non-map above it: swiss does not look.
 	for _, base := range []any{"mooncake-master.example:50051", ""} {
 		ok := inputVariant([]Input{mooncakeMaster}, values.Tree{"storageKVOffload": map[string]any{"mooncake": map[string]any{"master": base}}})
 		if err := ok.validate(); err != nil {
 			t.Errorf("values base %q: %v", base, err)
 		}
+	}
+	nonMap := inputVariant([]Input{mooncakeMaster}, values.Tree{"storageKVOffload": map[string]any{"mooncake": "off"}})
+	if err := nonMap.validate(); err != nil {
+		t.Errorf("non-map ancestor: %v", err)
 	}
 	one := func(in Input) []Input { return []Input{in} }
 	at := func(in Input, edit func(*Input)) Input { edit(&in); return in }
@@ -51,13 +55,11 @@ func TestAnInputsDefaultAndExampleAreAnswers(t *testing.T) {
 		v    Variant
 		want string
 	}{
-		"a non-map above it":  {inputVariant(one(mooncakeMaster), values.Tree{"storageKVOffload": map[string]any{"mooncake": "off"}}), "values.storageKVOffload.mooncake is not a map"},
 		"default off pattern": {inputVariant(one(at(mooncakeMaster, func(i *Input) { i.Default = "no-port" })), nil), `default "no-port" does not match`},
 		"a blank default":     {inputVariant(one(at(mooncakeMaster, func(i *Input) { i.Default = "" })), nil), `default "" does not match`},
 		"default of a type":   {inputVariant(one(Input{Key: "a.b", Title: "t", Type: InputInteger, Example: 1, Default: "8"}), nil), "default 8 is not an integer"},
 		"declared twice":      {inputVariant([]Input{mooncakeMaster, mooncakeMaster}, nil), "declared twice"},
 		"the model path":      {inputVariant(one(Input{Key: "model.localPath", Title: "p", Example: "/m"}), nil), "never an input"},
-		"not a key":           {inputVariant(one(at(mooncakeMaster, func(i *Input) { i.Key = "a..b" })), nil), "not a dotted chart key"},
 		"no title":            {inputVariant(one(at(mooncakeMaster, func(i *Input) { i.Title = " " })), nil), "title is required"},
 		"no example":          {inputVariant(one(at(mooncakeMaster, func(i *Input) { i.Example = nil })), nil), "example is required"},
 		"example off pattern": {inputVariant(one(at(mooncakeMaster, func(i *Input) { i.Example = "no-port" })), nil), `example "no-port" does not match`},
@@ -85,11 +87,25 @@ func TestAnIntegerInputTakesAWholeNumberOfAnyKind(t *testing.T) {
 	}
 }
 
+// A kyaml-style key and a patcher are stored as-is. An empty key is rejected.
+func TestKeyAndPatcherAreStoredAsIs(t *testing.T) {
+	in := mooncakeMaster
+	in.Key = "volumes.[name=draft-model].hostPath.path"
+	in.Patcher = "http://{value}/v1"
+	if err := inputVariant([]Input{in}, nil).validate(); err != nil {
+		t.Errorf("kyaml key and patcher: %v", err)
+	}
+	in.Key = ""
+	if err := inputVariant([]Input{in}, nil).validate(); err == nil || !strings.Contains(err.Error(), "key is required") {
+		t.Errorf("empty key: want a rejection, got %v", err)
+	}
+}
+
 // inputs is a known key of a v2 variant file, read strictly. The index carries
 // no inputs: nothing lists or picks a variant by them.
 func TestV2InputsAreReadFromTheFile(t *testing.T) {
 	raw := []byte("apiVersion: catalog.swiss/v2\nkind: Variant\nmodel: m\nid: a\nversion: 1.0.0\nengine: sglang\nchart: {name: sglang, version: \"0.9.32\"}\n" +
-		"requires:\n  gpus: 1\ninputs:\n  - {key: storageKVOffload.mooncake.master, title: Mooncake master, example: \"h:1\", default: \"d:1\"}\n")
+		"requires:\n  gpus: 1\ninputs:\n  - {key: storageKVOffload.mooncake.master, title: Mooncake master, example: \"h:1\", default: \"d:1\", patcher: \"http://{value}\"}\n")
 	f := memFetcher{"models/m/a.yaml": raw}
 	f["index-v2.json"] = []byte(fmt.Sprintf(`{"apiVersion":"catalog.swiss/v2","count":1,"models":[{"name":"m","source":{"hf":"org/m"},"variants":[{"id":"a","version":"1.0.0","path":"models/m/a.yaml","digest":%q,"engine":"sglang","chart":{"name":"sglang","version":"0.9.32"},"requires":{"gpus":1}}]}]}`, contentRef(raw)))
 	c, err := OpenFetcher(context.Background(), f)
@@ -100,7 +116,7 @@ func TestV2InputsAreReadFromTheFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if in := r.Variant.Inputs; len(in) != 1 || in[0].Key != "storageKVOffload.mooncake.master" || in[0].Example != "h:1" || in[0].Default != "d:1" {
+	if in := r.Variant.Inputs; len(in) != 1 || in[0].Key != "storageKVOffload.mooncake.master" || in[0].Example != "h:1" || in[0].Default != "d:1" || in[0].Patcher != "http://{value}" {
 		t.Errorf("inputs = %+v", in)
 	}
 }
