@@ -68,9 +68,9 @@ func TestZeroGPUsIsCPUOnly(t *testing.T) {
 }
 
 // source lives in metadata.yaml and reaches a consumer through the index. A
-// version file carrying its own is a split that drifted, not an override.
+// source key in the version file is ignored, and does not refuse the entry.
 func TestVersionFileMayNotCarrySource(t *testing.T) {
-	_, err := ParseEntry([]byte(`
+	e, err := ParseEntry([]byte(`
 apiVersion: catalog.swiss/v1
 name: m
 version: 1.0.0
@@ -81,7 +81,13 @@ variants:
     chart: {name: sglang, version: "0.8.0"}
     requires: {gpus: 2}
 `))
-	if err == nil {
-		t.Fatal("source in a version file must be refused")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Source != (Source{}) {
+		t.Fatalf("source in a version file must be ignored, got %+v", e.Source)
+	}
+	if e.Name != "m" || len(e.Variants) != 1 || e.Variants[0].ID != "v" {
+		t.Fatalf("known fields did not load: %+v", e)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 	"sync"
 
@@ -208,6 +209,10 @@ func (c *V1) Entry(ctx context.Context, name, wantVersion string) (Entry, error)
 	}
 	e.Digest = iv.Digest
 	e.applyMetadata(m)
+	for i := range e.Variants {
+		e.Variants[i].Inputs = usableInputs(name, e.Variants[i].ID, e.Variants[i].Inputs)
+	}
+	e.Variants = dropUnknownEngines(name, e.Variants)
 	if err := e.Validate(); err != nil {
 		return Entry{}, fmt.Errorf("%s %s (%s): %w", name, iv.Version, iv.Path, err)
 	}
@@ -250,7 +255,8 @@ func (c *V1) All(ctx context.Context) ([]Entry, error) {
 func ParseEntry(raw []byte) (*Entry, error) {
 	var e Entry
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
-	dec.KnownFields(true) // an unknown key is a typo, not a setting that does nothing
+	// Unknown fields are ignored so a catalog for a newer swissd still loads.
+	// Only the values tree is checked strictly; the digest covers the full raw bytes.
 	if err := dec.Decode(&e); err != nil {
 		return nil, err
 	}
@@ -308,8 +314,32 @@ func (v Variant) Weightless() bool {
 	return ok && p == ""
 }
 
+func knownEngine(engine string) bool {
+	switch engine {
+	case "sglang", "vllm", EngineMock:
+		return true
+	default:
+		return false
+	}
+}
+
+// dropUnknownEngines drops variants whose engine this swissd cannot deploy, with
+// a warning, so a newer catalog's engine does not refuse its siblings.
+func dropUnknownEngines(model string, variants []Variant) []Variant {
+	out := make([]Variant, 0, len(variants))
+	for _, v := range variants {
+		if knownEngine(v.Engine) {
+			out = append(out, v)
+			continue
+		}
+		slog.Warn("dropping catalog variant this swissd cannot deploy",
+			"model", model, "variant", v.ID, "engine", v.Engine)
+	}
+	return out
+}
+
 // validate is the rules one variant is judged on alone, the same in a v1 entry
-// and a v2 variant file.
+// and a v2 variant file. An unknown engine is dropped before this runs.
 func (v Variant) validate() error {
 	where := "variant " + v.ID
 	switch v.Engine {
@@ -351,9 +381,6 @@ func (v Variant) validate() error {
 		if n, _ := size.(int); n != v.Requires.NodesOrDefault() {
 			return fmt.Errorf("%s: values.lws.size (%v) != requires.nodes (%d)", where, size, v.Requires.NodesOrDefault())
 		}
-	}
-	if err := checkInputs(v.Inputs); err != nil {
-		return fmt.Errorf("%s: %w", where, err)
 	}
 	return nil
 }

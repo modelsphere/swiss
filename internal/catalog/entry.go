@@ -6,6 +6,11 @@
 // is untrusted input at the point of use, and a consumer that trusts a remote
 // file because some CI somewhere was supposed to have run is not validating, it
 // is hoping.
+//
+// Those strict checks are for what a deploy uses: the values tree and the
+// structural rules (chart, requires, ids). Unknown fields are ignored, and an
+// input this swissd cannot use is dropped, so a catalog published for a newer
+// swissd still loads. The digest covers the full raw bytes.
 package catalog
 
 import (
@@ -58,7 +63,7 @@ type Variant struct {
 	Image       *Image   `yaml:"image,omitempty" json:"image,omitempty"`
 	Requires    Requires `yaml:"requires" json:"requires"`
 	// Inputs are declared chart value keys, with an optional patcher. The web answers them.
-	// swiss only validates and serves them.
+	// One this swissd cannot use is dropped at load; the rest are served.
 	Inputs []Input     `yaml:"inputs,omitempty" json:"inputs,omitempty"`
 	Values values.Tree `yaml:"values,omitempty" json:"values,omitempty"`
 }

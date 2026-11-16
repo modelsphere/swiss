@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"fmt"
+	"log/slog"
 	"math"
 	"regexp"
 	"strings"
@@ -90,41 +91,59 @@ func isInteger(v any) bool {
 	return false
 }
 
-// checkInputs checks what swiss still owns. Key and patcher are stored as-is.
-// It does not look at variant values.
-func checkInputs(inputs []Input) error {
+// usableInputs keeps the inputs this swissd can serve and check. One it cannot
+// use is dropped, with a warning, so a newer catalog's input does not refuse
+// the variant. A key counts as taken only once an input is kept. It does not
+// look at variant values. Key and patcher are stored as-is.
+func usableInputs(model, variant string, inputs []Input) []Input {
 	declared := map[string]bool{}
+	out := make([]Input, 0, len(inputs))
 	for _, in := range inputs {
-		where := "inputs " + in.Key
-		switch {
-		case strings.TrimSpace(in.Key) == "":
-			return fmt.Errorf("inputs: key is required")
-		case in.Key == "model.localPath":
-			return fmt.Errorf("%s: swiss answers it from the site's model.pathTemplate, so it is never an input", where)
-		case declared[in.Key]:
-			return fmt.Errorf("%s: declared twice", where)
-		case strings.TrimSpace(in.Title) == "":
-			return fmt.Errorf("%s: title is required", where)
-		case in.Pattern != "" && in.TypeOrDefault() != InputString:
-			return fmt.Errorf("%s: pattern is only for a string input, and this one is %s", where, in.TypeOrDefault())
+		if why := inputDropReason(in, declared); why != "" {
+			slog.Warn("dropping catalog input this swissd cannot use",
+				"model", model, "variant", variant, "key", in.Key, "reason", why)
+			continue
 		}
 		declared[in.Key] = true
-		if in.Pattern != "" {
-			if _, err := in.pattern(); err != nil {
-				return fmt.Errorf("%s: %w", where, err)
-			}
+		out = append(out, in)
+	}
+	return out
+}
+
+func inputDropReason(in Input, declared map[string]bool) string {
+	switch {
+	case strings.TrimSpace(in.Key) == "":
+		return "key is required"
+	case in.Key == "model.localPath":
+		return "swiss answers model.localPath from the site profile, so it is never an input"
+	case declared[in.Key]:
+		return "declared twice"
+	case strings.TrimSpace(in.Title) == "":
+		return "title is required"
+	}
+	switch t := in.TypeOrDefault(); t {
+	case InputString, InputInteger, InputBoolean:
+	default:
+		return fmt.Sprintf("type %q is not string, integer or boolean", t)
+	}
+	if in.Pattern != "" {
+		if in.TypeOrDefault() != InputString {
+			return fmt.Sprintf("pattern is only for a string input, and this one is %s", in.TypeOrDefault())
 		}
-		if in.Example == nil {
-			return fmt.Errorf("%s: example is required", where)
-		}
-		if err := in.Check(in.Example); err != nil {
-			return fmt.Errorf("%s: example %w", where, err)
-		}
-		if in.Default != nil {
-			if err := in.Check(in.Default); err != nil {
-				return fmt.Errorf("%s: default %w", where, err)
-			}
+		if _, err := in.pattern(); err != nil {
+			return err.Error()
 		}
 	}
-	return nil
+	if in.Example == nil {
+		return "example is required"
+	}
+	if err := in.Check(in.Example); err != nil {
+		return "example " + err.Error()
+	}
+	if in.Default != nil {
+		if err := in.Check(in.Default); err != nil {
+			return "default " + err.Error()
+		}
+	}
+	return ""
 }
