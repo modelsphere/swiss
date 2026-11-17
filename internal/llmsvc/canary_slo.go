@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/modelsphere/swiss/internal/values"
+
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -32,17 +34,17 @@ func (c *Client) LiveSLO(ctx context.Context, a *CanaryAssignment) (bool, error)
 	return string(parent.GetUID()) == a.UID && parent.GetDeletionTimestamp() == nil && policy == "LiveParent", nil
 }
 
-func PreserveSLOBinding(cur, fresh *unstructured.Unstructured) error {
+func SLOBindingValues(cur *unstructured.Unstructured) (values.Tree, error) {
 	if cur == nil {
-		return nil
+		return nil, nil
 	}
 	a := CanaryAssigned(cur)
 	if a == nil || !a.Verified || !a.Mutable {
-		return nil
+		return nil, nil
 	}
 	raw := cur.GetAnnotations()["canary.modelsphere.dev/slo-binding"]
 	if raw == "" {
-		return nil
+		return nil, nil
 	}
 	var binding struct {
 		Assignment string `json:"assignment"`
@@ -53,10 +55,18 @@ func PreserveSLOBinding(cur, fresh *unstructured.Unstructured) error {
 		} `json:"target"`
 	}
 	if err := json.Unmarshal([]byte(raw), &binding); err != nil {
-		return fmt.Errorf("invalid inherited SLO binding: %w", err)
+		return nil, fmt.Errorf("invalid inherited SLO binding: %w", err)
 	}
 	if binding.Assignment != cur.GetAnnotations()[AssignmentKey] || binding.Target.Namespace == "" || binding.Target.Name == "" || binding.Target.UID == "" {
-		return fmt.Errorf("inherited SLO binding identity mismatch")
+		return nil, fmt.Errorf("inherited SLO binding identity mismatch")
+	}
+	return values.Tree{"modelRoute": map[string]any{"slo": map[string]any{"enabled": true, "name": binding.Target.Namespace + "/" + binding.Target.Name}}}, nil
+}
+
+func PreserveSLOBinding(cur, fresh *unstructured.Unstructured) error {
+	tree, err := SLOBindingValues(cur)
+	if err != nil || tree == nil {
+		return err
 	}
 	layers, _, err := unstructured.NestedSlice(fresh.Object, "spec", "layers")
 	if err != nil {
@@ -65,10 +75,21 @@ func PreserveSLOBinding(cur, fresh *unstructured.Unstructured) error {
 	clean := make([]any, 0, len(layers)+1)
 	for _, raw := range layers {
 		layer, _ := raw.(map[string]any)
-		if layer["name"] != "canary-slo" {
+		if layer["name"] != values.LayerCanarySLO {
 			clean = append(clean, raw)
 		}
 	}
-	clean = append(clean, map[string]any{"name": "canary-slo", "values": map[string]any{"modelRoute": map[string]any{"slo": map[string]any{"enabled": true, "name": binding.Target.Namespace + "/" + binding.Target.Name}}}})
-	return unstructured.SetNestedSlice(fresh.Object, clean, "spec", "layers")
+	clean = append(clean, map[string]any{"name": values.LayerCanarySLO, "values": map[string]any(tree)})
+	if err := unstructured.SetNestedSlice(fresh.Object, clean, "spec", "layers"); err != nil {
+		return err
+	}
+	if anns := fresh.GetAnnotations(); anns[AnnPlanHash] != "" {
+		p, err := ToPlan(fresh)
+		if err != nil {
+			return err
+		}
+		anns[AnnPlanHash] = p.Hash
+		fresh.SetAnnotations(anns)
+	}
+	return nil
 }

@@ -16,5 +16,6 @@ const (
 	LayerForm         = "form"          // how much, where, how routed
 	LayerEdit         = "edit"          // typed into the plan editor
 	LayerAutoscale    = "autoscale"     // replicaCount from PD autoscaling
+	LayerCanarySLO    = "canary-slo"    // inherited requirement imposed by a referenced experiment
 	LayerCanarySystem = "canary-system" // final policy imposed by the owning experiment
 )

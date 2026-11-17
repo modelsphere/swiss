@@ -826,7 +826,12 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 	// applies. What it would have recorded is in the apply's own output, which
 	// is helmfile's diff.
 	// Only skipSchemaValidation changes what a diff computes.
-	res, err := s.runner().Diff(ctx, p, exec.ApplyOptions{SkipSchemaValidation: flags.SkipSchemaValidation})
+	preview, err := s.sloPreviewPlan(ctx, p)
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	res, err := s.runner().Diff(ctx, preview, exec.ApplyOptions{SkipSchemaValidation: flags.SkipSchemaValidation})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

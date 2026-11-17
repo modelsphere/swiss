@@ -78,7 +78,7 @@ func (s *Server) resolveSLOSource(ctx context.Context, ns, release string) (sloS
 			sloName = name
 		}
 		out.Namespace, out.Name = sloNS, sloName
-		requirement, err := s.probe.Object(ctx, cluster.ObjectRef{APIVersion: "inference.modelsphere.dev/v1alpha1", Kind: "LLMSLORequirement", Namespace: sloNS, Name: sloName})
+		requirement, err := s.sloRequirement(ctx, rel.Objects, sloNS, sloName)
 		if err != nil {
 			return out, err
 		}
@@ -92,4 +92,27 @@ func (s *Server) resolveSLOSource(ctx context.Context, ns, release string) (sloS
 		}
 	}
 	return out, nil
+}
+
+func (s *Server) sloRequirement(ctx context.Context, objects []cluster.ObjectRef, ns, name string) (*cluster.Object, error) {
+	for _, ref := range objects {
+		if ref.Kind == "LLMSLORequirement" && ref.Namespace == ns && ref.Name == name {
+			return s.probe.Object(ctx, ref)
+		}
+	}
+	// An inherited or shared requirement is not part of this release's manifest.
+	var found *cluster.Object
+	for _, version := range []string{"inference.modelsphere.dev/v1alpha1", "inference.x-k8s.io/v1alpha1"} {
+		obj, err := s.probe.Object(ctx, cluster.ObjectRef{APIVersion: version, Kind: "LLMSLORequirement", Namespace: ns, Name: name})
+		if err != nil {
+			return nil, err
+		}
+		if obj != nil {
+			if found != nil {
+				return nil, fmt.Errorf("multiple SLO requirements for %s/%s across API groups", ns, name)
+			}
+			found = obj
+		}
+	}
+	return found, nil
 }

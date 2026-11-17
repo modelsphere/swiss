@@ -2062,7 +2062,7 @@ components:
         profile: { type: string }
         layers:
           type: object
-          description: "One values document per layer, applied in order: `defaults`, `catalog`, `site`, `derived`, `form`, `edit`, `autoscale`, `canary-system`. Later layers override earlier ones."
+          description: "One values document per layer, applied in order: `defaults`, `catalog`, `site`, `derived`, `form`, `edit`, `autoscale`, `canary-system`, `canary-slo`. Later layers override earlier ones."
           properties:
             defaults: { type: object }
             catalog: { type: object }
@@ -2071,7 +2071,8 @@ components:
             form: { type: object }
             edit: { type: object }
             autoscale: { type: object, description: "`replicaCount`, plus `pd.prefill.replicas` and `pd.decode.replicas` when decision-gen's row carries `shape.pd`. swissd writes it when the plan is disaggregated (`pd.enabled` true, `pd.colocate` not true) and the form layer has `sloRequirement.enabled` true, with the decision's values as given: `shape.pd.slices` as `replicaCount` on such a row, else `replicas.active`." }
-            canary-system: { type: object, description: "Final values imposed by the Canary controller, preserved when reading a live LLMService plan and when reusing its source." }
+            canary-system: { type: object, description: "Values imposed by the Canary controller, preserved when reading a live LLMService plan and when reusing its source." }
+            canary-slo: { type: object, description: "Final inherited SLO reference. Mutable-reference previews and upgrades derive it from the verified assignment-scoped binding." }
         createNamespace: { type: boolean, default: false, deprecated: true, description: "Use `applyFlags.createNamespace`." }
         helmfile: { type: string, description: "The helmfile these values are applied through. Not hashed." }
         warnings: { type: array, items: { type: string }, description: "Accepted but worth seeing. Not hashed." }
@@ -2424,7 +2425,7 @@ components:
 
     SLOEdit:
       type: object
-      description: Either `priority` (0 or 10 only) or `highPriority`. `route` must be the release if sent.
+      description: Either `priority` (0 or 10 only) or `highPriority`. `route`, if sent, may be the URL release or `source.serviceId` from the SLO response. Swiss forwards the effective `source.serviceId` to the SLO server.
       properties:
         route: { type: string }
         priority: { type: integer, enum: [0, 10] }

@@ -217,9 +217,27 @@ An LLMService swiss wrote carries `swiss.modelsphere.dev/plan-hash`. The live sp
 
 ## Referenced-service SLO editing
 
-The release SLO API resolves the live ModelRoute reference (including cross-namespace references), then uses the actual requirement serviceId with slo-api. Ambiguous serviceIds fail closed. Replies include `source` with namespace/name, inheritance and edit capability. Assigned arms are editable only with the matching live parent UID and `existingSLOPolicy: LiveParent`; inherited bindings are read-only from the arm. Legacy experiments retain frozen behavior. The chart grants only GET on LLMCanary for this policy check.
+The release SLO API follows the live ModelRoute reference, including cross-namespace references.
 
+| Concern | Behavior |
+| --- | --- |
+| Requirement API | Use the rendered ObjectRef's API version; for shared requirements outside the release, check both `inference.modelsphere.dev` and `inference.x-k8s.io`, rejecting ambiguous matches. |
+| SLO server identity | Use the requirement's actual `serviceId`. PUT accepts the URL release or `source.serviceId` as `route`, then forwards the effective ID. |
+| Response metadata | `source` reports namespace/name, effective service ID, inheritance and edit capability. |
+| Referenced arms | Editing requires the live parent UID and `existingSLOPolicy: LiveParent`. Inherited requirements are read-only from the arm; legacy experiments retain frozen behavior. |
+
+The chart grants only GET on LLMCanary for the policy check.
 
 ## Mutable referenced services
 
 The default-off Helm value `allowMutableReferences` sets `CANARY_ALLOW_MUTABLE_REFERENCES`. Verified assignment metadata exposes `mutable: true` for Console; standalone and invalid assignments gain no new capability. Upgrade preserves an inherited `canary-slo` layer from its assignment-scoped binding journal, while user configuration remains editable. Pair with a matching Canary controller before enabling full upgrades. Older Console clients ignore this additive field.
+
+Mutable-reference preview and upgrade use the same assignment-scoped SLO binding validation:
+
+```
+user plan + verified binding -> final canary-slo layer -> diff / apply
+```
+
+- `canary-slo` follows every user and system layer in rendered values and survives live-plan serialization.
+- Preview uses a copy; its response retains the stored user plan hash for the subsequent apply.
+- Apply records the effective hash on the LLMService so inherited values do not look like manual edits.

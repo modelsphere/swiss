@@ -165,3 +165,24 @@ func canonicalTree(v any) string {
 	}
 	return string(b)
 }
+
+func TestInheritedSLOLayerSurvivesPlanFiles(t *testing.T) {
+	p := &Plan{Layers: map[string]values.Tree{
+		values.LayerForm:      {"modelRoute": map[string]any{"slo": map[string]any{"enabled": false}}},
+		values.LayerCanarySLO: {"modelRoute": map[string]any{"slo": map[string]any{"enabled": true, "name": "parent/slo"}}},
+	}}
+	files, err := p.Files("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := FromFiles(files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := values.Get(back.Values(), "modelRoute.slo.name"); got != "parent/slo" {
+		t.Fatal("inherited SLO missing from rendered values", back.Values())
+	}
+	if got := back.ValuesFiles(); got[len(got)-1] != "canary-slo.yaml" {
+		t.Fatal("inherited SLO missing from Helmfile", got)
+	}
+}

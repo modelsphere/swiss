@@ -73,7 +73,7 @@ func (s *Server) handleSLO(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		s.readSLO(w, base, target, token, source)
 	case http.MethodPut:
-		s.writeSLO(w, r, source.ServiceID, base, target, token, source)
+		s.writeSLO(w, r, release, base, target, token, source)
 	case http.MethodDelete:
 		s.resetSLO(w, base, target, token, source)
 	default:
@@ -133,11 +133,11 @@ func (s *Server) writeSLO(w http.ResponseWriter, r *http.Request, release, base,
 	if body == nil { // a literal `null` body decodes to a nil map
 		body = map[string]any{}
 	}
-	if route, _ := body["route"].(string); route != "" && route != release {
+	if route, _ := body["route"].(string); route != "" && route != release && route != source.ServiceID {
 		writeError(w, http.StatusBadRequest, "body route does not match this release")
 		return
 	}
-	body["route"] = release
+	body["route"] = source.ServiceID
 	up, err := sloUpstream(body)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
