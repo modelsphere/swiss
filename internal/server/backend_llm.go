@@ -217,6 +217,9 @@ func (b llmBackend) Apply(ctx context.Context, p *plan.Plan, mode exec.Mode, o a
 	if err != nil {
 		return applyResult{}, failErr(fromPlanStatus(err), err)
 	}
+	if err := llmsvc.PreserveSLOBinding(cur, fresh); err != nil {
+		return applyResult{}, failErr(http.StatusConflict, err)
+	}
 	if o.SkipSchemaValidation {
 		anns := fresh.GetAnnotations()
 		if anns == nil {

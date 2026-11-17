@@ -50,16 +50,32 @@ func (s *Server) handleSLO(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// slo-api addresses a requirement by spec.serviceId, which is the release name.
-	target := base + "/config/" + url.PathEscape(release)
+	source, err := s.resolveSLOSource(ctx, ns, release)
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if r.Method != http.MethodGet && !source.CanEdit {
+		writeError(w, http.StatusConflict, "inherited or unavailable SLO: edit the production parent requirement")
+		return
+	}
+	if source.ServiceID == "" {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusConflict, "no SLO requirement exists for this service")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"found": false, "source": source})
+		return
+	}
+	target := base + "/config/" + url.PathEscape(source.ServiceID)
 
 	switch r.Method {
 	case http.MethodGet:
-		s.readSLO(w, base, target, token)
+		s.readSLO(w, base, target, token, source)
 	case http.MethodPut:
-		s.writeSLO(w, r, release, base, target, token)
+		s.writeSLO(w, r, source.ServiceID, base, target, token, source)
 	case http.MethodDelete:
-		s.resetSLO(w, base, target, token)
+		s.resetSLO(w, base, target, token, source)
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
@@ -84,7 +100,7 @@ func (s *Server) sloToken(ctx context.Context, sc site.Scaler) (string, error) {
 	return token, nil
 }
 
-func (s *Server) readSLO(w http.ResponseWriter, base, target, token string) {
+func (s *Server) readSLO(w http.ResponseWriter, base, target, token string, source sloSource) {
 	code, body, err := sloCall(http.MethodGet, target, token, nil)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
@@ -103,11 +119,12 @@ func (s *Server) readSLO(w http.ResponseWriter, base, target, token string) {
 		return
 	}
 	body = sloClient(body)
+	body["source"] = source
 	body["found"] = true
 	writeJSON(w, http.StatusOK, body)
 }
 
-func (s *Server) writeSLO(w http.ResponseWriter, r *http.Request, release, base, target, token string) {
+func (s *Server) writeSLO(w http.ResponseWriter, r *http.Request, release, base, target, token string, source sloSource) {
 	var body map[string]any
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
@@ -142,11 +159,12 @@ func (s *Server) writeSLO(w http.ResponseWriter, r *http.Request, release, base,
 		return
 	}
 	resp = sloClient(resp)
+	resp["source"] = source
 	resp["found"] = true
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (s *Server) resetSLO(w http.ResponseWriter, base, target, token string) {
+func (s *Server) resetSLO(w http.ResponseWriter, base, target, token string, source sloSource) {
 	code, body, err := sloCall(http.MethodDelete, target, token, nil)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
@@ -164,7 +182,7 @@ func (s *Server) resetSLO(w http.ResponseWriter, base, target, token string) {
 	}
 	// The CR stays. slo-api clears the thresholds and restores the CRD
 	// defaults, so the next read is that thin object.
-	s.readSLO(w, base, target, token)
+	s.readSLO(w, base, target, token, source)
 }
 
 func sloCall(method, rawURL, token string, body any) (int, map[string]any, error) {
@@ -233,7 +251,7 @@ const (
 func sloUpstream(body map[string]any) (map[string]any, error) {
 	out := make(map[string]any, len(body))
 	for k, v := range body {
-		if k == "found" {
+		if k == "found" || k == "source" {
 			continue
 		}
 		out[k] = v

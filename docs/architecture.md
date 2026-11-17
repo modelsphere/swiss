@@ -214,3 +214,12 @@ An LLMService swiss wrote carries `swiss.modelsphere.dev/plan-hash`. The live sp
 | `GET /api/nodes` | the GPU inventory: type, allocatable, in use, and what holds it |
 | `GET /api/profile` | the site profile as parsed, after defaults |
 | `GET /api/autoscaling`, `GET /api/releases/{ns}/{release}/autoscaling` | the autoscale loop's last pass per PD release with the form SLO on; in memory only, lost on restart |
+
+## Referenced-service SLO editing
+
+The release SLO API resolves the live ModelRoute reference (including cross-namespace references), then uses the actual requirement serviceId with slo-api. Ambiguous serviceIds fail closed. Replies include `source` with namespace/name, inheritance and edit capability. Assigned arms are editable only with the matching live parent UID and `existingSLOPolicy: LiveParent`; inherited bindings are read-only from the arm. Legacy experiments retain frozen behavior. The chart grants only GET on LLMCanary for this policy check.
+
+
+## Mutable referenced services
+
+The default-off Helm value `allowMutableReferences` sets `CANARY_ALLOW_MUTABLE_REFERENCES`. Verified assignment metadata exposes `mutable: true` for Console; standalone and invalid assignments gain no new capability. Upgrade preserves an inherited `canary-slo` layer from its assignment-scoped binding journal, while user configuration remains editable. Pair with a matching Canary controller before enabling full upgrades. Older Console clients ignore this additive field.

@@ -119,6 +119,9 @@ is picked per install, so the grant cannot depend on it. controllerrevisions are
 read-only: they hold archived specs.
 */}}
 {{- define "swiss.llmsvcRules" -}}
+- apiGroups: ["canary.modelsphere.dev"]
+  resources: ["llmcanaries"]
+  verbs: ["get"]
 - apiGroups: ["serving.modelsphere.dev"]
   resources: ["llmservices"]
   verbs: ["get","list","watch","create","update","patch","delete"]

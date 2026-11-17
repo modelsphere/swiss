@@ -153,6 +153,13 @@ func TestCanaryMetadataKeepsNormalServiceOperations(t *testing.T) {
 					case "slo reset":
 						code, body = del(t, rig.srv, "/api/releases/models/glm/slo")
 					}
+					if marked && (kind == "malformed" || kind == "assigned") && (operation == "slo write" || operation == "slo reset") {
+						if code != 409 {
+							t.Fatalf("invalid assignment allowed SLO write: %d %v", code, body)
+						}
+						statuses = append(statuses, 200)
+						continue
+					}
 					if body["code"] == "CANARY_MANAGED_SERVICE" || body["code"] == "CANARY_ASSIGNED_SERVICE" {
 						t.Fatalf("Canary metadata blocked operation: %d %v", code, body)
 					}

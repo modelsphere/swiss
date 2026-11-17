@@ -54,6 +54,8 @@ spec:
             - --config=/etc/swiss/swiss.yaml
             - --log-level={{ .Values.logLevel }}
           env:
+            - name: CANARY_ALLOW_MUTABLE_REFERENCES
+              value: {{ .Values.allowMutableReferences | quote }}
             # A profile naming route.auth.secretRef by bare name means a Secret
             # in this namespace, so swissd has to know which one it is.
             - name: POD_NAMESPACE

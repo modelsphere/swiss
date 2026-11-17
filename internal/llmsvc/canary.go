@@ -2,6 +2,7 @@ package llmsvc
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -22,6 +23,7 @@ type CanaryOwner struct {
 }
 
 type CanaryAssignment struct {
+	Mutable       bool   `json:"mutable,omitempty"`
 	APIVersion    string `json:"apiVersion"`
 	Kind          string `json:"kind"`
 	Namespace     string `json:"namespace"`
@@ -98,6 +100,7 @@ func CanaryAssigned(u *unstructured.Unstructured) *CanaryAssignment {
 		a.UID != "" &&
 		validRole &&
 		validArm
+	a.Mutable = a.Verified && os.Getenv("CANARY_ALLOW_MUTABLE_REFERENCES") == "true"
 	if a.APIVersion == "" {
 		a.APIVersion = CanaryPrefix + "v1alpha1"
 	}

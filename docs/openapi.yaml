@@ -2171,6 +2171,7 @@ components:
         namespace: { type: string, description: "The assigned experiment's namespace; it may differ from the service namespace for both production and arm assignments." }
         name: { type: string, description: "The assigned experiment's name." }
         uid: { type: string, description: "The assigned experiment's UID." }
+        mutable: { type: boolean, description: "Deployment permits live configuration changes for this verified reference. Defaults to false." }
         role: { type: string, description: "production or arm for a verified assignment; omitted when empty.", examples: [production, arm] }
         arm: { type: string, description: "Required for a verified arm assignment; empty and omitted for a verified production assignment." }
         configDigest: { type: string, description: "Assigned experiment configuration digest, when recorded." }
@@ -2441,6 +2442,16 @@ components:
           required: [found]
           properties:
             found: { type: boolean }
+            source:
+              type: object
+              description: Effective SLO requirement, including temporary inheritance from a referenced production service.
+              required: [inherited, canEdit]
+              properties:
+                namespace: { type: string }
+                name: { type: string }
+                serviceId: { type: string }
+                inherited: { type: boolean }
+                canEdit: { type: boolean }
 
     Run:
       type: object
