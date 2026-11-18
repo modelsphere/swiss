@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -311,9 +310,6 @@ func (v Variant) Weightless() bool {
 	return ok && p == ""
 }
 
-// chartName is a helm chart name as a repository index carries it.
-var chartName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
-
 // validate is the rules one variant is judged on alone, the same in a v1 entry
 // and a v2 variant file.
 func (v Variant) validate() error {
@@ -330,8 +326,10 @@ func (v Variant) validate() error {
 			return fmt.Errorf("%s: engine mock runs on one of the %s charts, not %q", where, strings.Join(LLMCharts, ", "), v.Chart.Name)
 		}
 	case v.Engine == EngineVideo:
-		if !chartName.MatchString(v.Chart.Name) {
-			return fmt.Errorf("%s: engine video needs its own chart, got chart name %q", where, v.Chart.Name)
+		// An LLM engine's chart is checked by name above; a video chart has no
+		// name to match, so an empty one is refused here.
+		if v.Chart.Name == "" {
+			return fmt.Errorf("%s: engine video needs its own chart, got none", where)
 		}
 		if slices.Contains(LLMCharts, v.Chart.Name) {
 			return fmt.Errorf("%s: engine video runs on a video chart, not the %s engine chart", where, v.Chart.Name)

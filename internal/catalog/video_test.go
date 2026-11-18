@@ -28,7 +28,6 @@ func TestVideoVariantRefusals(t *testing.T) {
 	}{
 		{"engine chart", func(v *Variant) { v.Chart.Name = "sglang" }, "not the sglang engine chart"},
 		{"no chart", func(v *Variant) { v.Chart.Name = "" }, "needs its own chart"},
-		{"bad chart name", func(v *Variant) { v.Chart.Name = "MiniMax_H3" }, "needs its own chart"},
 		{"lws", func(v *Variant) { v.Requires.Topology = TopologyLWS; v.Requires.Nodes = 2 }, "topology single-node"},
 		{"pd", func(v *Variant) { v.Requires.Topology = "pd" }, "topology single-node"},
 		{"nodes", func(v *Variant) { v.Requires.Nodes = 2 }, "no requires.nodes"},

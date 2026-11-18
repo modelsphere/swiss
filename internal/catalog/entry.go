@@ -106,6 +106,10 @@ var LLMCharts = []string{"sglang", "vllm"}
 // IsVideo reports a variant that runs a video generation chart.
 func (v Variant) IsVideo() bool { return v.Engine == EngineVideo }
 
+// HasCompileCache reports a variant whose chart takes the LLM engines' compile
+// cache (cache: in its values). A video chart has none.
+func (v Variant) HasCompileCache() bool { return !v.IsVideo() }
+
 func (r Requires) VendorOrDefault() string {
 	if r.Vendor == "" {
 		return VendorNvidia
