@@ -54,6 +54,12 @@ type Plan struct {
 	// GPU product forced past the catalog. Excluded from Hash, like Helmfile.
 	Warnings []string `json:"warnings,omitempty"`
 
+	// AdditionalAnnotations are client-owned annotations stored with the plan
+	// and returned on it. Omitted when empty, and excluded from Hash: swiss
+	// does not read them, and two plans that differ only here render the same
+	// thing.
+	AdditionalAnnotations map[string]string `json:"additionalAnnotations,omitempty"`
+
 	// Hash covers release identity, chart, and the composed values. Two plans
 	// with one hash render the same thing.
 	Hash string `json:"hash"`
@@ -102,6 +108,7 @@ type ChartRef struct {
 // ComputeHash sets p.Hash over the fields that decide what gets rendered.
 // Provenance is deliberately excluded: it explains the values, it does not
 // change them, and including it would make an explanation look like a diff.
+// Additional annotations are excluded for the same reason.
 func (p *Plan) ComputeHash() error {
 	// The catalog's name is a label for the location beside it, which is
 	// hashed; nothing rendered depends on it. And a swissd older than the field

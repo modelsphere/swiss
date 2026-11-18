@@ -386,7 +386,7 @@ func (s *Server) migrateProfile(ctx context.Context) {
 		s.log.ErrorContext(ctx, "site profile needs migrating and swissd cannot write it; save the migrated profile by hand", "profile", origin, "changes", changes, "migrated", string(out))
 		return
 	}
-	if err := s.writer.PutConfigMap(ctx, ref, map[string]string{s.cfg.Cluster.Profile.Key: string(out)}, nil); err != nil {
+	if err := s.writer.PutConfigMap(ctx, ref, map[string]string{s.cfg.Cluster.Profile.Key: string(out)}, nil, nil); err != nil {
 		s.log.ErrorContext(ctx, "site profile needs migrating and writing it failed; save the migrated profile by hand", "configMap", ref, "err", err, "changes", changes, "migrated", string(out))
 		return
 	}

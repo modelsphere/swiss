@@ -1,9 +1,11 @@
 package catalog
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"testing"
@@ -192,18 +194,70 @@ func TestV2BadFileBlocksOnlyItself(t *testing.T) {
 	}
 }
 
-// A variant file is judged by the same per-variant rules as a v1 entry's.
-func TestV2VariantIsValidated(t *testing.T) {
-	unknown := memFetcher{}
-	raw := []byte("apiVersion: catalog.swiss/v2\nkind: Variant\nmodel: m\nid: a\nversion: 1.0.0\nengine: trtllm\nchart: {name: trtllm, version: \"1.0.0\"}\nrequires: {gpus: 1}\n")
-	unknown["models/m/a.yaml"] = raw
-	unknown["index-v2.json"] = []byte(fmt.Sprintf(`{"apiVersion":"catalog.swiss/v2","count":1,"models":[{"name":"m","source":{"hf":"org/m"},"variants":[{"id":"a","version":"1.0.0","path":"models/m/a.yaml","digest":%q,"engine":"trtllm","chart":{"name":"trtllm","version":"1.0.0"},"requires":{"gpus":1}}]}]}`, contentRef(raw)))
-	uc, err := OpenFetcher(context.Background(), unknown)
+// An engine this swissd cannot deploy is dropped with a warning. The other
+// variants of that model still load, on v1 and on v2.
+func TestUnknownEngineSkipsOnlyThatVariant(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	body := `
+apiVersion: catalog.swiss/v1
+name: m
+version: 1.1.0
+variants:
+  - id: neweng
+    engine: trtllm
+    chart: {name: trtllm, version: "1.0.0"}
+    requires: {gpus: 1}
+  - id: v
+    engine: sglang
+    chart: {name: sglang, version: "0.8.0"}
+    requires: {gpus: 2}
+`
+	srv := serve(t, map[string]string{
+		"catalog/index.json":          index(map[string]string{"1.1.0": body}),
+		"catalog/models/m/1.1.0.yaml": body,
+	})
+	c, err := Open(context.Background(), srv.URL+"/catalog")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := uc.Resolve(context.Background(), "m", "", ""); err == nil || !strings.Contains(err.Error(), "is not sglang, vllm, mock or video") {
-		t.Errorf("an unknown engine must be refused by v1's rule: %v", err)
+	e, err := c.(*V1).Entry(context.Background(), "m", "1.1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(e.Variants) != 1 || e.Variants[0].ID != "v" || e.Variants[0].Engine != "sglang" {
+		t.Fatalf("v1 variants = %+v", e.Variants)
+	}
+	if r, err := c.Resolve(context.Background(), "m", "v", "1.1.0"); err != nil || r.Variant.ID != "v" {
+		t.Fatalf("v1 sibling = %+v, %v", r, err)
+	}
+	if _, err := c.Resolve(context.Background(), "m", "neweng", "1.1.0"); err == nil {
+		t.Fatal("v1 loaded the unknown engine")
+	}
+	if warn := buf.String(); !strings.Contains(warn, `"variant":"neweng"`) || !strings.Contains(warn, `"engine":"trtllm"`) {
+		t.Errorf("v1 warning: %s", warn)
+	}
+
+	buf.Reset()
+	bad := []byte("apiVersion: catalog.swiss/v2\nkind: Variant\nmodel: m\nid: a\nversion: 1.0.0\nengine: trtllm\nchart: {name: trtllm, version: \"1.0.0\"}\nrequires: {gpus: 1}\n")
+	good := []byte("apiVersion: catalog.swiss/v2\nkind: Variant\nmodel: m\nid: b\nversion: 1.0.0\nengine: sglang\nchart: {name: sglang, version: \"0.8.0\"}\nrequires: {gpus: 1}\n")
+	f := memFetcher{"models/m/a.yaml": bad, "models/m/b.yaml": good}
+	f["index-v2.json"] = []byte(fmt.Sprintf(`{"apiVersion":"catalog.swiss/v2","count":1,"models":[{"name":"m","source":{"hf":"org/m"},"defaultVariant":"b","variants":[{"id":"a","version":"1.0.0","path":"models/m/a.yaml","digest":%q,"engine":"trtllm","chart":{"name":"trtllm","version":"1.0.0"},"requires":{"gpus":1}},{"id":"b","version":"1.0.0","path":"models/m/b.yaml","digest":%q,"engine":"sglang","chart":{"name":"sglang","version":"0.8.0"},"requires":{"gpus":1}}]}]}`, contentRef(bad), contentRef(good)))
+	vc, err := OpenFetcher(context.Background(), f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, err := vc.Resolve(context.Background(), "m", "b", ""); err != nil || r.Variant.ID != "b" {
+		t.Fatalf("v2 sibling = %+v, %v", r, err)
+	}
+	if _, err := vc.Resolve(context.Background(), "m", "a", ""); err == nil || !strings.Contains(err.Error(), "is not sglang, vllm, mock or video") {
+		t.Fatalf("v2 unknown engine: %v", err)
+	}
+	if warn := buf.String(); !strings.Contains(warn, `"variant":"a"`) || !strings.Contains(warn, `"engine":"trtllm"`) {
+		t.Errorf("v2 warning: %s", warn)
 	}
 }
 
@@ -296,8 +350,9 @@ func TestV2PublishedIsPerVariant(t *testing.T) {
 	}
 }
 
-// The v1 types carry nothing of v2: its keys are unknown keys to a v1 index.
-func TestV1IndexStaysStrict(t *testing.T) {
+// A v1 index ignores keys it does not know. A catalog published for a newer
+// swissd still loads; known fields are what a deploy uses.
+func TestV1IndexIgnoresUnknownFields(t *testing.T) {
 	good := index(map[string]string{"1.0.0": testEntry, "1.1.0": testEntryV2})
 	if _, err := parseIndex([]byte(good)); err != nil {
 		t.Fatal(err)
@@ -306,13 +361,43 @@ func TestV1IndexStaysStrict(t *testing.T) {
 		"variant digest": strings.Replace(good, `"variants":[{"id":"v"`, `"variants":[{"id":"v","digest":"sha256:x"`, 1),
 		"variant path":   strings.Replace(good, `"variants":[{"id":"v"`, `"variants":[{"id":"v","path":"models/m/v.yaml"`, 1),
 		"reports":        strings.Replace(good, `{"name":"m",`, `{"name":"m","reports":["r.html"],`, 1),
+		"top level":      strings.Replace(good, `"count": 1,`, `"future":true,"count": 1,`, 1),
 	} {
 		if bad == good {
 			t.Fatalf("%s: fixture did not change", name)
 		}
-		if _, err := parseIndex([]byte(bad)); err == nil || !strings.Contains(err.Error(), "unknown field") {
-			t.Errorf("%s: v1 must refuse it, got %v", name, err)
+		idx, err := parseIndex([]byte(bad))
+		if err != nil {
+			t.Errorf("%s: unknown field must be ignored, got %v", name, err)
+			continue
 		}
+		m, ok := idx.Model("m")
+		if !ok || m.Latest != "1.1.0" || m.Source.HF != "org/m" || len(m.Versions) != 2 {
+			t.Errorf("%s: known fields = %+v", name, m)
+			continue
+		}
+		for _, ver := range m.Versions {
+			if len(ver.Variants) != 1 || ver.Variants[0].ID != "v" || ver.Variants[0].Engine != "sglang" || ver.Digest == "" {
+				t.Errorf("%s: version = %+v", name, ver)
+			}
+		}
+	}
+}
+
+// index-v2.json already ignored unknown keys. A newer field must not refuse it.
+func TestV2IndexIgnoresUnknownFields(t *testing.T) {
+	raw := []byte(`{"apiVersion":"catalog.swiss/v2","future":true,"count":1,"models":[{"name":"m","futureModel":1,"source":{"hf":"org/m","futureSrc":1},"variants":[{"id":"a","futurePin":true,"version":"1.0.0","path":"models/m/a.yaml","digest":"sha256:abc","engine":"sglang","chart":{"name":"sglang","version":"0.8.0","futureChart":1},"requires":{"gpus":1,"futureReq":true}}]}]}`)
+	idx, err := parseIndexV2(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, ok := idx.Model("m")
+	if !ok || m.Source.HF != "org/m" || len(m.Variants) != 1 {
+		t.Fatalf("%+v", m)
+	}
+	v := m.Variants[0]
+	if v.ID != "a" || v.Digest != "sha256:abc" || v.Requires.GPUs != 1 || v.Chart.Name != "sglang" || v.Chart.Version != "0.8.0" {
+		t.Fatalf("known fields dropped: %+v", v)
 	}
 }
 

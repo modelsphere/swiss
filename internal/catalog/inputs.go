@@ -2,17 +2,17 @@ package catalog
 
 import (
 	"fmt"
+	"log/slog"
 	"math"
 	"regexp"
 	"strings"
-
-	"github.com/modelsphere/swiss/internal/values"
 )
 
-// Input is one inputs entry. Its rules repeat the catalog's
-// hack/lib/inputs.js: the catalog is untrusted where it is used.
+// Input is one inputs entry. swiss stores the key and patcher as-is: catalog CI
+// validates the kyaml key grammar and patcher. swiss does not evaluate keys
+// against values and does not re-implement that grammar.
 type Input struct {
-	// Key is the chart value's dotted key, as helm --set takes it: storageKVOffload.mooncake.master.
+	// Key is stored as-is. In the catalog it is a kyaml-style path.
 	Key         string `yaml:"key" json:"key"`
 	Title       string `yaml:"title" json:"title"`
 	Description string `yaml:"description,omitempty" json:"description,omitempty"`
@@ -22,8 +22,10 @@ type Input struct {
 	Pattern string `yaml:"pattern,omitempty" json:"pattern,omitempty"`
 	// Example is the form's placeholder and what catalog CI renders with; never deployed.
 	Example any `yaml:"example" json:"example"`
-	// Default answers the input when the site profile does not.
+	// Default is the answer the web uses when the site profile has none. swiss does not apply it.
 	Default any `yaml:"default,omitempty" json:"default,omitempty"`
+	// Patcher is stored as-is. Catalog CI validates it.
+	Patcher string `yaml:"patcher,omitempty" json:"patcher,omitempty"`
 }
 
 const (
@@ -31,10 +33,6 @@ const (
 	InputInteger = "integer"
 	InputBoolean = "boolean"
 )
-
-var inputKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*(\.[A-Za-z_][A-Za-z0-9_-]*)*$`)
-
-func validInputKey(k string) bool { return inputKey.MatchString(k) }
 
 func (i Input) TypeOrDefault() string {
 	if i.Type == "" {
@@ -93,65 +91,58 @@ func isInteger(v any) bool {
 	return false
 }
 
-// checkInputs: a value values gives an input's key is the base compose's answer overrides.
-func checkInputs(inputs []Input, vals values.Tree) error {
+// usableInputs keeps the inputs this swissd can serve and check. One it cannot
+// use is dropped, with a warning, so a newer catalog's input does not refuse
+// the variant. A key counts as taken only once an input is kept. It does not
+// look at variant values. Key and patcher are stored as-is.
+func usableInputs(model, variant string, inputs []Input) []Input {
 	declared := map[string]bool{}
+	out := make([]Input, 0, len(inputs))
 	for _, in := range inputs {
-		where := "inputs " + in.Key
-		switch {
-		case !validInputKey(in.Key):
-			return fmt.Errorf("inputs: key %q is not a dotted chart key", in.Key)
-		case in.Key == "model.localPath":
-			return fmt.Errorf("%s: swiss answers it from the site's model.pathTemplate, so it is never an input", where)
-		case declared[in.Key]:
-			return fmt.Errorf("%s: declared twice", where)
-		case strings.TrimSpace(in.Title) == "":
-			return fmt.Errorf("%s: title is required", where)
-		case in.Pattern != "" && in.TypeOrDefault() != InputString:
-			return fmt.Errorf("%s: pattern is only for a string input, and this one is %s", where, in.TypeOrDefault())
+		if why := inputDropReason(in, declared); why != "" {
+			slog.Warn("dropping catalog input this swissd cannot use",
+				"model", model, "variant", variant, "key", in.Key, "reason", why)
+			continue
 		}
 		declared[in.Key] = true
-		if at := setAt(vals, strings.Split(in.Key, ".")); at != "" && at != in.Key {
-			return fmt.Errorf("%s: values.%s is not a map, so the answer has no place to go", where, at)
-		}
-		if in.Pattern != "" {
-			if _, err := in.pattern(); err != nil {
-				return fmt.Errorf("%s: %w", where, err)
-			}
-		}
-		if in.Example == nil {
-			return fmt.Errorf("%s: example is required", where)
-		}
-		if err := in.Check(in.Example); err != nil {
-			return fmt.Errorf("%s: example %w", where, err)
-		}
-		if in.Default != nil {
-			if err := in.Check(in.Default); err != nil {
-				return fmt.Errorf("%s: default %w", where, err)
-			}
-		}
+		out = append(out, in)
 	}
-	return nil
+	return out
 }
 
-// setAt is where vals already says something about keys: the value, under it, or a scalar above it.
-func setAt(vals values.Tree, keys []string) string {
-	node := map[string]any(vals)
-	for i, k := range keys {
-		next, ok := node[k]
-		if !ok {
-			return ""
+func inputDropReason(in Input, declared map[string]bool) string {
+	switch {
+	case strings.TrimSpace(in.Key) == "":
+		return "key is required"
+	case in.Key == "model.localPath":
+		return "swiss answers model.localPath from the site profile, so it is never an input"
+	case declared[in.Key]:
+		return "declared twice"
+	case strings.TrimSpace(in.Title) == "":
+		return "title is required"
+	}
+	switch t := in.TypeOrDefault(); t {
+	case InputString, InputInteger, InputBoolean:
+	default:
+		return fmt.Sprintf("type %q is not string, integer or boolean", t)
+	}
+	if in.Pattern != "" {
+		if in.TypeOrDefault() != InputString {
+			return fmt.Sprintf("pattern is only for a string input, and this one is %s", in.TypeOrDefault())
 		}
-		if i == len(keys)-1 {
-			return strings.Join(keys, ".")
+		if _, err := in.pattern(); err != nil {
+			return err.Error()
 		}
-		switch m := next.(type) {
-		case map[string]any:
-			node = m
-		case values.Tree:
-			node = m
-		default:
-			return strings.Join(keys[:i+1], ".")
+	}
+	if in.Example == nil {
+		return "example is required"
+	}
+	if err := in.Check(in.Example); err != nil {
+		return "example " + err.Error()
+	}
+	if in.Default != nil {
+		if err := in.Check(in.Default); err != nil {
+			return "default " + err.Error()
 		}
 	}
 	return ""

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"strconv"
 	"strings"
@@ -211,6 +212,9 @@ func clonePlan(p *plan.Plan) *plan.Plan {
 	}
 	if p.Warnings != nil {
 		cp.Warnings = append([]string(nil), p.Warnings...)
+	}
+	if p.AdditionalAnnotations != nil {
+		cp.AdditionalAnnotations = maps.Clone(p.AdditionalAnnotations)
 	}
 	return &cp
 }

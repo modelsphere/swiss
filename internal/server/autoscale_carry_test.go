@@ -84,6 +84,17 @@ func runUpgradeCarry(t *testing.T, tc carryCase) {
 	if tc.Input.SLOOff {
 		overrides["sloRequirement"] = map[string]any{"enabled": false}
 	}
+	// The request replaces the form layer. A case that still wants the
+	// previous rule or replica count has to send those keys.
+	if tc.Input.On && len(overrides) > 0 {
+		overrides["pd"] = map[string]any{"enabled": true, "colocate": false}
+		if _, set := overrides["sloRequirement"]; !set {
+			overrides["sloRequirement"] = map[string]any{"enabled": true}
+		}
+		if _, set := overrides["replicaCount"]; !set {
+			overrides["replicaCount"] = 3
+		}
+	}
 	if len(overrides) > 0 {
 		body["overrides"] = overrides
 	}

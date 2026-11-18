@@ -748,13 +748,14 @@ paths:
         keyed by `hash`, for diff and apply. Nothing touches the cluster.
 
         With `fromRelease` it recomposes that release: its stored plan supplies
-        the form layer, model and variant, and only what the request names moves.
+        the model and variant, and only what the request names moves. Overrides
+        replace the release's form layer; omitting them keeps it.
         With `reuseSource: true`, it instead reads the live LLMService plan and
         merges arbitrary form overrides and optional edit values, without resolving a catalog.
 
-        Each of the variant's `inputs` is answered in the `derived` layer by the
-        site profile's `inputs`, else the input's `default`; `overrides` go over
-        it. A plan that leaves one without a valid answer is 400.
+        swiss does not answer a variant's `inputs` when composing, and a plan
+        is not 400 because an input is unanswered. The web writes those answers
+        into the form layer.
       operationId: composePlan
       requestBody:
         required: true
@@ -1812,16 +1813,24 @@ components:
           type: object
           description: Values every release on this site gets, as the site layer.
         inputs:
-          type: object
+          type: array
           description: |
-            Answers to variants' `inputs`, by each input's key. Unlike `extra`, an
-            answer reaches only a variant that declares the key, in the `derived`
-            layer. A string may use `model.pathTemplate`'s placeholders
-            (`{{hf}}`, `{{org}}`, `{{name}}`, `{{model}}`). Where `extra` sets the
-            same key, `extra` wins.
-          additionalProperties: { type: [string, number, boolean] }
+            Answers the web reads from GET /api/profile to answer catalog inputs,
+            one entry per catalog input key. A key is listed at most once.
+            swiss serves the list and does not apply it when composing. A string
+            may use `model.pathTemplate`'s placeholders (`{{hf}}`, `{{org}}`,
+            `{{name}}`, `{{model}}`); the web fills them.
+          items:
+            type: object
+            required: [key, value]
+            properties:
+              key: { type: string, description: "The catalog input's key, as written in the catalog." }
+              value: { type: [string, number, boolean] }
           examples:
-            - storageKVOffload.mooncake.master: mooncake-master.svc:50051
+            - - key: storageKVOffload.mooncake.master
+                value: mooncake-master.svc:50051
+              - key: volumes.[name=draft-model].hostPath.path
+                value: /data/models/{{name}}
 
     Secrets:
       type: object
@@ -1861,16 +1870,22 @@ components:
 
     Input:
       type: object
-      description: A chart value every deploy must answer. Answered in the `derived` layer by the site profile's `inputs`, else `default`; a deploy's overrides go over it.
+      description: A chart value the web answers. swiss stores `key` and `patcher` as-is and does not apply the input when composing. Catalog CI validates the key grammar and patcher.
       required: [key, title, example]
       properties:
-        key: { type: string, description: "The chart value's dotted key.", examples: [storageKVOffload.mooncake.master] }
+        key:
+          type: string
+          description: "The catalog's form of a key: a kyaml-style path, segments joined by `.`, brackets kept whole. A segment is a field, `[field=value]`, `[=value]`, a bare index, or `[^=prefix]`. The `-` and `*` selectors are not part of that form. swiss stores the key as-is; catalog CI validates the grammar."
+          examples:
+            - storageKVOffload.mooncake.master
+            - "volumes.[name=draft-model].hostPath.path"
         title: { type: string }
         description: { type: string }
         type: { type: string, enum: [string, integer, boolean], default: string }
         pattern: { type: string, description: "A string answer matches it, whole." }
         example: { type: [string, integer, boolean], description: "The form's placeholder; never deployed." }
-        default: { type: [string, integer, boolean], description: "The answer when the site profile has none." }
+        patcher: { type: string, description: "Stored as-is. Catalog CI validates it." }
+        default: { type: [string, integer, boolean], description: "The answer the web uses when the site profile has none." }
 
     ModelVariant:
       type: object
@@ -2001,17 +2016,37 @@ components:
         gpuProducts: { type: array, items: { type: string }, description: "Any one of these products. Empty uses the variant's requires.gpuProduct." }
         forceGpuProducts: { type: boolean, default: false, description: "Accept products the variant does not list, if this cluster has them." }
         gpuResource: { type: string, description: "The resource to request, one the site profile's nodes.gpus lists for the variant's vendor. Empty picks it from the products' nodes, else the vendor's default. An upgrade sending no form keeps the resource the release runs on." }
-        overrides: { type: object, description: "Form-layer values. On an upgrade, merged over the release's form layer." }
+        overrides: { type: object, description: "Form-layer values. On an upgrade, omitted or {} keeps the previous form layer; otherwise overrides replace it as-is." }
         overridesYAML: { type: string, description: "Form-layer values as YAML text." }
         editsYAML: { type: string, description: "The edit layer, exempt from ownership. The autoscale layer is applied after it." }
         createNamespace: { type: boolean, default: false, deprecated: true, description: "Use `applyFlags.createNamespace`." }
         chartVersion: { type: string, description: "Must fall in the variant's chart range. Empty is the newest it allows (or the running one on upgrade)." }
+        additionalAnnotations:
+          type: object
+          additionalProperties: { type: string }
+          propertyNames: { enum: ["swiss.modelsphere.dev/inputs"] }
+          description: |
+            Client-owned annotations to record on the release: on the helm plan
+            ConfigMap and on the LLMService. swissd stores and returns them but
+            does not read them, and they are not hashed. Only the keys listed
+            here are accepted; any other key is refused with 400. Each value is
+            at most 16384 bytes (UTF-8); a larger value is refused with 400.
+
+            - `swiss.modelsphere.dev/inputs`: the deploy form's own record of
+              the catalog inputs the user answered, so an upgrade can show them
+              again. Its content is the form's to define (by convention a JSON
+              list of `{key, value}`, the value as typed, before any `patcher`).
+
+            On an upgrade or a `reuseSource`, leaving the field out keeps the
+            release's previous annotations; sending it replaces them all, and
+            `{}` removes them.
 
     Plan:
       type: object
       description: |
         The deploy, complete on its own. `hash` covers release, source, chart
         and the merged values; two plans with one hash render the same thing.
+        `additionalAnnotations` is not hashed.
       required: [apiVersion, release, source, chart, engine, profile, hash]
       properties:
         apiVersion: { type: string, const: plan.swiss/v1 }
@@ -2059,6 +2094,14 @@ components:
         createNamespace: { type: boolean, default: false, deprecated: true, description: "Use `applyFlags.createNamespace`." }
         helmfile: { type: string, description: "The helmfile these values are applied through. Not hashed." }
         warnings: { type: array, items: { type: string }, description: "Accepted but worth seeing. Not hashed." }
+        additionalAnnotations:
+          type: object
+          additionalProperties: { type: string }
+          description: |
+            The `PlanRequest.additionalAnnotations` this plan carries, written
+            as is onto the helm plan ConfigMap and the LLMService. Not hashed:
+            two plans that differ only here render the same thing. Omitted when
+            empty.
         hash: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
 
     DiffResult:
@@ -2175,6 +2218,7 @@ components:
         version: { type: string }
         phase: { type: string, description: "swiss's apply phase: applying, applied, failed, uninstalling (or the operator's). uninstalling is also set on an LLMService while metadata.deletionTimestamp is set or status.phase is Deleting." }
         drift: { type: string, description: "What a person should look at. An uninstall in progress names the operator's stage when there is one." }
+        editedInPlace: { type: boolean, description: "The live LLMService spec was edited outside swiss: its plan-hash annotation does not match." }
         deletion:
           $ref: "#/components/schemas/LLMDeletion"
         route: { type: string }
@@ -2244,6 +2288,8 @@ components:
         authPrefix: { type: string, description: "Prefix before the key, e.g. `Bearer `; may be empty." }
         warning: { type: string }
         drift: { type: string, description: "The catalog republished this version and variant under another digest." }
+        external: { type: boolean, description: "An LLMService swiss did not write." }
+        editedInPlace: { type: boolean, description: "The live LLMService spec was edited outside swiss: its plan-hash annotation does not match." }
         planStatus:
           type: object
           description: |

@@ -76,9 +76,10 @@ type Profile struct {
 	// and composes above the catalog.
 	Defaults Defaults `yaml:"defaults,omitempty" json:"defaults"`
 
-	// Inputs answer a variant's inputs by key, only for a variant that declares
-	// the key -- unlike extra. Strings take pathTemplate's placeholders.
-	Inputs map[string]any `yaml:"inputs,omitempty" json:"inputs,omitempty"`
+	// Inputs are answers the web uses for catalog inputs. swiss serves the list
+	// on the profile API and does not apply it when composing. Strings may use
+	// pathTemplate's placeholders; the web fills them.
+	Inputs []Input `yaml:"inputs,omitempty" json:"inputs,omitempty"`
 
 	// Presets are named values a deploy may pick one of. The console merges the
 	// picked one into the form layer; swissd composes nothing from them.
@@ -96,6 +97,13 @@ type Profile struct {
 	Sites []Site `yaml:"sites,omitempty" json:"sites,omitempty"`
 
 	Extra values.Tree `yaml:"extra,omitempty" json:"extra,omitempty"`
+}
+
+// Input is one site answer, keyed by a catalog input's key. A list entry rather
+// than a map key, so a key such as volumes.[name=x].path is a plain string.
+type Input struct {
+	Key   string `yaml:"key" json:"key"`
+	Value any    `yaml:"value" json:"value"`
 }
 
 type Preset struct {
@@ -213,23 +221,6 @@ func (f FeatureDefaults) Resolve() map[string]bool {
 		"sloRequirement": on(f.SLORequirement),
 		"scaler":         on(f.Scaler),
 	}
-}
-
-// InputAnswer is the site's answer to an input, placeholders filled for this model.
-func (p Profile) InputAnswer(key, hf, model string) (answer any, ok bool, err error) {
-	v, ok := p.Inputs[key]
-	if !ok {
-		return nil, false, nil
-	}
-	s, isString := v.(string)
-	if !isString {
-		return v, true, nil
-	}
-	out, err := fill(s, hf, model)
-	if err != nil {
-		return nil, true, fmt.Errorf("inputs[%q]: %w", key, err)
-	}
-	return out, true, nil
 }
 
 // DefaultSLOAddress is the in-cluster SLO API when the profile names none.
@@ -533,6 +524,17 @@ func Parse(raw []byte, origin string) (*Profile, error) {
 		if !strings.HasPrefix(s.URL, "http://") && !strings.HasPrefix(s.URL, "https://") {
 			return nil, fmt.Errorf("%s: sites[%d] url %q must start with http:// or https://", origin, i, s.URL)
 		}
+	}
+	// A list does not catch a key written twice the way a YAML map does.
+	seen := map[string]bool{}
+	for i, in := range p.Inputs {
+		switch {
+		case in.Key == "":
+			return nil, fmt.Errorf("%s: inputs[%d]: key is required", origin, i)
+		case seen[in.Key]:
+			return nil, fmt.Errorf("%s: inputs[%d]: key %q is listed twice", origin, i, in.Key)
+		}
+		seen[in.Key] = true
 	}
 	if err := p.Nodes.checkGPUs(); err != nil {
 		return nil, fmt.Errorf("%s: %w", origin, err)

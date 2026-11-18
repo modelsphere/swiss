@@ -642,6 +642,7 @@ type uninstallCluster struct {
 type cmRec struct {
 	data   map[string]string
 	labels map[string]string
+	anns   map[string]string
 }
 
 type podFix struct {
@@ -704,7 +705,7 @@ func newUninstallCluster(t *testing.T, cs *uninstallCase) *uninstallCluster {
 	}
 	files[statusFile] = string(raw)
 	ctx := context.Background()
-	if err := c.PutConfigMap(ctx, planRef(cs.Namespace, cs.Release), files, nil); err != nil {
+	if err := c.PutConfigMap(ctx, planRef(cs.Namespace, cs.Release), files, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	c.helm[cs.Namespace+"/"+cs.Release] = &helmRec{revision: 4, status: "deployed", chart: cs.Chart + "-0.7.1"}
@@ -816,7 +817,7 @@ func (c *uninstallCluster) ConfigMap(_ context.Context, ref string) (map[string]
 	return nil, apierrors.NewNotFound(schema.GroupResource{Resource: "configmaps"}, name)
 }
 
-func (c *uninstallCluster) PutConfigMap(_ context.Context, ref string, data, labels map[string]string) error {
+func (c *uninstallCluster) PutConfigMap(_ context.Context, ref string, data, labels, anns map[string]string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	labs := map[string]string{"app.kubernetes.io/managed-by": "swiss"}
@@ -828,8 +829,49 @@ func (c *uninstallCluster) PutConfigMap(_ context.Context, ref string, data, lab
 	if c.cms == nil {
 		c.cms = map[string]*cmRec{}
 	}
-	c.cms[ref] = &cmRec{data: maps.Clone(data), labels: labs}
+	rec := &cmRec{data: maps.Clone(data), labels: labs}
+	if len(anns) > 0 {
+		rec.anns = maps.Clone(anns)
+	}
+	c.cms[ref] = rec
 	return nil
+}
+
+func TestUninstallRewriteKeepsAdditionalAnnotations(t *testing.T) {
+	const raw = `[{ "key" : "k", "value" : "v" }]`
+	c := &uninstallCluster{Fake: fakeProbe()}
+	p := &plan.Plan{
+		APIVersion:            plan.APIVersion,
+		Release:               plan.Release{Name: "r", Namespace: "models"},
+		Source:                plan.SourceRef{Model: "qwen3.6-35b-a3b", Variant: "sglang-tp2-h100"},
+		Chart:                 plan.ChartRef{Name: "sglang", Version: "0.7.1"},
+		AdditionalAnnotations: map[string]string{llmsvc.AnnInputs: raw},
+	}
+	if err := p.ComputeHash(); err != nil {
+		t.Fatal(err)
+	}
+	files, err := p.Files("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := yaml.Marshal(planStatus{Phase: phaseApplied, Action: "install", Revision: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	files[statusFile] = string(status)
+	ref := planRef("models", "r")
+	ctx := context.Background()
+	if err := c.PutConfigMap(ctx, ref, files, nil, map[string]string{llmsvc.AnnInputs: raw}); err != nil {
+		t.Fatal(err)
+	}
+	s := New(testConfig("prod"), c, discardLogger(), "test")
+	s.SetWriter(c)
+	if _, err := s.markUninstalling(ctx, "models", "r"); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.cms[ref].anns[llmsvc.AnnInputs]; got != raw {
+		t.Fatalf("uninstall rewrite lost the annotation: %q", got)
+	}
 }
 
 func (c *uninstallCluster) DeleteConfigMap(_ context.Context, ref string) error {
@@ -1033,8 +1075,8 @@ type llmMirrorWriter struct {
 	labels map[string]map[string]string
 }
 
-func (m *llmMirrorWriter) PutConfigMap(ctx context.Context, ref string, data, labels map[string]string) error {
-	if err := m.fakeWriter.PutConfigMap(ctx, ref, data, labels); err != nil {
+func (m *llmMirrorWriter) PutConfigMap(ctx context.Context, ref string, data, labels, anns map[string]string) error {
+	if err := m.fakeWriter.PutConfigMap(ctx, ref, data, labels, anns); err != nil {
 		return err
 	}
 	if m.probe.Maps == nil {

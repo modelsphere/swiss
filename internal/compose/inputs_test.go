@@ -1,10 +1,10 @@
 package compose
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/modelsphere/swiss/internal/catalog"
+	"github.com/modelsphere/swiss/internal/site"
 	"github.com/modelsphere/swiss/internal/values"
 )
 
@@ -22,158 +22,92 @@ func inputsInput() Input {
 	return in
 }
 
-// Level one: the site answers, in the derived layer, beside the variant's own
-// values under the same section.
-func TestTheSiteAnswersAnInputInTheDerivedLayer(t *testing.T) {
+// Compose does not answer inputs and does not refuse one nobody answered.
+func TestComposeSucceedsWhenAnInputIsUnanswered(t *testing.T) {
+	p, err := Compose(inputsInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := values.Get(p.Values(), masterKey); ok {
+		t.Error("an unanswered input was written into the composed values")
+	}
+}
+
+// Site profile inputs and an input default are the web's to apply.
+func TestComposeDoesNotApplySiteInputsOrTheDefault(t *testing.T) {
 	in := inputsInput()
-	in.Profile.Inputs = map[string]any{masterKey: "mc-{{model}}.svc:50051"}
+	in.Resolved.Variant.Inputs[0].Default = "tuned.svc:50051"
+	in.Profile.Inputs = []site.Input{{Key: masterKey, Value: "mc-{{model}}.svc:50051"}}
 	p, err := Compose(in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := values.Get(p.Values(), masterKey); got != "mc-glm-5.3.svc:50051" {
-		t.Errorf("%s = %v", masterKey, got)
-	}
-	if got := p.LayerOf(masterKey); got != values.LayerDerived {
-		t.Errorf("answered by %s, want derived", got)
+	if got, ok := values.Get(p.Values(), masterKey); ok {
+		t.Errorf("%s = %v, written from the site profile or the default", masterKey, got)
 	}
 	if got, _ := values.Get(p.Values(), "storageKVOffload.mooncake.protocol"); got != "rdma" {
 		t.Errorf("the variant's own mooncake values were lost: protocol = %v", got)
 	}
 }
 
-// Level two: the deployer overrides any answer, and needs no site answer to.
-func TestTheDeployOverridesTheSitesAnswer(t *testing.T) {
-	for name, site := range map[string]map[string]any{
-		"over the site's answer": {masterKey: "site.svc:50051"},
-		"with no site answer":    nil,
-	} {
-		in := inputsInput()
-		in.Profile.Inputs = site
-		in.Overrides = values.Tree{"storageKVOffload": map[string]any{"mooncake": map[string]any{"master": "mine.svc:50051"}}}
-		p, err := Compose(in)
-		if err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-		if got, _ := values.Get(p.Values(), masterKey); got != "mine.svc:50051" || p.LayerOf(masterKey) != values.LayerForm {
-			t.Errorf("%s: %s = %v from %s, want the deploy's", name, masterKey, got, p.LayerOf(masterKey))
-		}
-	}
-}
-
-func TestAnUnansweredInputRefusesThePlan(t *testing.T) {
+// A form override of a dotted input key still lands in the form layer.
+func TestAFormOverrideOfAnInputKeyLandsInTheFormLayer(t *testing.T) {
 	in := inputsInput()
-	_, err := Compose(in)
-	if err == nil || !strings.Contains(err.Error(), "input storageKVOffload.mooncake.master (Mooncake master) is not set") {
-		t.Fatalf("want a refusal naming the input, got %v", err)
-	}
-	// "" is checked like any answer, and fails the pattern.
-	in.Overrides = values.Tree{"storageKVOffload": map[string]any{"mooncake": map[string]any{"master": ""}}}
-	if _, err := Compose(in); err == nil || !strings.Contains(err.Error(), `"" does not match`) {
-		t.Fatalf("an empty answer was taken: %v", err)
-	}
-}
-
-func withDefault(in Input, def any) Input {
-	in.Resolved.Variant.Inputs[0].Default = def
-	return in
-}
-
-// The input's default answers it in the derived layer when the site does not;
-// the deploy's answer beats both.
-func TestTheVariantsDefaultIsTheLowestAnswer(t *testing.T) {
-	for name, c := range map[string]struct {
-		site, form map[string]any
-		want       string
-		layer      string
-	}{
-		"the default alone":       {want: "tuned.svc:50051", layer: values.LayerDerived},
-		"the site over it":        {site: map[string]any{masterKey: "site.svc:50051"}, want: "site.svc:50051", layer: values.LayerDerived},
-		"the deploy over the two": {site: map[string]any{masterKey: "site.svc:50051"}, form: map[string]any{"master": "mine.svc:50051"}, want: "mine.svc:50051", layer: values.LayerForm},
-	} {
-		in := withDefault(inputsInput(), "tuned.svc:50051")
-		in.Profile.Inputs = c.site
-		if c.form != nil {
-			in.Overrides = values.Tree{"storageKVOffload": map[string]any{"mooncake": c.form}}
-		}
-		p, err := Compose(in)
-		if err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-		if got, _ := values.Get(p.Values(), masterKey); got != c.want || p.LayerOf(masterKey) != c.layer {
-			t.Errorf("%s: %s = %v from %s, want %s from %s", name, masterKey, got, p.LayerOf(masterKey), c.want, c.layer)
-		}
-	}
-}
-
-// A value the variant's values give the key stands when nobody answers, and
-// any answer overrides it.
-func TestTheVariantsValueIsTheBaseAnAnswerOverrides(t *testing.T) {
-	for name, c := range map[string]struct {
-		site  map[string]any
-		def   any
-		want  string
-		layer string
-	}{
-		"nobody answers":      {want: "mooncake-master.example:50051", layer: values.LayerCatalog},
-		"the site answers":    {site: map[string]any{masterKey: "site.svc:50051"}, want: "site.svc:50051", layer: values.LayerDerived},
-		"the default answers": {def: "tuned.svc:50051", want: "tuned.svc:50051", layer: values.LayerDerived},
-	} {
-		in := inputsInput()
-		in.Resolved.Variant.Values["storageKVOffload"].(map[string]any)["mooncake"].(map[string]any)["master"] = "mooncake-master.example:50051"
-		in.Resolved.Variant.Inputs[0].Default = c.def
-		in.Profile.Inputs = c.site
-		p, err := Compose(in)
-		if err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-		if got, _ := values.Get(p.Values(), masterKey); got != c.want || p.LayerOf(masterKey) != c.layer {
-			t.Errorf("%s: %s = %v from %s, want %s from %s", name, masterKey, got, p.LayerOf(masterKey), c.want, c.layer)
-		}
-	}
-}
-
-// extra sets the key too: extra wins, and the input answer does nothing.
-func TestExtraOverridesTheSitesInputAnswer(t *testing.T) {
-	in := inputsInput()
-	in.Profile.Inputs = map[string]any{masterKey: "site.svc:50051"}
-	in.Profile.Extra = values.Tree{"storageKVOffload": map[string]any{"mooncake": map[string]any{"master": "extra.svc:50051"}}}
+	in.Overrides = values.Tree{"storageKVOffload": map[string]any{"mooncake": map[string]any{"master": "mine.svc:50051"}}}
 	p, err := Compose(in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := values.Get(p.Values(), masterKey); got != "extra.svc:50051" || p.LayerOf(masterKey) != values.LayerSite {
-		t.Errorf("%s = %v from %s, want extra's", masterKey, got, p.LayerOf(masterKey))
+	if got, _ := values.Get(p.Values(), masterKey); got != "mine.svc:50051" || p.LayerOf(masterKey) != values.LayerForm {
+		t.Errorf("%s = %v from %s, want the form's", masterKey, got, p.LayerOf(masterKey))
 	}
 }
 
-// The profile takes inputs as written; compose refuses one it cannot fill.
-func TestASiteAnswerWithAnUnknownPlaceholderRefusesThePlan(t *testing.T) {
+// A value the variant already gives the key stands in the catalog layer.
+func TestAVariantValueForAnInputKeyStands(t *testing.T) {
 	in := inputsInput()
-	in.Profile.Inputs = map[string]any{masterKey: "{{release}}.svc:50051"}
-	if _, err := Compose(in); err == nil || !strings.Contains(err.Error(), "unknown placeholder") {
-		t.Fatalf("want a refusal naming the placeholder, got %v", err)
+	in.Resolved.Variant.Values["storageKVOffload"].(map[string]any)["mooncake"].(map[string]any)["master"] = "mooncake-master.example:50051"
+	in.Resolved.Variant.Inputs[0].Default = "tuned.svc:50051"
+	in.Profile.Inputs = []site.Input{{Key: masterKey, Value: "site.svc:50051"}}
+	p, err := Compose(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := values.Get(p.Values(), masterKey); got != "mooncake-master.example:50051" || p.LayerOf(masterKey) != values.LayerCatalog {
+		t.Errorf("%s = %v from %s, want the catalog's", masterKey, got, p.LayerOf(masterKey))
 	}
 }
 
-func TestAnAnswerTheInputDoesNotTakeRefusesThePlan(t *testing.T) {
-	in := inputsInput()
-	in.Profile.Inputs = map[string]any{masterKey: "no-port"}
-	if _, err := Compose(in); err == nil || !strings.Contains(err.Error(), `"no-port" does not match`) {
-		t.Fatalf("want a refusal quoting the answer, got %v", err)
+// Compose does not record annotations. The client supplies those, including
+// when the variant declares inputs.
+func TestComposeLeavesAdditionalAnnotationsEmpty(t *testing.T) {
+	plain, err := Compose(testInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.AdditionalAnnotations != nil {
+		t.Fatalf("compose recorded annotations: %v", plain.AdditionalAnnotations)
+	}
+
+	p, err := Compose(inputsInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.AdditionalAnnotations != nil {
+		t.Fatalf("compose recorded annotations for a variant with inputs: %v", p.AdditionalAnnotations)
 	}
 }
 
-// An answer reaches only a variant that declares its key: unlike extra, a
-// site answer never lands in a deploy that did not ask.
-func TestASiteAnswerReachesOnlyAVariantThatDeclaresIt(t *testing.T) {
+// Profile inputs never land in composed values, including when the variant
+// does not declare the key.
+func TestSiteInputsDoNothingWhenTheVariantDoesNotDeclareTheKey(t *testing.T) {
 	in := testInput()
-	in.Profile.Inputs = map[string]any{masterKey: "site.svc:50051"}
+	in.Profile.Inputs = []site.Input{{Key: masterKey, Value: "site.svc:50051"}}
 	p, err := Compose(in)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := values.Get(p.Values(), masterKey); ok {
-		t.Error("a site answer landed in a variant that declares no input")
+		t.Error("a site input landed in a variant that does not declare it")
 	}
 }

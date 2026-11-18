@@ -172,6 +172,19 @@ flowchart TD
 - Tolerations are not derived here.
 - Extra node affinity from the deploy request, beyond the product pin, is future work.
 
+## Catalog
+
+Catalog files (`index.json`, a v1 entry, `index-v2.json`, a v2 variant file, `history.json`) may be published for a newer swissd.
+
+- Unknown fields are ignored, and the file still loads. Deploy uses only the fields this swissd knows.
+- The values tree stays strict, with the structural rules: chart, requires, `lws.size` against `requires.nodes`, ids, defaults. A failure there refuses that entry or variant.
+- The digest is sha256 of the full raw bytes, including ignored fields. A mismatch refuses the file.
+- An input this swissd cannot use is dropped, with a warning. The rest of the variant loads. The API and a deploy see only the inputs that remain.
+
+An input is dropped when its key is empty or `model.localPath` (swiss answers that from the site profile), it repeats a key already kept, its title is empty, its type is not string, integer or boolean, its pattern is on a non-string or does not compile, or its example or default is missing or does not match.
+
+Site profiles, swissd config and API request bodies are parsed strictly. This rule is for catalog files.
+
 ## Pipeline
 
 ```
@@ -182,6 +195,12 @@ form / flags  ─┘             (hash)     ↓
 ```
 
 `applyWith` on the site profile picks the backend for a new install: `helm` (default) or `llmsvc` (LLMService). A release already in the cluster stays on the backend that owns it.
+
+An LLMService swiss wrote carries `swiss.modelsphere.dev/plan-hash`. The live spec is the plan swiss reads:
+
+- A `kubectl edit` leaves that annotation behind. Reads recompute the hash over the live spec and set `editedInPlace` on the deployment row and on status. It is not drift.
+- An upgrade without overrides keeps the form and edit layers. With overrides, the request overrides are the form layer as-is (no merge), the edit layer is the request's edits, and serviceId comes from the deployed plan. Catalog, site, derived and autoscale layers are recomposed, so an edit there is overwritten.
+- Rollback reads the ControllerRevision first and does not check the hash, so a revision that ran edited is accepted. The plan Secret fallback still checks the hash and refuses a mismatch.
 
 | endpoint | |
 | --- | --- |

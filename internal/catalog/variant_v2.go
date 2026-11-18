@@ -31,12 +31,12 @@ type VariantV2 struct {
 	Replaces string `yaml:"replaces,omitempty" json:"replaces,omitempty"`
 }
 
-// ParseVariantV2 decodes a v2 variant file. KnownFields stays strict, as for a
-// v1 entry: a typo in values or requires must not silently drop.
+// ParseVariantV2 decodes a v2 variant file. Unknown fields are ignored so a
+// catalog for a newer swissd still loads. Only the values tree is checked
+// strictly; the digest covers the full raw bytes.
 func ParseVariantV2(raw []byte) (*VariantV2, error) {
 	var d VariantV2
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
-	dec.KnownFields(true)
 	if err := dec.Decode(&d); err != nil {
 		return nil, err
 	}

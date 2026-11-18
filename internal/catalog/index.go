@@ -94,7 +94,8 @@ type IndexVariant struct {
 func parseIndex(b []byte) (*Index, error) {
 	var idx Index
 	dec := json.NewDecoder(bytes.NewReader(b))
-	dec.DisallowUnknownFields()
+	// Unknown fields are ignored so a catalog for a newer swissd still loads.
+	// The digest covers the full raw bytes.
 	if err := dec.Decode(&idx); err != nil {
 		return nil, fmt.Errorf("index.json: %w", err)
 	}

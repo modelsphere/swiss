@@ -65,6 +65,9 @@ func TestRoundTripKeepsThePlanHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if EditedInPlace(u, back) {
+		t.Fatal("an unedited swiss object reports edited")
+	}
 	if strings.Contains(back.Helmfile, "createNamespace: true") {
 		t.Fatalf("createNamespace survived in the helmfile:\n%s", back.Helmfile)
 	}
@@ -164,6 +167,47 @@ func TestChartPathPlanIsRefused(t *testing.T) {
 	}
 }
 
+func TestAdditionalAnnotationsRoundTripAndAreNotTheHash(t *testing.T) {
+	p := realistic(t)
+	u, err := FromPlan(p, "install", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := u.GetAnnotations()[AnnInputs]; ok {
+		t.Fatal("a plan with no additional annotations must not carry inputs")
+	}
+
+	const raw = `[{ "key" : "a", "value" : 1 }]`
+	p.AdditionalAnnotations = map[string]string{AnnInputs: raw}
+	hash := p.Hash
+	if err := p.ComputeHash(); err != nil {
+		t.Fatal(err)
+	}
+	if p.Hash != hash {
+		t.Fatal("additional annotations must not change the plan hash")
+	}
+	u, err = FromPlan(p, "upgrade", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := u.GetAnnotations()[AnnInputs]; got != raw {
+		t.Fatalf("annotation %s", got)
+	}
+	ann := u.GetAnnotations()
+	ann["hand.example/note"] = "added by hand"
+	u.SetAnnotations(ann)
+	back, err := ToPlan(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if EditedInPlace(u, back) {
+		t.Fatal("additional annotations must not count as an edit")
+	}
+	if !reflect.DeepEqual(back.AdditionalAnnotations, map[string]string{AnnInputs: raw}) {
+		t.Fatalf("read back %v", back.AdditionalAnnotations)
+	}
+}
+
 func TestAnnotationsAreExact(t *testing.T) {
 	p := realistic(t)
 	u, err := FromPlan(p, "upgrade", "bump to 1.1.0")
@@ -254,20 +298,6 @@ func TestCatalogSchemaAnnotation(t *testing.T) {
 	}
 }
 
-func TestTamperedPlanHashIsRefused(t *testing.T) {
-	p := realistic(t)
-	u, err := FromPlan(p, "upgrade", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	ann := u.GetAnnotations()
-	ann["swiss.modelsphere.dev/plan-hash"] = "sha256:tampered"
-	u.SetAnnotations(ann)
-	if _, err := ToPlan(u); err == nil {
-		t.Fatal("a plan-hash that does not match the spec must be refused")
-	}
-}
-
 func TestExternalLLMServiceMaps(t *testing.T) {
 	u := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "serving.modelsphere.dev/v1alpha1",
@@ -295,6 +325,9 @@ func TestExternalLLMServiceMaps(t *testing.T) {
 	p, err := ToPlan(u)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if EditedInPlace(u, p) {
+		t.Fatal("an external object reports edited")
 	}
 	if p.Hash == "" {
 		t.Fatal("external object has no computed hash")
