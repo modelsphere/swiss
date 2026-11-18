@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/modelsphere/swiss/internal/catalog"
 	"github.com/modelsphere/swiss/internal/cluster"
 	"github.com/modelsphere/swiss/internal/values"
 )
@@ -266,5 +267,29 @@ func TestStatusCarriesTheGatewayURL(t *testing.T) {
 	}
 	if body["url"] != "https://llm.example.com/r" {
 		t.Errorf("url = %v, want the gateway and the route", body["url"])
+	}
+}
+
+// A video release serves a job API: the chat check refuses it instead of
+// reporting a 404 from the router as a model that cannot generate.
+func TestChatRefusesAVideoRelease(t *testing.T) {
+	p, _ := livePlan(t, planRequest{Model: "glm5.1", Release: "r", ServiceID: "r"})
+	p.Engine = catalog.EngineVideo
+	doc, err := p.Files("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe := liveProbe()
+	probe.Rel = append(probe.Rel, cluster.Release{
+		Name: "r", Namespace: "models", Status: "deployed", Revision: 1, SwissFiles: doc,
+	})
+	srv, _ := deployServerWith(t, probe, true)
+
+	code, out := post(t, srv, "/api/releases/models/r/chat", map[string]any{})
+	if code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d %v", code, out)
+	}
+	if msg, _ := out["error"].(string); !strings.Contains(msg, "readiness probe") {
+		t.Errorf("the refusal should point at the readiness probe: %q", msg)
 	}
 }

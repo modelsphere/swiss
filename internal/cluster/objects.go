@@ -38,6 +38,7 @@ var WatchedKinds = map[string]string{
 	"ModelRoute":        "modelroutes",
 	"LLMScaler":         "llmscalers",
 	"LLMSLORequirement": "llmslorequirements",
+	"JobSLORequirement": "jobslorequirements",
 }
 
 // manifestObjects lists the watched objects in a rendered helm manifest. A

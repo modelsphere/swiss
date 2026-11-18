@@ -176,4 +176,9 @@ func TestDeploymentsCarryTheRoute(t *testing.T) {
 	if routed == nil || routed["route"] != "glm-53" {
 		t.Fatalf("the row must carry the route: %v", routed)
 	}
+	// The engine rides along, so a list can tell a video release from an LLM
+	// one without opening each plan.
+	if routed["engine"] == nil || routed["engine"] == "" {
+		t.Errorf("the row must carry the plan's engine: %v", routed)
+	}
 }

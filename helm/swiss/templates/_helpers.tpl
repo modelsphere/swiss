@@ -66,11 +66,11 @@ the RBAC that reads it cannot disagree.
 {{- end -}}
 {{- end -}}
 
-{{/* Exactly what the sglang and vllm charts render, plus helm's release storage. */}}
+{{/* Exactly what the sglang, vllm and minimax-h3 charts render, plus helm's release storage. */}}
 {{- define "swiss.deployRules" -}}
 {{- $all := list "get" "list" "watch" "create" "update" "patch" "delete" }}
 - apiGroups: [""]
-  resources: ["secrets", "configmaps", "services", "serviceaccounts"]
+  resources: ["secrets", "configmaps", "services", "serviceaccounts", "persistentvolumeclaims"]
   verbs: {{ $all | toJson }}
 - apiGroups: ["apps"]
   resources: ["deployments"]
@@ -106,11 +106,22 @@ passes them on.
   resources: ["llmscalers"]
   verbs: {{ $all | toJson }}
 - apiGroups: ["inference.x-k8s.io", "inference.modelsphere.dev"]
-  resources: ["llmslorequirements"]
+  resources: ["llmslorequirements", "jobslorequirements"]
   verbs: {{ $all | toJson }}
 - apiGroups: ["routing.gpucluster.io", "routing.modelsphere.dev"]
   resources: ["modelroutes"]
   verbs: {{ $all | toJson }}
+{{- end -}}
+
+{{/*
+CloudNativePG databases a chart renders outside its release namespace:
+minimax-h3 gives each release its own Database on the shared cluster, in the
+cluster's namespace.
+*/}}
+{{- define "swiss.cnpgDatabaseRules" -}}
+- apiGroups: ["postgresql.cnpg.io"]
+  resources: ["databases"]
+  verbs: ["get","list","watch","create","update","patch","delete"]
 {{- end -}}
 
 {{/*
