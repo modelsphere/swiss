@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/modelsphere/swiss/internal/catalog"
 	"github.com/modelsphere/swiss/internal/site"
 )
 
@@ -54,8 +55,19 @@ func (s *Server) handleSLO(w http.ResponseWriter, r *http.Request) {
 	// slo-api addresses a requirement by spec.serviceId: the release name, or
 	// with ?serviceId= one of the release's own requirements -- a video release
 	// has one per pool.
+	//
+	// A video release's requirements are keyed by its pool Deployments, never
+	// by the release name, so for it the release-name default would address a
+	// requirement it does not own. It must name a pool, and the pool is always
+	// checked against the release's own, even when it equals the release name.
 	id := release
-	if want := r.URL.Query().Get("serviceId"); want != "" && want != release {
+	want := r.URL.Query().Get("serviceId")
+	video := s.isVideoRelease(ctx, ns, release)
+	if video && want == "" {
+		writeError(w, http.StatusBadRequest, "a video release has one SLO requirement per pool: name it with ?serviceId=<pool Deployment>")
+		return
+	}
+	if want != "" && (video || want != release) {
 		if err := s.ownSLO(ctx, ns, release, want); err != nil {
 			code := http.StatusBadGateway
 			if errors.Is(err, errNotOwnSLO) {
@@ -78,6 +90,18 @@ func (s *Server) handleSLO(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+// isVideoRelease reports whether swiss deployed this release as engine video.
+// A release with no plan beside it (not deployed by swiss) or one that cannot
+// be read is treated as an LLM release, which keeps the release-name default.
+func (s *Server) isVideoRelease(ctx context.Context, ns, release string) bool {
+	rel, err := s.releaseRecord(ctx, ns, release)
+	if err != nil || rel == nil {
+		return false
+	}
+	p, err := planOf(rel)
+	return err == nil && p.Engine == catalog.EngineVideo
 }
 
 // errNotOwnSLO is a serviceId none of the release's SLO requirements carries.

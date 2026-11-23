@@ -615,6 +615,9 @@ func (s *Server) entrypoint(ctx context.Context, p *plan.Plan, auth entrypointAu
 	}
 	route := routeOf(p)
 	if route == "" {
+		if p.Engine == catalog.EngineVideo && routingOn(p) {
+			return call{}, fmt.Errorf("this video release names no route (serviceId or modelRoute.nginx.route), so its chart publishes on a default of its own that swiss cannot address; upgrade it with a serviceId")
+		}
 		return call{}, fmt.Errorf("this release publishes no route")
 	}
 	port := prof.Route.NginxPort
@@ -801,8 +804,27 @@ func servedName(p *plan.Plan) string {
 // Compose writes every feature flag into the plan, so modelRoute.enabled is
 // always there to read: without this check a release with routing off still
 // reported a route, and the status page advertised a URL nothing serves.
+//
+// A video release whose values name no route (no serviceId, no
+// modelRoute.nginx.route) publishes on its chart's own default, which swiss
+// does not know: the release name would be a path the chart never serves, so
+// it reports none, as compose writes no modelRoute.url for it.
 func routeOf(p *plan.Plan) string {
-	return plan.RouteOf(p.Values(), p.Release.Name)
+	route, named := plan.NamedRouteOf(p.Values(), p.Release.Name)
+	if !named && p.Engine == catalog.EngineVideo {
+		return ""
+	}
+	return route
+}
+
+// routingOn reports whether the release's values leave routing on.
+func routingOn(p *plan.Plan) bool {
+	v, ok := values.Get(p.Values(), "modelRoute.enabled")
+	if !ok {
+		return true
+	}
+	on, _ := v.(bool)
+	return on
 }
 
 func httpGet(ctx context.Context, url string, hdr http.Header) ([]byte, int, error) {

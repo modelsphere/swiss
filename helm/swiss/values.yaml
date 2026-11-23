@@ -158,7 +158,10 @@ rbac:
   #   - {namespace: middleware, name: cnpg-rw}
   # Each listed namespace is also granted CloudNativePG Databases: minimax-h3
   # gives each release its own database on that cluster. (Cluster scope grants
-  # them everywhere.) Each namespace must exist when swiss is installed.
+  # them everywhere.) RBAC cannot scope create by name, so this covers every
+  # Database object in the namespace, not only swiss's: swissd could delete one
+  # it did not create (with reclaim policy retain the database itself stays).
+  # Each namespace must exist when swiss is installed.
   lookupSecrets: []
 
 serviceAccount:

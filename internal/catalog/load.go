@@ -370,7 +370,7 @@ func (v Variant) validate() error {
 			return fmt.Errorf("%s: engine video takes topology single-node, not %s -- requires describes one pod of the chart", where, t)
 		}
 		if v.Requires.NodesOrDefault() != 1 {
-			return fmt.Errorf("%s: engine video takes no requires.nodes -- requires describes one pod of the chart", where)
+			return fmt.Errorf("%s: engine video takes no requires.nodes other than 1 -- requires describes one pod of the chart", where)
 		}
 	default:
 		return fmt.Errorf("%s: engine %q is not sglang, vllm, mock or video", where, v.Engine)

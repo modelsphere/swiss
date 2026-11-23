@@ -1319,10 +1319,13 @@ paths:
         required: false
         description: |
           One of the release's own SLO requirements, by its spec.serviceId: a
-          video release has one JobSLORequirement per pool. Absent, or the
-          release name, is the release's own requirement. A serviceId none of
-          the release's requirements carries is a 404; a requirement that
-          cannot be read (RBAC, the API server) is a 502 with the cause.
+          video release has one JobSLORequirement per pool. For an LLM release,
+          absent or the release name is the release's own requirement. A video
+          release's requirements are keyed by its pools, so for it the parameter
+          is required (400 when absent) and always checked, the release name
+          included. A serviceId none of the release's requirements carries is a
+          404; a requirement that cannot be read (RBAC, the API server) is a 502
+          with the cause.
         schema: { type: string }
     get:
       tags: [slo]
