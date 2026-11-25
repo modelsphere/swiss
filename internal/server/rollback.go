@@ -178,7 +178,7 @@ func (s *Server) handleRevisionDiff(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	st, err := exec.Lookup(ctx, s.probe, ns, release)
+	st, err := s.liveRevision(ctx, ns, release)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return

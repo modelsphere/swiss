@@ -99,8 +99,10 @@ type applyRequest struct {
 	// ExpectRevision is the live helm revision the diff was computed against.
 	// It is the whole of the optimistic lock: the revision is helm's, held in
 	// the cluster, so two operators who diffed the same release cannot both
-	// apply. A version column in swissd's own database would have been a lock
-	// on a copy rather than on the thing being changed.
+	// apply. A failed latest attempt counts. status.helm lags that attempt and
+	// is not the lock while a helm secret exists. A version column in swissd's
+	// own database would have been a lock on a copy rather than on the thing
+	// being changed.
 	//
 	// Zero -- absent -- asserts nothing, which is what an apply that skipped the
 	// diff sends. The diff is optional, so the lock it carries is optional with
@@ -816,7 +818,7 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	st, err := exec.Lookup(ctx, s.probe, p.Release.Namespace, p.Release.Name)
+	st, err := s.liveRevision(ctx, p.Release.Namespace, p.Release.Name)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return

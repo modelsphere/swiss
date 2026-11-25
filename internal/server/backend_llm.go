@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/modelsphere/swiss/internal/catalog"
+	"github.com/modelsphere/swiss/internal/cluster"
 	"github.com/modelsphere/swiss/internal/exec"
 	"github.com/modelsphere/swiss/internal/llmsvc"
 	"github.com/modelsphere/swiss/internal/plan"
@@ -60,12 +61,19 @@ func (b llmBackend) Revisions(ctx context.Context, ns, release string) ([]revisi
 	}
 	var history []llmsvc.HistoryEntry
 	var helmRev int64
+	helmStatus := ""
 	if obj.Status != nil {
 		history = obj.Status.History
 		if obj.Status.Helm != nil {
 			helmRev = obj.Status.Helm.Revision
+			helmStatus = obj.Status.Helm.Status
 		}
 	}
+	looked, err := exec.Lookup(ctx, b.s.probe, ns, release)
+	if err != nil {
+		return nil, err
+	}
+	current := int64(liveHelm(looked, int(helmRev), helmStatus).Revision)
 
 	out := make([]revision, 0, len(history))
 	seen := map[int]bool{}
@@ -73,7 +81,7 @@ func (b llmBackend) Revisions(ctx context.Context, ns, release string) ([]revisi
 		row := revision{
 			Revision: int(h.Revision),
 			PlanHash: h.Hash,
-			Current:  h.Revision == helmRev,
+			Current:  h.Revision == current,
 		}
 		if h.ControllerRevision != "" {
 			crs, err := b.s.llms.ControllerRevisions(ctx, ns, []string{h.ControllerRevision})
@@ -100,7 +108,7 @@ func (b llmBackend) Revisions(ctx context.Context, ns, release string) ([]revisi
 		if seen[n] {
 			continue
 		}
-		row := revision{Revision: n, Current: int64(n) == helmRev}
+		row := revision{Revision: n, Current: int64(n) == current}
 		if data, err := b.s.probe.Secret(ctx, archiveRef(ns, release, n)); err == nil {
 			if sum, err := parsePlanSummary([]byte(data[plan.MetaFile])); err == nil {
 				row.Model, row.Version, row.Variant = sum.Model, sum.Version, sum.Variant
@@ -191,18 +199,33 @@ func (b llmBackend) Apply(ctx context.Context, p *plan.Plan, mode exec.Mode, o a
 		if err != nil {
 			return applyResult{}, failErr(http.StatusBadGateway, err)
 		}
-		phase, helmRev := "", 0
+		phase, helmRev, helmStatus := "", 0, ""
 		if obj.Status != nil {
 			phase = obj.Status.Phase
 			if obj.Status.Helm != nil {
 				helmRev = int(obj.Status.Helm.Revision)
+				helmStatus = obj.Status.Helm.Status
 			}
 		}
+		// Applying is the operator's own in-flight word. A pending helm status
+		// is checked after it, so this refusal stays the one a caller sees.
 		if phase == llmsvc.PhaseApplying {
 			return applyResult{}, fail(http.StatusConflict, "release %s is %s: wait for it, or `helm rollback` first", ref, phase)
 		}
 		failed = phase == llmsvc.PhaseFailed
-		if err := exec.CheckRevision(exec.State{Exists: true, Revision: helmRev}, o.ExpectRevision); err != nil {
+		looked, err := exec.Lookup(ctx, s.probe, p.Release.Namespace, p.Release.Name)
+		if err != nil {
+			return applyResult{}, failErr(http.StatusBadGateway, err)
+		}
+		live := liveHelm(looked, helmRev, helmStatus)
+		// The LLMService is the release. An empty helm record is not "no
+		// release": Check would send the caller to install.
+		if live.Exists {
+			if err := exec.Check(live, exec.Upgrade, p); err != nil {
+				return applyResult{}, failErr(http.StatusConflict, err)
+			}
+		}
+		if err := exec.CheckRevision(live, o.ExpectRevision); err != nil {
 			return applyResult{}, failErr(http.StatusConflict, err)
 		}
 	}
@@ -582,6 +605,51 @@ func planFromRevision(ns, release string, cr *appsv1.ControllerRevision) (*plan.
 		return nil, err
 	}
 	return llmsvc.ToPlan(u)
+}
+
+// liveHelm is the revision an upgrade locks. A helm secret is that revision,
+// including a failed attempt. status.helm is written on success and lags one,
+// so it counts only when helm has no secret.
+func liveHelm(st exec.State, helmRev int, helmStatus string) exec.State {
+	if st.Exists {
+		return st
+	}
+	if helmRev > 0 || helmStatus != "" {
+		return exec.State{Exists: true, Revision: helmRev, Status: helmStatus}
+	}
+	return exec.State{}
+}
+
+func releaseState(rel *cluster.Release) exec.State {
+	if rel == nil || rel.Revision == 0 && rel.Status == "" {
+		return exec.State{}
+	}
+	return exec.State{Exists: true, Status: rel.Status, Revision: rel.Revision}
+}
+
+// liveRevision is what expectRevision locks: liveHelm for callers that have
+// not already read the LLMService.
+func (s *Server) liveRevision(ctx context.Context, ns, name string) (exec.State, error) {
+	st, err := exec.Lookup(ctx, s.probe, ns, name)
+	if err != nil || st.Exists || s.llms == nil || !s.llmsvcAccess(ctx).visible() {
+		return st, err
+	}
+	u, err := s.llms.Get(ctx, ns, name)
+	switch {
+	case err == nil:
+	case apierrors.IsNotFound(err):
+		return st, nil
+	case apierrors.IsForbidden(err):
+		s.noteLLMSVCForbidden()
+		return st, nil
+	default:
+		return exec.State{}, err
+	}
+	obj, derr := llmsvc.FromUnstructured(u)
+	if derr != nil || obj.Status == nil || obj.Status.Helm == nil {
+		return st, nil
+	}
+	return liveHelm(st, int(obj.Status.Helm.Revision), obj.Status.Helm.Status), nil
 }
 
 func chartLabel(name, version string) string {
