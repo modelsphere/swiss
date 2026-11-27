@@ -151,12 +151,18 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		if decoded, err := llmsvc.FromUnstructured(u); err == nil {
 			obj = decoded
 			out.Exists = true
+			helmRev, helmStatus := 0, ""
 			if obj.Status != nil {
 				out.Service = llmStatusFrom(obj.Status)
 				if obj.Status.Helm != nil {
-					out.Revision = int(obj.Status.Helm.Revision)
-					out.HelmStatus = obj.Status.Helm.Status
+					helmRev = int(obj.Status.Helm.Revision)
+					helmStatus = obj.Status.Helm.Status
 				}
+			}
+			live := liveHelm(releaseState(rel), helmRev, helmStatus)
+			if live.Exists {
+				out.Revision = live.Revision
+				out.HelmStatus = live.Status
 			}
 		} else {
 			out.Exists = true

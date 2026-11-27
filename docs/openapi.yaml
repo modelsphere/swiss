@@ -2114,7 +2114,7 @@ components:
         planHash: { type: string }
         changed: { type: boolean, description: "False means nothing would change; applying would write an empty revision." }
         output: { type: string, description: "helmfile diff output." }
-        revision: { type: integer, description: "The live revision; send as `expectRevision`. 0 when the release does not exist." }
+        revision: { type: integer, description: "The live helm revision, including a failed latest attempt; send as `expectRevision`. An LLMService with no helm secret uses `status.helm.revision`. 0 when the release does not exist." }
         exists: { type: boolean, description: "False means install, true means apply." }
 
     ApplyRequest:
@@ -2122,7 +2122,7 @@ components:
       required: [planHash]
       properties:
         planHash: { type: string, description: "A plan stored by `POST /api/plans`." }
-        expectRevision: { type: integer, description: "The live revision the diff saw. Omitted asserts nothing." }
+        expectRevision: { type: integer, description: "The live revision the diff saw, including a failed latest helm attempt. Omitted asserts nothing." }
         note: { type: string, description: "Why; recorded in the log and beside the release." }
         forceConflicts: { type: boolean, default: false, deprecated: true, description: "Use `applyFlags.forceConflicts`, which overrides this when sent." }
         applyFlags: { $ref: "#/components/schemas/ApplyFlags" }
@@ -2212,7 +2212,7 @@ components:
         chart: { type: string, description: "`name-version`." }
         engine: { type: string, description: "The catalog engine the release was composed for (`sglang`, `vllm`, `mock`, `video`); absent when swiss has no plan for it." }
         status: { type: string, description: "helm's status." }
-        revision: { type: integer, description: "helm's revision. Omitted when there is no revision." }
+        revision: { type: integer, description: "Helm's revision. On an LLMService row this is status.helm.revision, which lags a failed attempt; the apply lock is the release status revision." }
         updated: { type: string, format: date-time }
         model: { type: string }
         variant: { type: string }
@@ -2267,8 +2267,8 @@ components:
         release: { type: string }
         namespace: { type: string }
         exists: { type: boolean }
-        revision: { type: integer }
-        helmStatus: { type: string }
+        revision: { type: integer, description: "The live helm revision an upgrade locks, including a failed latest attempt. An LLMService with no helm secret uses status.helm.revision. planStatus.revision and llmservice.revision stay the operator's recorded status.helm, which lags a failure." }
+        helmStatus: { type: string, description: "Helm status of that revision (deployed, failed, pending-upgrade, and the rest). A failed latest attempt is failed here even when status.helm still says deployed." }
         pods:
           type: [array, "null"]
           items:
@@ -2305,7 +2305,7 @@ components:
           properties:
             phase: { type: string, enum: [applying, applied, failed, uninstalling] }
             action: { type: string }
-            revision: { type: integer }
+            revision: { type: integer, description: "On helm, the revision swiss recorded. On llmsvc, status.helm.revision as the operator wrote it, which lags a failed attempt. Not the apply lock." }
             startedAt: { type: string, format: date-time }
             updatedAt: { type: string, format: date-time }
             error: { type: string }
@@ -2320,7 +2320,7 @@ components:
             phase: { type: string, description: "uninstalling while metadata.deletionTimestamp is set or status.phase is Deleting; otherwise the operator's phase.", examples: [Applying, Applied, Failed, uninstalling] }
             operatorPhase: { type: string, description: "status.phase as the operator wrote it, including Deleting.", examples: [Applying, Applied, Failed, Deleting] }
             message: { type: string }
-            revision: { type: integer }
+            revision: { type: integer, description: "status.helm.revision as the operator recorded it. It lags a failed helm attempt. The apply lock is the release revision." }
             deletion:
               $ref: "#/components/schemas/LLMDeletion"
             conditions:
@@ -2366,7 +2366,7 @@ components:
         variant: { type: string }
         chart: { type: string }
         planHash: { type: string }
-        current: { type: boolean }
+        current: { type: boolean, description: "True when this row is the live helm revision, including a failed latest attempt the operator has not recorded. An LLMService with no helm secret uses status.helm." }
 
     EntrypointAuth:
       type: object

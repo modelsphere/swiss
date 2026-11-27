@@ -174,6 +174,22 @@ func TestReleaseTakesTheHighestRevision(t *testing.T) {
 	}
 }
 
+// A failed attempt is a newer secret beside the last deployed one. The live
+// revision is that attempt: an upgrade compares against it.
+func TestReleaseTakesANewerFailedRevision(t *testing.T) {
+	cs := fake.NewSimpleClientset(
+		helmSecret("models", "glm-53", 4, "deployed", "sglang", "0.7.1"),
+		helmSecret("models", "glm-53", 5, "failed", "sglang", "0.7.1"),
+	)
+	rel, err := NewKubeWithClient(cs).Release(context.Background(), "models", "glm-53")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rel == nil || rel.Revision != 5 || rel.Status != "failed" {
+		t.Fatalf("want the failed revision, got %+v", rel)
+	}
+}
+
 // A plan whose release is gone is an uninstall that did not finish cleaning up.
 // The row still belongs in the view -- that is how it gets noticed -- so this is
 // not an error.

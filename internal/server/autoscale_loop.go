@@ -241,12 +241,13 @@ func (s *Server) autoscaleLive(ctx context.Context, ns, release, backend string,
 			return live, 0, err
 		}
 		live.LLMGeneration = u.GetGeneration()
+		helmRev, helmStatus := 0, ""
 		if obj.Status != nil {
 			live.LLMPhase = obj.Status.Phase
 			live.LLMObservedGeneration = obj.Status.ObservedGeneration
 			if obj.Status.Helm != nil {
-				live.HelmStatus = obj.Status.Helm.Status
-				rev = int(obj.Status.Helm.Revision)
+				helmRev = int(obj.Status.Helm.Revision)
+				helmStatus = obj.Status.Helm.Status
 			}
 		}
 		// A deletionTimestamp or status.phase Deleting is the operator tearing
@@ -255,6 +256,13 @@ func (s *Server) autoscaleLive(ctx context.Context, ns, release, backend string,
 			live.LLMDeleting = true
 			return live, 0, nil
 		}
+		st, err := exec.Lookup(ctx, s.probe, ns, release)
+		if err != nil {
+			return live, 0, err
+		}
+		got := liveHelm(st, helmRev, helmStatus)
+		live.HelmStatus = got.Status
+		rev = got.Revision
 	}
 
 	name := fullnameOf(p, release)

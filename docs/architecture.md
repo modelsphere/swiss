@@ -196,6 +196,8 @@ form / flags  ─┘             (hash)     ↓
 
 `applyWith` on the site profile picks the backend for a new install: `helm` (default) or `llmsvc` (LLMService). A release already in the cluster stays on the backend that owns it.
 
+The revision in the lock is the highest helm secret, including a failed attempt. An LLMService records `status.helm` on success, so that field is the lock only when helm has no secret. `forceConflicts` takes fields another manager owns and does not skip a revision conflict or a pending apply.
+
 An LLMService swiss wrote carries `swiss.modelsphere.dev/plan-hash`. The live spec is the plan swiss reads:
 
 - A `kubectl edit` leaves that annotation behind. Reads recompute the hash over the live spec and set `editedInPlace` on the deployment row and on status. It is not drift.
