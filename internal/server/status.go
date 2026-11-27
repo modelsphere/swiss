@@ -389,7 +389,8 @@ func (s *Server) handleProbe(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusPreconditionFailed, err.Error())
 		return
 	}
-	url := ep.url("/v1/models")
+	video := p.Engine == catalog.EngineVideo
+	url := ep.url(probePath(p))
 
 	res := probeResult{
 		URL:         url,
@@ -406,11 +407,29 @@ func (s *Server) handleProbe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res.OK = code == http.StatusOK
+	if video {
+		if !res.OK {
+			res.Body = snippet(body)
+		}
+		writeJSON(w, http.StatusOK, res)
+		return
+	}
 	res.Models = modelIDs(body)
 	if !res.OK || len(res.Models) == 0 {
 		res.Body = snippet(body)
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// probePath is what the probe asks the entrypoint for. A video service has no
+// model list; its readiness check is the one call that crosses the whole path,
+// since the router hands /readyz to a job server, which answers 503 while its
+// database is down.
+func probePath(p *plan.Plan) string {
+	if p.Engine == catalog.EngineVideo {
+		return "/readyz"
+	}
+	return "/v1/models"
 }
 
 type chatRequest struct {
@@ -471,6 +490,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	p, err := s.currentPlan(ctx, ns, release)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	// A video release serves a job API: a chat call would fail and read as a
+	// broken model.
+	if p.Engine == catalog.EngineVideo {
+		writeError(w, http.StatusBadRequest, "video releases have no chat API; use the readiness probe")
 		return
 	}
 	ep, err := s.entrypoint(ctx, p, req.entrypointAuth)
@@ -590,6 +615,9 @@ func (s *Server) entrypoint(ctx context.Context, p *plan.Plan, auth entrypointAu
 	}
 	route := routeOf(p)
 	if route == "" {
+		if p.Engine == catalog.EngineVideo && routingOn(p) {
+			return call{}, fmt.Errorf("this video release names no route (serviceId or modelRoute.nginx.route), so its chart publishes on a default of its own that swiss cannot address; upgrade it with a serviceId")
+		}
 		return call{}, fmt.Errorf("this release publishes no route")
 	}
 	port := prof.Route.NginxPort
@@ -776,23 +804,27 @@ func servedName(p *plan.Plan) string {
 // Compose writes every feature flag into the plan, so modelRoute.enabled is
 // always there to read: without this check a release with routing off still
 // reported a route, and the status page advertised a URL nothing serves.
+//
+// A video release whose values name no route (no serviceId, no
+// modelRoute.nginx.route) publishes on its chart's own default, which swiss
+// does not know: the release name would be a path the chart never serves, so
+// it reports none, as compose writes no modelRoute.url for it.
 func routeOf(p *plan.Plan) string {
-	if v, ok := values.Get(p.Values(), "modelRoute.enabled"); ok {
-		if on, _ := v.(bool); !on {
-			return ""
-		}
+	route, named := plan.NamedRouteOf(p.Values(), p.Release.Name)
+	if !named && p.Engine == catalog.EngineVideo {
+		return ""
 	}
-	if v, ok := values.Get(p.Values(), "modelRoute.nginx.route"); ok {
-		if s, _ := v.(string); s != "" {
-			return s
-		}
+	return route
+}
+
+// routingOn reports whether the release's values leave routing on.
+func routingOn(p *plan.Plan) bool {
+	v, ok := values.Get(p.Values(), "modelRoute.enabled")
+	if !ok {
+		return true
 	}
-	if v, ok := values.Get(p.Values(), "serviceId"); ok {
-		if s, _ := v.(string); s != "" {
-			return s
-		}
-	}
-	return p.Release.Name
+	on, _ := v.(bool)
+	return on
 }
 
 func httpGet(ctx context.Context, url string, hdr http.Header) ([]byte, int, error) {

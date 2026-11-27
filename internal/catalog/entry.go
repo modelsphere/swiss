@@ -100,6 +100,22 @@ const VendorNvidia = "nvidia"
 // EngineMock is a stand-in server, such as mock-llmd, run on an engine's chart.
 const EngineMock = "mock"
 
+// EngineVideo is a video generation service on a chart of its own, such as
+// minimax-h3. It is a job API rather than an LLM: no served tokens, no compile
+// cache, and the chart, not swiss, knows how its pods are laid out.
+const EngineVideo = "video"
+
+// LLMCharts are the engine charts. A video variant brings its own chart, so it
+// may not name one of these.
+var LLMCharts = []string{"sglang", "vllm"}
+
+// IsVideo reports a variant that runs a video generation chart.
+func (v Variant) IsVideo() bool { return v.Engine == EngineVideo }
+
+// HasCompileCache reports a variant whose chart takes the LLM engines' compile
+// cache (cache: in its values). A video chart has none.
+func (v Variant) HasCompileCache() bool { return !v.IsVideo() }
+
 func (r Requires) VendorOrDefault() string {
 	if r.Vendor == "" {
 		return VendorNvidia

@@ -712,3 +712,103 @@ func TestAndTerms(t *testing.T) {
 		t.Errorf("the terms passed in were changed: %v", terms)
 	}
 }
+
+func videoInput() Input {
+	in := testInput()
+	in.Resolved.Model = "minimax-h3"
+	in.Resolved.Source = catalog.Source{HF: "MiniMaxAI/MiniMax-H3"}
+	in.Resolved.ServedName = "minimax-h3"
+	in.Resolved.Variant = catalog.Variant{
+		ID:       "h3-h100",
+		Engine:   catalog.EngineVideo,
+		Chart:    catalog.Chart{Name: "minimax-h3", Version: "0.3.0"},
+		Requires: catalog.Requires{GPUs: 4},
+	}
+	in.Release = "h3"
+	return in
+}
+
+// A video chart has no compile cache: a site with the cache on must not write
+// a cache section into it, while the identity fields still land where every
+// chart reads them.
+func TestVideoTakesNoCacheButKeepsTheModelFields(t *testing.T) {
+	p, err := Compose(videoInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := p.Values()["cache"]; ok {
+		t.Errorf("video plan carries a cache section: %v", p.Values()["cache"])
+	}
+	for path, want := range map[string]any{
+		"model.localPath": "/mnt/disk0/models/MiniMax-H3",
+		"model.gpus":      "4",
+		"model.name":      "minimax-h3",
+	} {
+		if got, _ := values.Get(p.Values(), path); got != want {
+			t.Errorf("%s = %v, want %v", path, got, want)
+		}
+	}
+	if _, ok := values.Get(p.Values(), "image.repository"); ok {
+		t.Error("a video variant names no image, so the plan must not write one")
+	}
+	if p.Engine != catalog.EngineVideo || p.Chart.Name != "minimax-h3" {
+		t.Errorf("plan engine/chart = %s/%s", p.Engine, p.Chart.Name)
+	}
+}
+
+func videoRouted() Input {
+	in := videoInput()
+	in.Profile.Route = site.Route{Enabled: true, Gateway: "https://gw.example/"}
+	in.Overrides = values.Tree{"serviceId": "h3"}
+	return in
+}
+
+// A video service hands out download links, so it is told the address the
+// status page shows for it: the site gateway plus its route.
+func TestVideoIsToldItsPublicURL(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(*Input)
+		want any
+	}{
+		{"serviceId names the route", func(*Input) {}, "https://gw.example/h3"},
+		{"an explicit route wins", func(in *Input) {
+			in.Overrides["modelRoute"] = values.Tree{"nginx": values.Tree{"route": "video"}}
+		}, "https://gw.example/video"},
+		{"no gateway, no url", func(in *Input) { in.Profile.Route.Gateway = "" }, nil},
+		{"no serviceId or route, no url", func(in *Input) { delete(in.Overrides, "serviceId") }, nil},
+		// RouteOf takes only a string, so a number names nothing and the URL
+		// would be the release name's, which the chart may not publish.
+		{"a non-string serviceId names no route", func(in *Input) { in.Overrides["serviceId"] = 123 }, nil},
+		{"routing off, no url", func(in *Input) { in.Overrides["modelRoute"] = values.Tree{"enabled": false} }, nil},
+		{"the form's url stands", func(in *Input) {
+			in.Overrides["modelRoute"] = values.Tree{"url": "https://cdn.example/h3"}
+		}, "https://cdn.example/h3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := videoRouted()
+			tc.edit(&in)
+			p, err := Compose(in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, _ := values.Get(p.Values(), "modelRoute.url")
+			if got != tc.want {
+				t.Fatalf("modelRoute.url = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// The LLM charts refuse a key their schema does not know.
+func TestLLMIsNotToldAPublicURL(t *testing.T) {
+	in := testInput()
+	in.Profile.Route = site.Route{Enabled: true, Gateway: "https://gw.example"}
+	p, err := Compose(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := values.Get(p.Values(), "modelRoute.url"); ok {
+		t.Fatalf("an LLM plan must carry no modelRoute.url, got %v", v)
+	}
+}

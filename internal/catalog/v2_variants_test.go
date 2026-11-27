@@ -253,7 +253,7 @@ variants:
 	if r, err := vc.Resolve(context.Background(), "m", "b", ""); err != nil || r.Variant.ID != "b" {
 		t.Fatalf("v2 sibling = %+v, %v", r, err)
 	}
-	if _, err := vc.Resolve(context.Background(), "m", "a", ""); err == nil || !strings.Contains(err.Error(), "is not sglang, vllm or mock") {
+	if _, err := vc.Resolve(context.Background(), "m", "a", ""); err == nil || !strings.Contains(err.Error(), "is not sglang, vllm, mock or video") {
 		t.Fatalf("v2 unknown engine: %v", err)
 	}
 	if warn := buf.String(); !strings.Contains(warn, `"variant":"a"`) || !strings.Contains(warn, `"engine":"trtllm"`) {

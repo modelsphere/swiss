@@ -106,7 +106,10 @@ tags:
   - name: releases
     description: Releases swiss manages, by namespace and name.
   - name: slo
-    description: The release's LLMSLORequirement, through the SLO server.
+    description: |
+      The release's SLO requirement, through the SLO server: its
+      LLMSLORequirement, or with `serviceId` one of a video release's per-pool
+      JobSLORequirements.
   - name: autoscaling
     description: PD autoscaling state from the loop, read-only. Temporary, for PD mode autoscaling only; will be removed in a future release.
   - name: runs
@@ -1255,8 +1258,10 @@ paths:
       tags: [releases]
       summary: Probe the entrypoint
       description: |
-        `GET /v1/models` through the site's gateway. Changes nothing; allowed
-        when deploys are off. Upstream failures are a 200 with `ok` false.
+        `GET /v1/models` through the site's gateway, or `GET /readyz` for a
+        video release (route, router, server and database; no model list).
+        Changes nothing; allowed when deploys are off. Upstream failures are a
+        200 with `ok` false.
       operationId: probe
       parameters:
         - $ref: "#/components/parameters/namespace"
@@ -1283,7 +1288,8 @@ paths:
       description: |
         A real generation through the gateway, to prove the model answers.
         Costs a few tokens; allowed when deploys are off. Upstream failures are
-        a 200 with `ok` false.
+        a 200 with `ok` false. A video release has no chat API: 400, use the
+        probe.
       operationId: chat
       parameters:
         - $ref: "#/components/parameters/namespace"
@@ -1308,6 +1314,19 @@ paths:
     parameters:
       - $ref: "#/components/parameters/namespace"
       - $ref: "#/components/parameters/release"
+      - name: serviceId
+        in: query
+        required: false
+        description: |
+          One of the release's own SLO requirements, by its spec.serviceId: a
+          video release has one JobSLORequirement per pool. For an LLM release,
+          absent or the release name is the release's own requirement. A video
+          release's requirements are keyed by its pools, so for it the parameter
+          is required (400 when absent) and always checked, the release name
+          included. A serviceId none of the release's requirements carries is a
+          404; a requirement that cannot be read (RBAC, the API server) is a 502
+          with the cause.
+        schema: { type: string }
     get:
       tags: [slo]
       summary: Read the SLO requirement
@@ -1320,6 +1339,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/SLOConfig" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/SLOToken" }
         "502": { $ref: "#/components/responses/BadGateway" }
         "503": { $ref: "#/components/responses/Unavailable" }
@@ -1341,6 +1361,7 @@ paths:
               schema: { $ref: "#/components/schemas/SLOConfig" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "409": { $ref: "#/components/responses/SLOToken" }
         "502": { $ref: "#/components/responses/BadGateway" }
@@ -1357,6 +1378,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/SLOConfig" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "409": { $ref: "#/components/responses/SLOToken" }
         "502": { $ref: "#/components/responses/BadGateway" }
@@ -2188,6 +2210,7 @@ components:
         release: { type: string }
         namespace: { type: string }
         chart: { type: string, description: "`name-version`." }
+        engine: { type: string, description: "The catalog engine the release was composed for (`sglang`, `vllm`, `mock`, `video`); absent when swiss has no plan for it." }
         status: { type: string, description: "helm's status." }
         revision: { type: integer, description: "helm's revision. Omitted when there is no revision." }
         updated: { type: string, format: date-time }

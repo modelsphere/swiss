@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -11,6 +12,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/modelsphere/swiss/internal/catalog"
 	"github.com/modelsphere/swiss/internal/site"
 )
 
@@ -50,19 +52,95 @@ func (s *Server) handleSLO(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// slo-api addresses a requirement by spec.serviceId, which is the release name.
-	target := base + "/config/" + url.PathEscape(release)
+	// slo-api addresses a requirement by spec.serviceId: the release name, or
+	// with ?serviceId= one of the release's own requirements -- a video release
+	// has one per pool.
+	//
+	// A video release's requirements are keyed by its pool Deployments, never
+	// by the release name, so for it the release-name default would address a
+	// requirement it does not own. It must name a pool, and the pool is always
+	// checked against the release's own, even when it equals the release name.
+	id := release
+	want := r.URL.Query().Get("serviceId")
+	video := s.isVideoRelease(ctx, ns, release)
+	if video && want == "" {
+		writeError(w, http.StatusBadRequest, "a video release has one SLO requirement per pool: name it with ?serviceId=<pool Deployment>")
+		return
+	}
+	if want != "" && (video || want != release) {
+		if err := s.ownSLO(ctx, ns, release, want); err != nil {
+			code := http.StatusBadGateway
+			if errors.Is(err, errNotOwnSLO) {
+				code = http.StatusNotFound
+			}
+			writeError(w, code, err.Error())
+			return
+		}
+		id = want
+	}
+	target := base + "/config/" + url.PathEscape(id)
 
 	switch r.Method {
 	case http.MethodGet:
 		s.readSLO(w, base, target, token)
 	case http.MethodPut:
-		s.writeSLO(w, r, release, base, target, token)
+		s.writeSLO(w, r, id, base, target, token)
 	case http.MethodDelete:
 		s.resetSLO(w, base, target, token)
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+// isVideoRelease reports whether swiss deployed this release as engine video.
+// A release with no plan beside it (not deployed by swiss) or one that cannot
+// be read is treated as an LLM release, which keeps the release-name default.
+func (s *Server) isVideoRelease(ctx context.Context, ns, release string) bool {
+	rel, err := s.releaseRecord(ctx, ns, release)
+	if err != nil || rel == nil {
+		return false
+	}
+	p, err := planOf(rel)
+	return err == nil && p.Engine == catalog.EngineVideo
+}
+
+// errNotOwnSLO is a serviceId none of the release's SLO requirements carries.
+var errNotOwnSLO = errors.New("no SLO requirement of this release has that serviceId")
+
+// ownSLO checks that one of the release's own SLO requirements carries
+// serviceID. A requirement that cannot be read (RBAC, the API server) is an
+// error of its own when nothing else matched: it may be the one asked for, so
+// the answer is "could not tell", not "not ours".
+func (s *Server) ownSLO(ctx context.Context, ns, release, serviceID string) error {
+	rel, err := s.releaseRecord(ctx, ns, release)
+	if err != nil {
+		return fmt.Errorf("release %s/%s: %w", ns, release, err)
+	}
+	var unread error
+	if rel != nil {
+		for _, ref := range rel.Objects {
+			if ref.Kind != "LLMSLORequirement" && ref.Kind != "JobSLORequirement" {
+				continue
+			}
+			o, err := s.probe.Object(ctx, ref)
+			if err != nil {
+				if unread == nil {
+					unread = fmt.Errorf("reading %s %s/%s: %w", ref.Kind, ref.Namespace, ref.Name, err)
+				}
+				continue
+			}
+			if o == nil {
+				continue
+			}
+			if id, _ := o.Spec["serviceId"].(string); id == serviceID {
+				return nil
+			}
+		}
+	}
+	if unread != nil {
+		return unread
+	}
+	return fmt.Errorf("release %s/%s, serviceId %q: %w", ns, release, serviceID, errNotOwnSLO)
 }
 
 // sloToken reads the bearer token. The API refuses anonymous calls, and the
@@ -117,7 +195,7 @@ func (s *Server) writeSLO(w http.ResponseWriter, r *http.Request, release, base,
 		body = map[string]any{}
 	}
 	if route, _ := body["route"].(string); route != "" && route != release {
-		writeError(w, http.StatusBadRequest, "body route does not match this release")
+		writeError(w, http.StatusBadRequest, "body route does not match this requirement")
 		return
 	}
 	body["route"] = release
